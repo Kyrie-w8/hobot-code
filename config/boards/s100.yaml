@@ -1,0 +1,13 @@
+board:
+  profile: s100
+  model: D-Robotics RDK S100 V0P5
+  host: 10.112.10.98
+  python: "3.10"
+  cpu: 6x Cortex-A78AE
+  memory_visible_gib: 9.3
+  bpu_cores: 1
+  role: realtime-tool-worker
+  prompt: >-
+    This S100 uses a PREEMPT_RT kernel. Keep the Agent outside hard real-time loops;
+    invoke bounded deterministic tools for hardware operations. Do not assume Docker
+    is available.

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://d-robotics.local/edge-agent.schema.json",
+  "title": "EdgeAgent configuration",
+  "type": "object",
+  "required": ["runtime", "model"],
+  "properties": {
+    "version": {"type": "integer", "minimum": 1},
+    "extends": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["max_steps", "tool_timeout_seconds"],
+      "properties": {
+        "max_steps": {"type": "integer", "minimum": 1},
+        "tool_timeout_seconds": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "board": {
+      "type": "object",
+      "properties": {
+        "profile": {"type": "string"},
+        "model": {"type": "string"},
+        "prompt": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "skills": {"type": "array", "items": {"type": "string"}},
+        "prompt": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "model": {
+      "type": "object",
+      "required": ["provider", "name"],
+      "properties": {
+        "provider": {
+          "enum": ["mock", "openai_responses", "openai_compatible", "anthropic", "gemini"]
+        },
+        "name": {"type": "string", "minLength": 1},
+        "api_key": {"type": "string"},
+        "base_url": {"type": "string"},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "settings": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "memory": {
+      "type": "object",
+      "properties": {"path": {"type": "string"}},
+      "additionalProperties": true
+    },
+    "prompts": {"type": "object"},
+    "skills": {"type": "object"},
+    "security": {
+      "type": "object",
+      "properties": {
+        "allowed_tools": {"type": "array", "items": {"type": "string"}},
+        "denied_tools": {"type": "array", "items": {"type": "string"}},
+        "approval_tools": {"type": "array", "items": {"type": "string"}},
+        "approve_write_tools": {"type": "boolean"},
+        "filesystem_roots": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

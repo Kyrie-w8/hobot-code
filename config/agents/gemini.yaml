@@ -1,0 +1,21 @@
+extends: ../base.yaml
+
+model:
+  provider: gemini
+  name: ${GEMINI_MODEL:-YOUR_GEMINI_MODEL}
+  api_key: ${GEMINI_API_KEY:-}
+  base_url: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+  settings:
+    max_tokens: 2048
+    store: false
+
+memory:
+  path: ../../var/sessions.db
+prompts:
+  layers:
+    - name: policy
+      priority: 10
+      path: ../../prompts/base.md
+skills:
+  roots:
+    - ../../skills
