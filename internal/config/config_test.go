@@ -38,6 +38,36 @@ func TestLoadRejectsInvalidStepLimit(t *testing.T) {
 	}
 }
 
+func TestLoadAPIKeyFromProtectedEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "aster.env")
+	if err := os.WriteFile(envPath, []byte("SECRET_TOKEN=test-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	mustWrite(t, path, `{"env_file":"aster.env","provider":{"type":"anthropic","model":"m","api_key_env":"SECRET_TOKEN"}}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.APIKey != "test-secret" {
+		t.Fatal("env file API key was not loaded")
+	}
+}
+
+func TestLoadRejectsReadableEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "aster.env")
+	if err := os.WriteFile(envPath, []byte("SECRET_TOKEN=test-secret\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	mustWrite(t, path, `{"env_file":"aster.env","provider":{"type":"anthropic","model":"m","api_key_env":"SECRET_TOKEN"}}`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected insecure env file rejection")
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {

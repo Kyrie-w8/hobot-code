@@ -20,6 +20,7 @@ aster \
 
 | 字段 | 作用 |
 |---|---|
+| `env_file` | 可选的 root-only 环境文件；进程环境变量优先 |
 | `agent.system_prompt_file` | 系统 Prompt 文件 |
 | `agent.max_steps` | 单轮最大模型/工具循环，范围 1-64 |
 | `agent.enabled_skills` | 懒加载的 Skill 名称 |
@@ -35,6 +36,8 @@ aster \
 | `server.listen` | HTTP 监听地址，默认仅本机 |
 
 JSON 字符串支持 `${ENV_NAME}` 环境变量展开。不要把真实密钥写入配置文件。
+`env_file` 必须设置为 `0600` 等不允许 group/other 访问的权限，内容使用普通
+`KEY=VALUE` 格式；Aster 只从中读取 provider 所声明的密钥变量。
 
 ## Provider
 
