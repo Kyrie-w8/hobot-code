@@ -4,14 +4,15 @@
 
 ```mermaid
 flowchart LR
-  U["Terminal / HTTP client"] --> A["Agent loop"]
+  U["Terminal / HTTP/SSE client"] --> E["Typed event stream"]
+  E --> A["Cancellable turn loop"]
   A --> P["Provider adapter"]
   P --> M["Cloud / LAN / local model"]
   A --> G["Policy and approval gate"]
   G --> T["Built-in tools"]
   G --> X["Process plugins"]
   G --> C["MCP stdio servers"]
-  A --> S["JSONL session store"]
+  A --> S["JSONL messages and lifecycle events"]
   K["SKILL.md catalog"] --> A
   B["Live board detector"] --> A
 ```
@@ -19,6 +20,10 @@ flowchart LR
 `Agent` 只处理统一的 `Message`、`ToolCall` 和 `ToolDefinition`，厂商协议由
 provider adapter 转换。工具执行前依次经过：工具是否注册、参数是否符合 schema、
 allow/deny 策略、风险审批、context 超时和输出截断。
+
+每轮请求使用独立 context，并通过有序的 `AgentEvent` 暴露模型文本、模型提供的
+reasoning summary、工具生命周期、完成、取消和错误。Anthropic adapter 使用 SSE
+增量解析；不支持流式协议的 provider 通过单次完成结果兼容同一事件接口。
 
 ## 部署边界
 

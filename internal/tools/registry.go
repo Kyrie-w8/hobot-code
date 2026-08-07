@@ -12,7 +12,7 @@ import (
 	"github.com/Kyrie-w8/aster-edge/internal/policy"
 )
 
-type ApprovalFunc func(core.ToolCall, core.ToolDefinition) bool
+type ApprovalFunc func(context.Context, core.ToolCall, core.ToolDefinition) bool
 
 type Registry struct {
 	items     map[string]core.Tool
@@ -76,7 +76,7 @@ func (r *Registry) Execute(ctx context.Context, call core.ToolCall) core.ToolExe
 		result.Error = decision.Reason
 		return result
 	}
-	if decision.RequiresApproval && (r.approval == nil || !r.approval(call, tool.Definition)) {
+	if decision.RequiresApproval && (r.approval == nil || !r.approval(ctx, call, tool.Definition)) {
 		result.Error = "approval denied"
 		return result
 	}

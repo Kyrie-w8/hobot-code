@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Kyrie-w8/aster-edge/internal/config"
@@ -51,5 +52,50 @@ func TestAgentToolLoopPersistsCanonicalMessages(t *testing.T) {
 	}
 	if messages[1].ToolCalls[0].ID == "" || messages[1].ToolCalls[0].ID != messages[2].ToolCallID {
 		t.Fatalf("generated call id was not preserved: %+v", messages)
+	}
+}
+
+func TestAgentEmitsOrderedLifecycleEvents(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Agent.MaxSteps = 1
+	store, _ := session.New(t.TempDir())
+	registry := tools.New(policy.New(config.SecurityConfig{AllowedTools: []string{"*"}}), nil, 1024)
+	engine := Engine{Config: cfg, Provider: &staticProvider{response: core.ProviderResponse{Content: "hello"}}, Tools: registry, Store: store}
+	var events []core.AgentEvent
+	result, err := engine.RunWithEvents(context.Background(), "", "hi", func(event core.AgentEvent) {
+		events = append(events, event)
+	})
+	if err != nil || result.Content != "hello" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	want := []core.AgentEventType{core.EventTurnStarted, core.EventProviderStarted, core.EventTextDelta, core.EventTurnCompleted}
+	if len(events) != len(want) {
+		t.Fatalf("events=%+v", events)
+	}
+	for i, event := range events {
+		if event.Type != want[i] || event.Sequence != uint64(i+1) || event.SessionID != result.SessionID || event.TurnID == "" {
+			t.Fatalf("event[%d]=%+v", i, event)
+		}
+	}
+}
+
+type staticProvider struct {
+	response core.ProviderResponse
+}
+
+func (p *staticProvider) Complete(context.Context, core.ProviderRequest) (core.ProviderResponse, error) {
+	return p.response, nil
+}
+
+func TestAgentRejectsSilentEmptyResponse(t *testing.T) {
+	cfg := config.Defaults()
+	store, _ := session.New(t.TempDir())
+	engine := Engine{
+		Config: cfg, Provider: &staticProvider{}, Store: store,
+		Tools: tools.New(policy.New(config.SecurityConfig{AllowedTools: []string{"*"}}), nil, 1024),
+	}
+	_, err := engine.Run(context.Background(), "", "hi")
+	if err == nil || !strings.Contains(err.Error(), "empty response") {
+		t.Fatalf("err=%v", err)
 	}
 }

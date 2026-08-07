@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.1.0}
+version=${1:-0.2.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage_dir="$root_dir/dist/aster-$version-linux-arm64"
 
@@ -17,5 +17,5 @@ cp "$root_dir"/config/boards/*.json "$stage_dir/config/boards/"
 cp "$root_dir"/config/providers/*.json "$stage_dir/config/providers/"
 cp "$root_dir/prompts/system.md" "$stage_dir/prompts/system.md"
 cp -R "$root_dir/skills/." "$stage_dir/skills/"
-COPYFILE_DISABLE=1 tar -C "$root_dir/dist" -czf "$root_dir/dist/aster-$version-linux-arm64.tar.gz" "aster-$version-linux-arm64"
+COPYFILE_DISABLE=1 tar --no-xattrs -C "$root_dir/dist" -czf "$root_dir/dist/aster-$version-linux-arm64.tar.gz" "aster-$version-linux-arm64"
 printf '%s\n' "$root_dir/dist/aster-$version-linux-arm64.tar.gz"

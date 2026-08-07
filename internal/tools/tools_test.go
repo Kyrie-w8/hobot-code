@@ -20,7 +20,7 @@ func TestFilesystemBoundaryAndApproval(t *testing.T) {
 	cfg.Security.AllowedTools = []string{"fs_*"}
 	cfg.Security.ApprovalTools = []string{"fs_write"}
 	approved := false
-	registry := New(policy.New(cfg.Security), func(core.ToolCall, core.ToolDefinition) bool { return approved }, 4096)
+	registry := New(policy.New(cfg.Security), func(context.Context, core.ToolCall, core.ToolDefinition) bool { return approved }, 4096)
 	if err := RegisterBuiltins(registry, cfg, board.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestShellOutputIsBounded(t *testing.T) {
 	cfg.Security.ApprovalTools = nil
 	cfg.Security.ApproveWrites = true
 	cfg.Security.MaxToolOutput = 32
-	registry := New(policy.New(cfg.Security), func(core.ToolCall, core.ToolDefinition) bool { return true }, 1024)
+	registry := New(policy.New(cfg.Security), func(context.Context, core.ToolCall, core.ToolDefinition) bool { return true }, 1024)
 	if err := RegisterBuiltins(registry, cfg, board.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,6 +83,91 @@ func TestAnthropicResponse(t *testing.T) {
 	}
 	if response.Content != "read" || len(response.ToolCalls) != 1 {
 		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestAnthropicStreamEmitsReasoningTextAndTool(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("stream=%v", body["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"message_start","message":{"usage":{"input_tokens":3}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"check "}}`,
+			`{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}`,
+			`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call-1","name":"echo","input":{}}}`,
+			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"text\":\"ok\"}"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}`,
+			`{"type":"message_stop"}`,
+		}
+		for _, event := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+	}))
+	defer server.Close()
+	p, err := New(config.ProviderConfig{Type: "anthropic", Model: "m", BaseURL: server.URL, APIKey: "key", TimeoutSec: 5, Settings: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streaming := p.(core.StreamingProvider)
+	var chunks []core.ProviderChunk
+	response, err := streaming.CompleteStream(context.Background(), request(), func(chunk core.ProviderChunk) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Reasoning != "check " || response.Content != "done" || len(response.ToolCalls) != 1 {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+	if response.ToolCalls[0].Arguments["text"] != "ok" {
+		t.Fatalf("unexpected tool call: %+v", response.ToolCalls[0])
+	}
+	if len(chunks) != 2 || chunks[0].Type != core.ProviderReasoningDelta || chunks[1].Type != core.ProviderTextDelta {
+		t.Fatalf("unexpected chunks: %+v", chunks)
+	}
+}
+
+func TestAnthropicEmptyStreamFallsBackToComplete(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":0}}}\n\n")
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"stop_reason":"end_turn","content":[{"type":"text","text":"fallback"}],"usage":{"output_tokens":2}}`)
+	}))
+	defer server.Close()
+	p, err := New(config.ProviderConfig{Type: "anthropic", Model: "m", BaseURL: server.URL, APIKey: "key", TimeoutSec: 5, Settings: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	response, err := p.(core.StreamingProvider).CompleteStream(context.Background(), request(), func(chunk core.ProviderChunk) {
+		if chunk.Type == core.ProviderTextDelta {
+			text += chunk.Delta
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || response.Content != "fallback" || text != "fallback" {
+		t.Fatalf("requests=%d response=%+v text=%q", requests, response, text)
 	}
 }
 

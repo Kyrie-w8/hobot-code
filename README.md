@@ -6,12 +6,12 @@ Aster 是一个面向嵌入式 Linux 的 Agentic Shell。它参考 Claude Code�
 
 ## 当前能力
 
-- 交互式终端会话、单次执行、会话恢复与 JSONL 轨迹导出。
+- 可取消的交互式终端会话、流式文本与 reasoning summary、会话恢复和轨迹导出。
 - OpenAI Responses、OpenAI-compatible、Anthropic、Gemini 和离线 mock。
 - 有界 Agent 工具循环，支持 JSON Schema、超时、输出上限、白名单和人工审批。
 - 内置板卡探测、目录读取、文件读写和 Shell 工具。
 - `SKILL.md` 技能加载、进程隔离插件、MCP stdio 客户端。
-- 本地 HTTP 服务，可作为板端 Agent 网关由其他设备调用。
+- 本地 HTTP/SSE 服务，可作为板端 Agent 网关由其他设备调用或取消运行中的会话。
 - `linux/arm64` 静态构建、安装包和 systemd 服务。
 
 ## 本地构建
@@ -49,11 +49,11 @@ export MODEL_API_KEY=""
 ## ARM64 发布与安装
 
 ```bash
-make release VERSION=0.1.0
-scp dist/aster-0.1.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
+make release VERSION=0.2.0
+scp dist/aster-0.2.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
 ssh root@10.112.10.106
-cd /tmp && tar -xzf aster-0.1.0-linux-arm64.tar.gz
-cd aster-0.1.0-linux-arm64 && ./install.sh
+cd /tmp && tar -xzf aster-0.2.0-linux-arm64.tar.gz
+cd aster-0.2.0-linux-arm64 && ./install.sh
 aster --config /etc/aster/config.json doctor --json
 ```
 
@@ -66,12 +66,38 @@ aster --config /etc/aster/config.json doctor --json
 ```text
 /new            新会话
 /session        当前会话 ID
+/sessions       会话列表
 /resume ID      恢复历史会话
+/models         当前 Provider 和模型
+/thinking       展开或折叠模型返回的 reasoning summary
+/details        展开或折叠工具参数与结果
 /tools          查看当前模型可见工具
 /skills         查看已发现 Skills
 /doctor         查看板卡、模型和扩展状态
-/quit           退出
+/export [ID]    导出当前或指定会话
+/clear          清屏
+/q              退出，也支持 /quit 和 /exit
 ```
+
+空闲时 `Ctrl-C` 退出；模型或工具运行时第一次 `Ctrl-C` 取消当前轮，第二次
+强制退出。运行期间输入的新消息会排队到下一轮。reasoning summary 只展示模型
+明确返回的内容，不生成或猜测隐藏思维链。
+
+## HTTP 和 SSE
+
+`serve` 模式提供以下本机接口：
+
+```text
+POST /v1/chat                         同步运行
+POST /v1/chat/events                  SSE 流式事件
+GET  /v1/sessions                     会话列表
+GET  /v1/sessions/{id}                导出会话
+POST /v1/sessions/{id}/cancel         取消运行中的会话
+```
+
+事件包括 `turn.started`、`provider.started`、`reasoning.delta`、`text.delta`、
+`tool.requested`、`tool.completed`、`turn.completed`、`turn.cancelled` 和
+`turn.failed`。同一会话串行执行，不同会话可以并行。
 
 命令行子命令包括 `chat`、`run`、`doctor`、`tools`、`skills`、
 `sessions`、`export` 和 `serve`。

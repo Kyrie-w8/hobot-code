@@ -71,6 +71,23 @@ func (p *HTTPProvider) Complete(ctx context.Context, req core.ProviderRequest) (
 	}
 }
 
+func (p *HTTPProvider) CompleteStream(ctx context.Context, req core.ProviderRequest, emit func(core.ProviderChunk)) (core.ProviderResponse, error) {
+	if p.kind == "anthropic" {
+		return p.anthropicStream(ctx, req, emit)
+	}
+	response, err := p.Complete(ctx, req)
+	if err != nil {
+		return core.ProviderResponse{}, err
+	}
+	if response.Reasoning != "" {
+		emit(core.ProviderChunk{Type: core.ProviderReasoningDelta, Delta: response.Reasoning})
+	}
+	if response.Content != "" {
+		emit(core.ProviderChunk{Type: core.ProviderTextDelta, Delta: response.Content})
+	}
+	return response, nil
+}
+
 func (p *HTTPProvider) post(ctx context.Context, endpoint string, headers map[string]string, payload any, out any) error {
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -81,7 +98,7 @@ func (p *HTTPProvider) post(ctx context.Context, endpoint string, headers map[st
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "aster-edge/0.1")
+	req.Header.Set("User-Agent", "aster-edge/0.2")
 	for k, v := range p.headers {
 		req.Header.Set(k, v)
 	}

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -63,10 +62,23 @@ func Run(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signals := []os.Signal{syscall.SIGTERM}
+	if command != "chat" {
+		signals = append(signals, os.Interrupt)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), signals...)
 	defer stop()
 	reader := bufio.NewReader(os.Stdin)
-	approval := approvalHandler(reader, opts.yes)
+	var input *inputBroker
+	var approvals *approvalBroker
+	var approval tools.ApprovalFunc
+	if command == "chat" {
+		input = newInputBroker(reader)
+		approvals = newApprovalBroker(opts.yes)
+		approval = approvals.Approve
+	} else {
+		approval = lineApprovalHandler(reader, opts.yes)
+	}
 	runtime, err := app.New(ctx, cfg, approval)
 	if err != nil {
 		return fail(err)
@@ -74,7 +86,7 @@ func Run(args []string) int {
 	defer runtime.Close()
 	switch command {
 	case "chat":
-		return chat(ctx, runtime, reader)
+		return chat(ctx, runtime, input, approvals)
 	case "run":
 		return runOnce(ctx, runtime, rest, opts.json)
 	case "doctor":
@@ -150,8 +162,8 @@ Global flags:
 `)
 }
 
-func approvalHandler(reader *bufio.Reader, yes bool) tools.ApprovalFunc {
-	return func(call core.ToolCall, definition core.ToolDefinition) bool {
+func lineApprovalHandler(reader *bufio.Reader, yes bool) tools.ApprovalFunc {
+	return func(ctx context.Context, call core.ToolCall, definition core.ToolDefinition) bool {
 		if yes {
 			return true
 		}
@@ -160,77 +172,19 @@ func approvalHandler(reader *bufio.Reader, yes bool) tools.ApprovalFunc {
 		}
 		b, _ := json.MarshalIndent(call.Arguments, "  ", "  ")
 		fmt.Fprintf(os.Stderr, "\nApproval required: %s [%s]\n  %s\nApprove? [y/N] ", call.Name, definition.Risk, string(b))
-		answer, _ := reader.ReadString('\n')
+		answerCh := make(chan string, 1)
+		go func() {
+			answer, _ := reader.ReadString('\n')
+			answerCh <- answer
+		}()
+		var answer string
+		select {
+		case answer = <-answerCh:
+		case <-ctx.Done():
+			return false
+		}
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		return answer == "y" || answer == "yes"
-	}
-}
-
-func chat(ctx context.Context, runtime *app.Runtime, reader *bufio.Reader) int {
-	fmt.Printf("\n\033[1;36mAster\033[0m  %s\n", runtime.Summary())
-	fmt.Println("Type /help for commands. Ctrl-D exits.")
-	fmt.Println()
-	sessionID := ""
-	for {
-		fmt.Print("\033[1;32m›\033[0m ")
-		line, err := reader.ReadString('\n')
-		if err != nil && len(line) == 0 {
-			if err == io.EOF {
-				fmt.Println()
-				return 0
-			}
-			return fail(err)
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "/") {
-			done := false
-			switch fields := strings.Fields(line); fields[0] {
-			case "/quit", "/exit":
-				return 0
-			case "/help":
-				fmt.Println("/new  /session  /resume ID  /tools  /skills  /doctor  /quit")
-			case "/new":
-				sessionID = ""
-				fmt.Println("Started a new session.")
-			case "/session":
-				if sessionID == "" {
-					fmt.Println("No session yet.")
-				} else {
-					fmt.Println(sessionID)
-				}
-			case "/resume":
-				if len(fields) != 2 {
-					fmt.Println("usage: /resume SESSION_ID")
-				} else {
-					sessionID = fields[1]
-					fmt.Println("Resuming", sessionID)
-				}
-			case "/tools":
-				printValue(runtime.Registry.Definitions(), false)
-			case "/skills":
-				printValue(runtime.Catalog.List(), false)
-			case "/doctor":
-				printValue(runtime.Doctor(), false)
-			default:
-				fmt.Println("Unknown command. Type /help.")
-			}
-			if done {
-				return 0
-			}
-			continue
-		}
-		fmt.Print("\033[2mthinking...\033[0m\r")
-		result, err := runtime.Agent.Run(ctx, sessionID, line)
-		fmt.Print("\033[2K\r")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			continue
-		}
-		sessionID = result.SessionID
-		fmt.Printf("\033[1;36mAster\033[0m  %s\n\n", result.Content)
 	}
 }
 
@@ -263,32 +217,123 @@ func serve(ctx context.Context, runtime *app.Runtime) int {
 		token = os.Getenv(runtime.Config.Server.TokenEnv)
 	}
 	mux := http.NewServeMux()
-	var mu sync.Mutex
+	locks := newSessionLocks()
+	active := newActiveTurns()
+	authorized := func(r *http.Request) bool {
+		return token == "" || r.Header.Get("Authorization") == "Bearer "+token
+	}
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "summary": runtime.Summary()})
 	})
 	mux.HandleFunc("POST /v1/chat", func(w http.ResponseWriter, r *http.Request) {
-		if token != "" && r.Header.Get("Authorization") != "Bearer "+token {
+		if !authorized(r) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
-		var input struct {
-			Message   string `json:"message"`
-			SessionID string `json:"session_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		input, err := readChatInput(w, r)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		mu.Lock()
-		result, err := runtime.Agent.Run(r.Context(), input.SessionID, input.Message)
-		mu.Unlock()
+		release := locks.acquire(input.SessionID)
+		defer release()
+		turnCtx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		registered := ""
+		result, err := runtime.Agent.RunWithEvents(turnCtx, input.SessionID, input.Message, func(event core.AgentEvent) {
+			if registered == "" {
+				registered = event.SessionID
+				active.set(registered, cancel)
+			}
+		})
+		if registered != "" {
+			active.clear(registered, cancel)
+		}
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	})
+	mux.HandleFunc("POST /v1/chat/events", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "streaming unsupported"})
+			return
+		}
+		input, err := readChatInput(w, r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		release := locks.acquire(input.SessionID)
+		defer release()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+		turnCtx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		registered := ""
+		_, runErr := runtime.Agent.RunWithEvents(turnCtx, input.SessionID, input.Message, func(event core.AgentEvent) {
+			if registered == "" {
+				registered = event.SessionID
+				active.set(registered, cancel)
+			}
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Sequence, event.Type, data)
+			flusher.Flush()
+		})
+		if registered != "" {
+			active.clear(registered, cancel)
+		}
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			data, _ := json.Marshal(map[string]any{"error": runErr.Error()})
+			fmt.Fprintf(w, "event: stream.error\ndata: %s\n\n", data)
+			flusher.Flush()
+		}
+	})
+	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		ids, err := runtime.Store.List()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": ids})
+	})
+	mux.HandleFunc("GET /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		data, err := runtime.Store.Export(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	})
+	mux.HandleFunc("POST /v1/sessions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		if !active.cancel(r.PathValue("id")) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no active turn"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"cancelled": true})
 	})
 	server := &http.Server{Addr: runtime.Config.Server.Listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
@@ -303,6 +348,95 @@ func serve(ctx context.Context, runtime *app.Runtime) int {
 		return fail(err)
 	}
 	return 0
+}
+
+type chatInput struct {
+	Message   string `json:"message"`
+	SessionID string `json:"session_id"`
+}
+
+func readChatInput(w http.ResponseWriter, r *http.Request) (chatInput, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var input chatInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		return chatInput{}, err
+	}
+	if strings.TrimSpace(input.Message) == "" {
+		return chatInput{}, errors.New("message is required")
+	}
+	return input, nil
+}
+
+type sessionLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sessionLock
+}
+
+type sessionLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func newSessionLocks() *sessionLocks {
+	return &sessionLocks{locks: map[string]*sessionLock{}}
+}
+
+func (s *sessionLocks) acquire(sessionID string) func() {
+	if sessionID == "" {
+		lock := &sync.Mutex{}
+		lock.Lock()
+		return lock.Unlock
+	}
+	s.mu.Lock()
+	lock := s.locks[sessionID]
+	if lock == nil {
+		lock = &sessionLock{}
+		s.locks[sessionID] = lock
+	}
+	lock.refs++
+	s.mu.Unlock()
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.mu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.locks, sessionID)
+		}
+		s.mu.Unlock()
+	}
+}
+
+type activeTurns struct {
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
+}
+
+func newActiveTurns() *activeTurns {
+	return &activeTurns{cancels: map[string]context.CancelFunc{}}
+}
+
+func (a *activeTurns) set(sessionID string, cancel context.CancelFunc) {
+	a.mu.Lock()
+	a.cancels[sessionID] = cancel
+	a.mu.Unlock()
+}
+
+func (a *activeTurns) clear(sessionID string, cancel context.CancelFunc) {
+	a.mu.Lock()
+	delete(a.cancels, sessionID)
+	a.mu.Unlock()
+}
+
+func (a *activeTurns) cancel(sessionID string) bool {
+	a.mu.Lock()
+	cancel := a.cancels[sessionID]
+	a.mu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
 }
 
 func printValue(value any, jsonOutput bool) int {
