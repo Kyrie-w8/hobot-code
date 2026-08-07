@@ -16,11 +16,12 @@ import (
 )
 
 type HTTPProvider struct {
-	kind    string
-	baseURL string
-	apiKey  string
-	headers map[string]string
-	client  *http.Client
+	kind      string
+	baseURL   string
+	apiKey    string
+	authStyle string
+	headers   map[string]string
+	client    *http.Client
 }
 
 func New(cfg config.ProviderConfig) (core.Provider, error) {
@@ -37,7 +38,7 @@ func New(cfg config.ProviderConfig) (core.Provider, error) {
 		return nil, fmt.Errorf("provider API key is empty; set %s", cfg.APIKeyEnv)
 	}
 	return &HTTPProvider{
-		kind: kind, baseURL: strings.TrimRight(cfg.BaseURL, "/"), apiKey: cfg.APIKey,
+		kind: kind, baseURL: strings.TrimRight(cfg.BaseURL, "/"), apiKey: cfg.APIKey, authStyle: strings.ToLower(cfg.AuthStyle),
 		headers: cfg.Headers, client: &http.Client{Timeout: time.Duration(cfg.TimeoutSec) * time.Second},
 	}, nil
 }

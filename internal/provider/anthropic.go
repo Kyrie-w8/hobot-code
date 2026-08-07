@@ -53,7 +53,12 @@ func (p *HTTPProvider) anthropic(ctx context.Context, req core.ProviderRequest) 
 		} `json:"content"`
 		Usage map[string]any `json:"usage"`
 	}
-	headers := map[string]string{"x-api-key": p.apiKey, "anthropic-version": "2023-06-01"}
+	headers := map[string]string{"anthropic-version": "2023-06-01"}
+	if p.authStyle == "bearer" {
+		headers["Authorization"] = "Bearer " + p.apiKey
+	} else {
+		headers["x-api-key"] = p.apiKey
+	}
 	if err := p.post(ctx, "/v1/messages", headers, payload, &raw); err != nil {
 		return core.ProviderResponse{}, err
 	}

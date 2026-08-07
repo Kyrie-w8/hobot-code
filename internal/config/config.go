@@ -36,6 +36,7 @@ type ProviderConfig struct {
 	BaseURL    string            `json:"base_url"`
 	APIKey     string            `json:"api_key"`
 	APIKeyEnv  string            `json:"api_key_env"`
+	AuthStyle  string            `json:"auth_style"`
 	TimeoutSec int               `json:"timeout_seconds"`
 	Headers    map[string]string `json:"headers"`
 	Settings   map[string]any    `json:"settings"`

@@ -58,9 +58,21 @@ func TestOpenAIResponsesTextAndTool(t *testing.T) {
 }
 
 func TestAnthropicResponse(t *testing.T) {
-	server := jsonServer(t, "/v1/messages", `{"stop_reason":"tool_use","content":[{"type":"text","text":"read"},{"type":"tool_use","id":"a1","name":"system_snapshot","input":{}}],"usage":{"input_tokens":1}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("path=%s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer key" {
+			t.Errorf("authorization=%q", got)
+		}
+		if got := r.Header.Get("x-api-key"); got != "" {
+			t.Errorf("unexpected x-api-key header")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"stop_reason":"tool_use","content":[{"type":"text","text":"read"},{"type":"tool_use","id":"a1","name":"system_snapshot","input":{}}],"usage":{"input_tokens":1}}`))
+	}))
 	defer server.Close()
-	p, err := New(config.ProviderConfig{Type: "anthropic", Model: "m", BaseURL: server.URL, APIKey: "key", TimeoutSec: 5, Settings: map[string]any{"max_tokens": 32}})
+	p, err := New(config.ProviderConfig{Type: "anthropic", Model: "m", BaseURL: server.URL, APIKey: "key", AuthStyle: "bearer", TimeoutSec: 5, Settings: map[string]any{"max_tokens": 32}})
 	if err != nil {
 		t.Fatal(err)
 	}
