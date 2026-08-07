@@ -1,0 +1,42 @@
+{
+  "agent": {
+    "name": "Aster",
+    "system_prompt_file": "/usr/local/share/aster/prompts/system.md",
+    "max_steps": 12,
+    "enabled_skills": ["system-info", "workspace-coding"]
+  },
+  "provider": {
+    "type": "mock",
+    "model": "offline-mock",
+    "base_url": "",
+    "api_key_env": "",
+    "timeout_seconds": 90,
+    "headers": {},
+    "settings": {}
+  },
+  "board": {
+    "profile": "auto",
+    "prompt": "Use measured device capabilities and keep hard real-time work in deterministic services."
+  },
+  "security": {
+    "workspace_root": "/var/lib/aster/workspace",
+    "allowed_tools": ["system_*", "fs_*", "shell_exec"],
+    "denied_tools": ["system_power_*"],
+    "approval_tools": ["fs_write", "shell_exec", "*__*"],
+    "approve_writes": false,
+    "tool_timeout_seconds": 20,
+    "max_tool_output_bytes": 131072
+  },
+  "skills": {
+    "roots": ["/usr/local/share/aster/skills", "~/.config/aster/skills"]
+  },
+  "plugins": [],
+  "mcp_servers": [],
+  "session": {
+    "dir": "/var/lib/aster/sessions"
+  },
+  "server": {
+    "listen": "127.0.0.1:7337",
+    "token_env": "ASTER_SERVER_TOKEN"
+  }
+}

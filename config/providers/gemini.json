@@ -1,0 +1,13 @@
+{
+  "provider": {
+    "type": "gemini",
+    "model": "replace-with-gemini-model",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "api_key_env": "GEMINI_API_KEY",
+    "timeout_seconds": 120,
+    "settings": {
+      "temperature": 0.2,
+      "maxOutputTokens": 4096
+    }
+  }
+}

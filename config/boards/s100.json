@@ -1,0 +1,6 @@
+{
+  "board": {
+    "profile": "s100",
+    "prompt": "RDK S100 has 6 ARM64 CPU cores, about 9 GiB visible RAM, and a PREEMPT_RT kernel. Keep the agent outside hard real-time loops and delegate actuation to bounded deterministic tools."
+  }
+}

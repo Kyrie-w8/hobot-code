@@ -1,54 +1,44 @@
-# Architecture
+# Aster 架构
 
-## Runtime boundary
+## 运行路径
 
-`AgentRuntime` owns the bounded reasoning/tool loop but has no vendor or board
-logic. It receives six replaceable services:
-
-1. `ModelProvider` normalizes a vendor request and response.
-2. `ToolRegistry` exposes typed functions and executes them with a timeout.
-3. `PolicyEngine` decides allow, deny, and approval requirements.
-4. `PromptComposer` merges policy, board, role, and selected Skill layers.
-5. `SkillCatalog` validates and lazily loads instruction bundles.
-6. `SessionStore` persists canonical messages and audit events.
-
-The canonical flow is:
-
-```text
-user -> canonical history -> provider -> assistant/tool calls
-     -> schema + policy -> local tool -> canonical tool result
-     -> provider -> final assistant response -> SQLite trajectory
+```mermaid
+flowchart LR
+  U["Terminal / HTTP client"] --> A["Agent loop"]
+  A --> P["Provider adapter"]
+  P --> M["Cloud / LAN / local model"]
+  A --> G["Policy and approval gate"]
+  G --> T["Built-in tools"]
+  G --> X["Process plugins"]
+  G --> C["MCP stdio servers"]
+  A --> S["JSONL session store"]
+  K["SKILL.md catalog"] --> A
+  B["Live board detector"] --> A
 ```
 
-## Provider contract
+`Agent` 只处理统一的 `Message`、`ToolCall` 和 `ToolDefinition`，厂商协议由
+provider adapter 转换。工具执行前依次经过：工具是否注册、参数是否符合 schema、
+allow/deny 策略、风险审批、context 超时和输出截断。
 
-Providers consume `ProviderRequest` and return `ProviderResponse`. Tool definitions
-are canonical JSON Schema objects. Provider-specific state is opaque to the Agent
-and carried between tool-loop steps:
+## 部署边界
 
-- OpenAI Responses retains response output items for stateless reasoning/tool
-  continuation or uses `previous_response_id` in stored mode.
-- Gemini Interactions retains all returned steps in stateless mode or uses
-  `previous_interaction_id` in stored mode.
-- Chat Completions and Anthropic reconstruct requests from canonical messages.
+发布产物使用 `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`。X5、S100、S600
+共用同一二进制，差异由实时探测和 board overlay 表达，不维护硬件分支。
 
-The P1 HTTP transport is intentionally small and non-streaming. P2 adds an event
-stream interface without changing the canonical completed-response contract.
+Aster 可以直接使用云模型，也可以把 OpenAI-compatible provider 指向局域网中的
+vLLM/llama.cpp 服务。BPU 上的模型执行不是通用协议：具体模型需要转换、量化、
+精度回归和性能测量后，再通过插件或 MCP server 接入。
 
-## Board profiles
+## 扩展模型
 
-Profiles are configuration overlays, not forks. A profile defines observed
-hardware, Python/runtime constraints, node role, and a board prompt. A tool can
-also list supported profiles. BPU presence is capability metadata only; a model
-becomes routable after conversion, accuracy, memory, latency, and thermal checks.
+- Built-in tool：和 Aster 同进程，适合低风险、稳定、通用能力。
+- Plugin：每次调用启动独立进程，通过一条 JSON-RPC 请求和响应通信。
+- MCP：Aster 启动并保持 stdio server，通过 `initialize`、`tools/list`、
+  `tools/call` 接入完整工具集合。
+- Skill：只包含可审计指令和元数据，可声明所需工具与支持板卡。
 
-## Extension plan
+## 会话和训练数据
 
-P2 extension points keep the current core stable:
-
-- Provider: llama.cpp streaming and validated D-Robotics HBRT model packages.
-- Tool: GPIO, I2C, SPI, UART, CAN, V4L2, ALSA, ROS2/TROS, and MCP clients.
-- Transport: local HTTP/WebSocket daemon and authenticated node-to-node RPC.
-- Plugin: signed manifest plus process-isolated JSON-RPC workers.
-- Operations: systemd service, health endpoint, metrics, offline wheelhouse, and
-  staged updates with rollback.
+每个会话一个权限为 `0600` 的 JSONL 文件。消息按 user、assistant、tool 的统一格式
+保存，工具调用及结果不会被压成普通文本。`aster export SESSION_ID` 输出一条完整轨迹，
+便于审计或转换成 assistant-only-loss 的 SFT 数据。

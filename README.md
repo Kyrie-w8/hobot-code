@@ -1,114 +1,110 @@
-# EdgeAgent Runtime
+# Aster
 
-EdgeAgent is a small, policy-aware Agent runtime for D-Robotics X5, S100, and
-S600 boards. The same core runs on every board; hardware differences live in
-configuration overlays and tool/provider adapters.
+Aster 是一个面向嵌入式 Linux 的 Agentic Shell。它参考 Claude Code、OpenCode
+的交互方式，但针对 RDK X5、RDK S100、RDK S600 这类 ARM64 板卡设计：一个
+静态 Go 二进制即可运行，板端不需要 Go、Python、容器或第三方运行库。
 
-## P1 status
+## 当前能力
 
-Implemented:
+- 交互式终端会话、单次执行、会话恢复与 JSONL 轨迹导出。
+- OpenAI Responses、OpenAI-compatible、Anthropic、Gemini 和离线 mock。
+- 有界 Agent 工具循环，支持 JSON Schema、超时、输出上限、白名单和人工审批。
+- 内置板卡探测、目录读取、文件读写和 Shell 工具。
+- `SKILL.md` 技能加载、进程隔离插件、MCP stdio 客户端。
+- 本地 HTTP 服务，可作为板端 Agent 网关由其他设备调用。
+- `linux/arm64` 静态构建、安装包和 systemd 服务。
 
-- Python 3.9+ core, tested against the boards' Python 3.10 and 3.12 runtimes;
-  compatible with their existing PyYAML 5.4.1/6.0.1 installations.
-- OpenAI Responses, OpenAI-compatible, Anthropic Messages, and current Gemini
-  Interactions provider mappings.
-- Provider-independent messages, function calls, results, usage, and state.
-- Bounded Agent tool loop with step limits, timeouts, argument validation,
-  board capability checks, allowlists, and approval gates.
-- Layered system prompts, lazy Skills, SQLite sessions/events, and JSONL-ready
-  SFT trajectory export.
-- Read-only `system.snapshot` tool and opt-in root-bounded text-file tool.
-- Offline mock provider, diagnostics, CLI, board profiles, and tests.
-
-Not yet implemented:
-
-- Streaming/SSE output, long-running daemon/API, MCP transport, remote node RPC,
-  out-of-process plugin isolation, and OTA management.
-- A generic BPU LLM provider. `hrt_model_exec` exists on all boards, but each
-  model still requires a supported conversion and measured runtime validation.
-- Live paid-provider tests. Protocol builders and parsers use deterministic tests;
-  real API tests require user-supplied keys and chosen model IDs.
-
-## Quick start
-
-The default configuration is offline and does not require an API key:
+## 本地构建
 
 ```bash
-python3 -m edge_agent diagnose \
-  --config config/base.yaml \
-  --board config/boards/x5.yaml
+make test
+make build
 
-python3 -m edge_agent run \
-  --config config/base.yaml \
-  --board config/boards/x5.yaml \
-  --message "介绍当前节点" \
-  --json
+./dist/aster \
+  --config config/aster.example.json \
+  --board config/boards/x5.json \
+  doctor --json
 ```
 
-Install the CLI in a virtual environment when packaging it for a board:
+默认使用离线 mock。进入交互界面：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/edge-agent diagnose --board config/boards/s600.yaml
+./dist/aster --config config/aster.example.json chat
 ```
 
-## Model providers
-
-Use an Agent config and optionally a board overlay:
+接入本地 llama.cpp、vLLM、Ollama 兼容网关或其他 OpenAI-compatible 服务：
 
 ```bash
-OPENAI_API_KEY=... edge-agent run \
-  --config config/agents/openai-responses.yaml \
-  --board config/boards/s600.yaml \
-  --message "读取板卡状态"
+export MODEL_API_KEY=""
+./dist/aster \
+  --config config/aster.example.json \
+  --provider config/providers/openai-compatible.json \
+  --board config/boards/s600.json \
+  chat
 ```
 
-Available provider configs:
+先修改 provider overlay 中的 `model` 和 `base_url`。其他厂商示例在
+`config/providers/`，密钥只从环境变量读取。
 
-| Config | API path | Typical use |
-|---|---|---|
-| `openai-responses.yaml` | `/v1/responses` | Native OpenAI tool workflows |
-| `openai-compatible.yaml` | `/v1/chat/completions` | DeepSeek, Qwen, GLM, vLLM, llama.cpp servers |
-| `anthropic.yaml` | `/v1/messages` | Anthropic-native tools |
-| `gemini.yaml` | `/v1beta/interactions` | Current Gemini steps/tool workflow |
-
-Set model IDs through `OPENAI_MODEL`, `MODEL_NAME`, `ANTHROPIC_MODEL`, or
-`GEMINI_MODEL`. Secrets are expanded from environment variables and are never
-written into the SQLite trajectory.
-
-## Security model
-
-- There is no generic shell tool in P1.
-- A tool must be registered, exposed for the active board, allowed by policy,
-  schema-valid, and approved when required.
-- Write and dangerous tools require approval unless deployment policy explicitly
-  enables them.
-- File reads are disabled until `security.filesystem_roots` is configured, and
-  resolved paths must remain under those roots.
-- Agent reasoning is control-plane logic. Safety-critical or hard real-time loops
-  must stay in deterministic device services.
-
-## Skills and trajectories
-
-Skills use `skills/<name>/SKILL.md` with YAML frontmatter. Only selected Skills
-load their full instructions. Required tools and board profiles are checked before
-prompt composition.
-
-Export one complete session as one training trajectory:
+## ARM64 发布与安装
 
 ```bash
-edge-agent export --config config/base.yaml --session SESSION_ID > trajectory.jsonl
+make release VERSION=0.1.0
+scp dist/aster-0.1.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
+ssh root@10.112.10.106
+cd /tmp && tar -xzf aster-0.1.0-linux-arm64.tar.gz
+cd aster-0.1.0-linux-arm64 && ./install.sh
+aster --config /etc/aster/config.json doctor --json
 ```
 
-The export preserves assistant tool calls, tool results, and the exposed tool
-schemas so training serialization can match deployment.
+使用 `./install.sh --enable-service` 会同时启用仅监听
+`127.0.0.1:7337` 的 systemd 服务。安装器不会覆盖已有
+`/etc/aster/config.json` 或 `/etc/aster/aster.env`。
 
-## Verification
+## 终端命令
 
-```bash
-PYTHONPYCACHEPREFIX=/tmp/edge-agent-pycache python3 -m pytest
+```text
+/new            新会话
+/session        当前会话 ID
+/resume ID      恢复历史会话
+/tools          查看当前模型可见工具
+/skills         查看已发现 Skills
+/doctor         查看板卡、模型和扩展状态
+/quit           退出
 ```
 
-See [architecture](docs/architecture.md) and [configuration](docs/configuration.md)
-for extension contracts and the next implementation phase.
+命令行子命令包括 `chat`、`run`、`doctor`、`tools`、`skills`、
+`sessions`、`export` 和 `serve`。
+
+## 扩展
+
+Skills 放在 `skills/<name>/SKILL.md`，通过配置中的
+`agent.enabled_skills` 启用。插件 manifest 示例位于
+`examples/plugins/uptime/`。MCP server 直接加入配置：
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "robot",
+      "command": "/usr/local/bin/robot-mcp",
+      "args": [],
+      "protocol_version": "2025-06-18",
+      "enabled": true
+    }
+  ]
+}
+```
+
+MCP 工具会以 `<server>__<tool>` 暴露，并默认要求人工批准。
+
+## 安全边界
+
+- 默认写文件、Shell、插件和 MCP 工具需要终端批准。
+- `--yes` 仅适合明确受控的自动化环境。
+- 文件和 Shell 工作目录被限制在 `security.workspace_root`。
+- HTTP 服务没有交互审批能力，因此默认拒绝需要批准的工具。
+- Aster 是控制面 Agent，不应进入电机、CAN、GPIO 等硬实时闭环。
+- `hrt_model_exec` 存在不代表任意 LLM 已转换并可在 BPU 上运行；本地模型仍需独立验证精度、内存、延迟和温度。
+
+详细设计见 [架构](docs/architecture.md) 和 [配置说明](docs/configuration.md)。

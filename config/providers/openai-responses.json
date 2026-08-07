@@ -1,0 +1,13 @@
+{
+  "provider": {
+    "type": "openai-responses",
+    "model": "replace-with-openai-model",
+    "base_url": "https://api.openai.com/v1",
+    "api_key_env": "OPENAI_API_KEY",
+    "timeout_seconds": 120,
+    "settings": {
+      "store": false,
+      "parallel_tool_calls": false
+    }
+  }
+}

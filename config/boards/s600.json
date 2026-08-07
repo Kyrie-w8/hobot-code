@@ -1,0 +1,6 @@
+{
+  "board": {
+    "profile": "s600",
+    "prompt": "RDK S600 has 18 ARM64 CPU cores and about 10 GiB visible RAM. It can coordinate peer nodes and heavier preprocessing, but local BPU model support must be established by conversion and measurement."
+  }
+}
