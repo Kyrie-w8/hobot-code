@@ -72,10 +72,13 @@ func (r *Runtime) Close() {
 	if r.MCP != nil {
 		r.MCP.Close()
 	}
+	if r.Store != nil {
+		_ = r.Store.Close()
+	}
 }
 
 func (r *Runtime) Doctor() map[string]any {
-	return map[string]any{"ok": true, "agent": r.Config.Agent.Name, "provider": r.Config.Provider.Type, "model": r.Config.Provider.Model, "board": r.Board, "tools": r.Registry.Definitions(), "skills": r.Catalog.List(), "session_dir": r.Config.Session.Dir, "workspace_root": r.Config.Security.WorkspaceRoot}
+	return map[string]any{"ok": true, "agent": r.Config.Agent.Name, "provider": r.Config.Provider.Type, "model": r.Config.Provider.Model, "board": r.Board, "tools": r.Registry.Definitions(), "skills": r.Catalog.List(), "session_dir": r.Config.Session.Dir, "session_backend": r.Store.Backend(), "recovered_sessions": r.Store.RecoveredCount(), "workspace_root": r.Config.Security.WorkspaceRoot}
 }
 
 func (r *Runtime) Summary() string {

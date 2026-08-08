@@ -123,6 +123,16 @@ func chat(ctx context.Context, runtime *app.Runtime, input *inputBroker, approva
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
+			if strings.Fields(line)[0] == "/compact" {
+				if sessionID == "" {
+					fmt.Println("No active session.")
+					continue
+				}
+				if compactSession(ctx, runtime, interrupts, sessionID, options) {
+					return 0
+				}
+				continue
+			}
 			handled, exit := handleChatCommand(runtime, line, &sessionID, &options)
 			if exit {
 				return 0
@@ -150,6 +160,48 @@ func chat(ctx context.Context, runtime *app.Runtime, input *inputBroker, approva
 type turnResult struct {
 	result core.AgentResult
 	err    error
+}
+
+type compactResult struct {
+	summary string
+	err     error
+}
+
+func compactSession(ctx context.Context, runtime *app.Runtime, interrupts <-chan os.Signal, sessionID string, options chatOptions) bool {
+	compactCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := make(chan compactResult, 1)
+	go func() {
+		summary, err := runtime.Agent.Compact(compactCtx, sessionID, nil)
+		result <- compactResult{summary: summary, err: err}
+	}()
+	renderer := newEventRenderer(options)
+	renderer.setStatus("Compacting context")
+	ticker := time.NewTicker(120 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			cancel()
+			renderer.StopStatus()
+			return true
+		case <-interrupts:
+			cancel()
+			renderer.StopStatus()
+			fmt.Printf("%sCompaction cancelled.%s\n\n", renderer.theme.yellow, renderer.theme.reset)
+			return false
+		case <-ticker.C:
+			renderer.Tick()
+		case outcome := <-result:
+			renderer.StopStatus()
+			if outcome.err != nil {
+				fmt.Fprintf(os.Stderr, "%serror:%s %v\n\n", renderer.theme.red, renderer.theme.reset, outcome.err)
+			} else {
+				fmt.Printf("%s✓%s Context compacted · %d characters\n\n", renderer.theme.green, renderer.theme.reset, len(outcome.summary))
+			}
+			return false
+		}
+	}
 }
 
 func runInteractiveTurn(ctx context.Context, runtime *app.Runtime, input *inputBroker, approvals *approvalBroker, interrupts <-chan os.Signal, sessionID, prompt string, options chatOptions) (core.AgentResult, error, []string, bool) {
@@ -254,6 +306,7 @@ func handleChatCommand(runtime *app.Runtime, line string, sessionID *string, opt
 		return true, true
 	case "/help":
 		fmt.Println("/new  /session  /sessions  /resume ID  /models  /thinking  /details")
+		fmt.Println("/compact  /undo  /redo")
 		fmt.Println("/tools  /skills  /doctor  /export [ID]  /clear  /q")
 	case "/new":
 		*sessionID = ""
@@ -296,6 +349,22 @@ func handleChatCommand(runtime *app.Runtime, line string, sessionID *string, opt
 	case "/details":
 		options.showDetails = toggleOption(fields, options.showDetails)
 		fmt.Println("Tool details:", onOff(options.showDetails))
+	case "/undo":
+		if *sessionID == "" {
+			fmt.Println("No active session.")
+		} else if err := runtime.Store.Undo(*sessionID); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		} else {
+			fmt.Println("Undid the last turn.")
+		}
+	case "/redo":
+		if *sessionID == "" {
+			fmt.Println("No active session.")
+		} else if err := runtime.Store.Redo(*sessionID); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		} else {
+			fmt.Println("Redid the next turn.")
+		}
 	case "/tools":
 		printValue(runtime.Registry.Definitions(), false)
 	case "/skills":

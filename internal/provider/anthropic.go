@@ -116,7 +116,7 @@ func (p *HTTPProvider) anthropicStream(ctx context.Context, req core.ProviderReq
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("User-Agent", "aster-edge/0.2")
+	httpReq.Header.Set("User-Agent", "aster-edge/0.4")
 	for key, value := range p.headers {
 		httpReq.Header.Set(key, value)
 	}

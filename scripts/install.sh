@@ -13,7 +13,8 @@ fi
 
 package_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install -d -m 0755 /usr/local/bin /usr/local/share/aster/prompts /usr/local/share/aster/skills
-install -d -m 0755 /etc/aster /etc/aster/boards /etc/aster/providers /var/lib/aster/workspace /var/lib/aster/sessions
+install -d -m 0755 /etc/aster /etc/aster/boards /etc/aster/providers /var/lib/aster/workspace
+install -d -m 0700 /var/lib/aster/sessions
 install -m 0755 "$package_dir/bin/aster" /usr/local/bin/aster
 install -m 0644 "$package_dir/prompts/system.md" /usr/local/share/aster/prompts/system.md
 cp -R "$package_dir/skills/." /usr/local/share/aster/skills/

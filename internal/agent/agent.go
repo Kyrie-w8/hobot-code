@@ -61,7 +61,8 @@ func (e *Engine) RunWithEvents(ctx context.Context, sessionID, input string, sin
 	usage := map[string]any{}
 	for step := 1; step <= e.Config.Agent.MaxSteps; step++ {
 		emit(core.EventProviderStarted, step, "", nil, nil, map[string]any{"model": e.Config.Provider.Model})
-		request := core.ProviderRequest{Model: e.Config.Provider.Model, SystemPrompt: e.SystemPrompt, Messages: messages, Tools: e.Tools.Definitions(), Settings: e.Config.Provider.Settings}
+		systemPrompt, providerMessages := prepareProviderContext(e.SystemPrompt, messages)
+		request := core.ProviderRequest{Model: e.Config.Provider.Model, SystemPrompt: systemPrompt, Messages: providerMessages, Tools: e.Tools.Definitions(), Settings: e.Config.Provider.Settings}
 		var response core.ProviderResponse
 		if streaming, ok := e.Provider.(core.StreamingProvider); ok {
 			response, err = streaming.CompleteStream(ctx, request, func(chunk core.ProviderChunk) {
@@ -131,6 +132,55 @@ func (e *Engine) RunWithEvents(ctx context.Context, sessionID, input string, sin
 	err = fmt.Errorf("agent exceeded max_steps=%d", e.Config.Agent.MaxSteps)
 	emit(core.EventTurnFailed, e.Config.Agent.MaxSteps, "", nil, nil, map[string]any{"error": err.Error()})
 	return core.AgentResult{}, err
+}
+
+func (e *Engine) Compact(ctx context.Context, sessionID string, onChunk func(core.ProviderChunk)) (string, error) {
+	if sessionID == "" {
+		return "", errors.New("no active session")
+	}
+	messages, err := e.Store.Messages(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if len(messages) == 0 {
+		return "", errors.New("session has no context to compact")
+	}
+	systemPrompt, providerMessages := prepareProviderContext(e.SystemPrompt, messages)
+	providerMessages = append(providerMessages, core.Message{Role: "user", Content: "Create a compact context summary for continuing this session. Preserve user requirements, decisions, file paths, commands, tool results, unresolved problems, and next steps. Remove repetition. Return only the summary."})
+	request := core.ProviderRequest{Model: e.Config.Provider.Model, SystemPrompt: systemPrompt, Messages: providerMessages, Settings: e.Config.Provider.Settings}
+	var response core.ProviderResponse
+	if streaming, ok := e.Provider.(core.StreamingProvider); ok {
+		response, err = streaming.CompleteStream(ctx, request, func(chunk core.ProviderChunk) {
+			if onChunk != nil {
+				onChunk(chunk)
+			}
+		})
+	} else {
+		response, err = e.Provider.Complete(ctx, request)
+	}
+	if err != nil {
+		return "", err
+	}
+	summary := strings.TrimSpace(response.Content)
+	if summary == "" {
+		return "", errors.New("provider returned an empty compact summary")
+	}
+	if err := e.Store.Compact(sessionID, summary); err != nil {
+		return "", err
+	}
+	return summary, nil
+}
+
+func prepareProviderContext(systemPrompt string, messages []core.Message) (string, []core.Message) {
+	filtered := make([]core.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == "context" {
+			systemPrompt += "\n\n<session-context>\n" + message.Content + "\n</session-context>"
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return systemPrompt, filtered
 }
 
 func eventRecord(event core.AgentEvent) map[string]any {

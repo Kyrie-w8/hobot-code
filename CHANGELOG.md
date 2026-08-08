@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Replace per-session JSONL writes with a crash-safe SQLite WAL store while preserving and incrementally importing legacy files.
+- Archive interrupted turns on startup and expose recovery status through `doctor`.
+- Add non-destructive `/undo`, `/redo`, and model-assisted `/compact` session commands.
+- Preserve full audit records and inject compacted context separately from conversation messages.
+- Add native SSE streaming for OpenAI-compatible Chat Completions, OpenAI Responses, and Gemini, including reasoning and tool calls.
+- Add protocol fallbacks and deterministic streamed tool-call reconstruction.
+
 ## 0.3.0
 
 - Add persistent system or user launch profiles and a validated `aster configure` command.

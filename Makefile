@@ -1,5 +1,5 @@
 APP := aster
-VERSION ?= 0.3.0
+VERSION ?= 0.4.0
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || printf none)
 LDFLAGS := -s -w -X github.com/Kyrie-w8/aster-edge/internal/cli.Version=$(VERSION) -X github.com/Kyrie-w8/aster-edge/internal/cli.Commit=$(COMMIT)
 GOCACHE ?= /tmp/aster-go-cache

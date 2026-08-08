@@ -46,7 +46,7 @@ aster \
 | `security.approval_tools` | 每次调用均需批准的工具 glob |
 | `plugins[].manifest` | 进程插件 manifest |
 | `mcp_servers[]` | stdio MCP server 启动参数 |
-| `session.dir` | JSONL 会话目录 |
+| `session.dir` | SQLite WAL 数据库及旧版 JSONL 所在目录 |
 | `server.listen` | HTTP 监听地址，默认仅本机 |
 
 JSON 字符串支持 `${ENV_NAME}` 环境变量展开。不要把真实密钥写入配置文件。
@@ -56,7 +56,14 @@ JSON 字符串支持 `${ENV_NAME}` 环境变量展开。不要把真实密钥写
 ## Provider
 
 OpenAI-compatible 允许空 API key，适合无鉴权的本机 llama.cpp 服务。其他三个
-厂商适配要求 API key。`provider.settings` 中的生成参数会按协议筛选或传给对应接口。
+厂商适配要求 API key。Anthropic、OpenAI Responses、OpenAI-compatible 和 Gemini
+均支持原生 SSE 流式输出。`provider.settings` 中的生成参数会按协议筛选或传给对应接口。
+
+## 会话存储
+
+`session.dir/aster.db` 是主存储，使用 SQLite WAL。升级后首次启动会扫描同目录的
+`*.jsonl` 并自动导入；之后若使用旧版本回滚并向 JSONL 追加记录，新版本会从上次导入
+行数继续同步，不会重复导入。JSONL 不会被移动或删除。
 
 ## 插件
 

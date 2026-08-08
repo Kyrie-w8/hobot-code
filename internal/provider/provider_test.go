@@ -42,6 +42,45 @@ func TestOpenAICompatibleToolCall(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("stream=%v", body["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		lines := []string{
+			`{"choices":[{"delta":{"reasoning_content":"check "},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"content":"done"},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"echo","arguments":"{\"text\":"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ok\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"total_tokens":5}}`,
+		}
+		for _, line := range lines {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	p, err := New(config.ProviderConfig{Type: "openai-compatible", Model: "m", BaseURL: server.URL, TimeoutSec: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chunks []core.ProviderChunk
+	response, err := p.(core.StreamingProvider).CompleteStream(context.Background(), request(), func(chunk core.ProviderChunk) { chunks = append(chunks, chunk) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Reasoning != "check " || response.Content != "done" || len(response.ToolCalls) != 1 || response.ToolCalls[0].Arguments["text"] != "ok" {
+		t.Fatalf("response=%+v", response)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("chunks=%+v", chunks)
+	}
+}
+
 func TestOpenAIResponsesTextAndTool(t *testing.T) {
 	server := jsonServer(t, "/responses", `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"checking"}]},{"type":"function_call","call_id":"c2","name":"system_snapshot","arguments":"{}"}],"usage":{"total_tokens":7}}`)
 	defer server.Close()
@@ -55,6 +94,58 @@ func TestOpenAIResponsesTextAndTool(t *testing.T) {
 	}
 	if response.Content != "checking" || len(response.ToolCalls) != 1 {
 		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestOpenAIResponsesStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"response.reasoning_summary_text.delta","delta":"plan"}`,
+			`{"type":"response.output_text.delta","delta":"answer"}`,
+			`{"type":"response.output_item.added","item":{"type":"function_call","id":"item-1","call_id":"call-1","name":"echo","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"item-1","delta":"{\"text\":\"ok\"}"}`,
+			`{"type":"response.completed","response":{"status":"completed","usage":{"total_tokens":6}}}`,
+		}
+		for _, event := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+	}))
+	defer server.Close()
+	p, err := New(config.ProviderConfig{Type: "openai-responses", Model: "m", BaseURL: server.URL, APIKey: "key", TimeoutSec: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := p.(core.StreamingProvider).CompleteStream(context.Background(), request(), func(core.ProviderChunk) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Reasoning != "plan" || response.Content != "answer" || response.FinishReason != "completed" || len(response.ToolCalls) != 1 || response.ToolCalls[0].Arguments["text"] != "ok" {
+		t.Fatalf("response=%+v", response)
+	}
+}
+
+func TestOpenAIResponsesCompletedEventCarriesFullResponse(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","summary":[{"text":"plan"}]},{"type":"message","content":[{"type":"output_text","text":"answer"}]}],"usage":{"total_tokens":3}}}`+"\n\n")
+	}))
+	defer server.Close()
+	p, err := New(config.ProviderConfig{Type: "openai-responses", Model: "m", BaseURL: server.URL, APIKey: "key", TimeoutSec: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chunks []core.ProviderChunk
+	response, err := p.(core.StreamingProvider).CompleteStream(context.Background(), request(), func(chunk core.ProviderChunk) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || response.Reasoning != "plan" || response.Content != "answer" || len(chunks) != 2 {
+		t.Fatalf("requests=%d response=%+v chunks=%+v", requests, response, chunks)
 	}
 }
 
@@ -190,6 +281,35 @@ func TestGeminiResponse(t *testing.T) {
 	}
 	if response.Content != "done" {
 		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestGeminiStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, ":streamGenerateContent") || r.URL.Query().Get("alt") != "sse" {
+			t.Fatalf("url=%s", r.URL.String())
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		responses := []string{
+			`{"candidates":[{"content":{"parts":[{"text":"think","thought":true}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`,
+			`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"functionCall":{"name":"echo","args":{"text":"ok"}}}]}}],"usageMetadata":{"totalTokenCount":4}}`,
+		}
+		for _, response := range responses {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", response)
+		}
+	}))
+	defer server.Close()
+	p, err := New(config.ProviderConfig{Type: "gemini", Model: "m", BaseURL: server.URL, APIKey: "key", TimeoutSec: 5, Settings: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := p.(core.StreamingProvider).CompleteStream(context.Background(), request(), func(core.ProviderChunk) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Reasoning != "think" || response.Content != "done" || len(response.ToolCalls) != 1 || response.ToolCalls[0].Arguments["text"] != "ok" {
+		t.Fatalf("response=%+v", response)
 	}
 }
 

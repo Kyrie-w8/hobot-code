@@ -80,10 +80,12 @@ func TestAgentEmitsOrderedLifecycleEvents(t *testing.T) {
 }
 
 type staticProvider struct {
-	response core.ProviderResponse
+	response    core.ProviderResponse
+	lastRequest core.ProviderRequest
 }
 
-func (p *staticProvider) Complete(context.Context, core.ProviderRequest) (core.ProviderResponse, error) {
+func (p *staticProvider) Complete(_ context.Context, request core.ProviderRequest) (core.ProviderResponse, error) {
+	p.lastRequest = request
 	return p.response, nil
 }
 
@@ -97,5 +99,59 @@ func TestAgentRejectsSilentEmptyResponse(t *testing.T) {
 	_, err := engine.Run(context.Background(), "", "hi")
 	if err == nil || !strings.Contains(err.Error(), "empty response") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestPrepareProviderContextMovesSummaryIntoSystemPrompt(t *testing.T) {
+	systemPrompt, messages := prepareProviderContext("base", []core.Message{
+		{Role: "context", Content: "preserved state"},
+		{Role: "user", Content: "continue"},
+	})
+	if !strings.Contains(systemPrompt, "<session-context>\npreserved state\n</session-context>") {
+		t.Fatalf("system prompt=%q", systemPrompt)
+	}
+	if len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatalf("messages=%+v", messages)
+	}
+}
+
+func TestCompactReplacesActiveContextWithSummary(t *testing.T) {
+	cfg := config.Defaults()
+	store, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	id := session.NewID()
+	if err := store.AppendEvent(id, string(core.EventTurnStarted), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(id, core.Message{Role: "user", Content: "inspect the board"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(id, core.Message{Role: "assistant", Content: "board is healthy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendEvent(id, string(core.EventTurnCompleted), nil); err != nil {
+		t.Fatal(err)
+	}
+	provider := &staticProvider{response: core.ProviderResponse{Content: "Board inspection completed; all checks passed."}}
+	engine := Engine{
+		Config: cfg, Provider: provider, Store: store, SystemPrompt: "test",
+		Tools: tools.New(policy.New(config.SecurityConfig{AllowedTools: []string{"*"}}), nil, 1024),
+	}
+	summary, err := engine.Compact(context.Background(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(summary, "all checks passed") || len(provider.lastRequest.Tools) != 0 {
+		t.Fatalf("summary=%q request=%+v", summary, provider.lastRequest)
+	}
+	messages, err := store.Messages(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "context" || messages[0].Content != summary {
+		t.Fatalf("messages=%+v", messages)
 	}
 }

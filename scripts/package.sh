@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.3.0}
+version=${1:-0.4.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage_dir="$root_dir/dist/aster-$version-linux-arm64"
 

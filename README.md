@@ -6,7 +6,8 @@ Aster 是一个面向嵌入式 Linux 的 Agentic Shell。它参考 Claude Code�
 
 ## 当前能力
 
-- 可取消的交互式终端会话、流式文本与 reasoning summary、会话恢复和轨迹导出。
+- 可取消的交互式终端会话、原生流式文本与 reasoning summary、会话恢复和轨迹导出。
+- SQLite WAL 会话存储、崩溃恢复、上下文压缩以及按轮撤销/重做。
 - 响应式终端布局、动态运行状态和持久化默认启动 profile。
 - OpenAI Responses、OpenAI-compatible、Anthropic、Gemini 和离线 mock。
 - 有界 Agent 工具循环，支持 JSON Schema、超时、输出上限、白名单和人工审批。
@@ -50,11 +51,11 @@ export MODEL_API_KEY=""
 ## ARM64 发布与安装
 
 ```bash
-make release VERSION=0.3.0
-scp dist/aster-0.3.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
+make release VERSION=0.4.0
+scp dist/aster-0.4.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
 ssh root@10.112.10.106
-cd /tmp && tar -xzf aster-0.3.0-linux-arm64.tar.gz
-cd aster-0.3.0-linux-arm64 && ./install.sh
+cd /tmp && tar -xzf aster-0.4.0-linux-arm64.tar.gz
+cd aster-0.4.0-linux-arm64 && ./install.sh
 aster doctor --json
 ```
 
@@ -88,6 +89,9 @@ aster
 /session        当前会话 ID
 /sessions       会话列表
 /resume ID      恢复历史会话
+/compact        压缩当前上下文并保留审计记录
+/undo           撤销最近一轮
+/redo           恢复最近撤销的一轮
 /models         当前 Provider 和模型
 /thinking       展开或折叠模型返回的 reasoning summary
 /details        展开或折叠工具参数与结果
@@ -102,6 +106,11 @@ aster
 空闲时 `Ctrl-C` 退出；模型或工具运行时第一次 `Ctrl-C` 取消当前轮，第二次
 强制退出。运行期间输入的新消息会排队到下一轮。reasoning summary 只展示模型
 明确返回的内容，不生成或猜测隐藏思维链。
+
+会话保存在 `session.dir/aster.db`，使用 SQLite WAL 和完整同步写入。升级时会自动
+增量导入同目录的旧版 `.jsonl` 会话，原文件不会删除；若进程在一轮对话中异常退出，
+下次启动会归档未完成轮次，避免把半条工具链重新发送给模型。`aster doctor --json`
+中的 `session_backend` 和 `recovered_sessions` 可用于确认状态。
 
 ## HTTP 和 SSE
 
