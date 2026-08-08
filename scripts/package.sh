@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.2.0}
+version=${1:-0.3.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage_dir="$root_dir/dist/aster-$version-linux-arm64"
 
@@ -13,6 +13,7 @@ install -m 0755 "$root_dir/scripts/uninstall.sh" "$stage_dir/uninstall.sh"
 install -m 0644 "$root_dir/packaging/config.json" "$stage_dir/config/config.json"
 install -m 0644 "$root_dir/packaging/aster.service" "$stage_dir/config/aster.service"
 install -m 0644 "$root_dir/packaging/aster.env.example" "$stage_dir/config/aster.env.example"
+install -m 0644 "$root_dir/packaging/launcher.json" "$stage_dir/config/launcher.json"
 cp "$root_dir"/config/boards/*.json "$stage_dir/config/boards/"
 cp "$root_dir"/config/providers/*.json "$stage_dir/config/providers/"
 cp "$root_dir/prompts/system.md" "$stage_dir/prompts/system.md"

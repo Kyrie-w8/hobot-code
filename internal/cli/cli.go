@@ -58,6 +58,17 @@ func Run(args []string) int {
 		usage()
 		return 0
 	}
+	if command == "configure" {
+		if opts.configPath == "" || opts.providerPath == "" || opts.boardPath == "" {
+			if err := applyLauncherDefaults(&opts); err != nil {
+				return fail(err)
+			}
+		}
+		return saveLauncher(opts)
+	}
+	if err := applyLauncherDefaults(&opts); err != nil {
+		return fail(err)
+	}
 	cfg, err := config.Load(opts.configPath, opts.providerPath, opts.boardPath)
 	if err != nil {
 		return fail(err)
@@ -146,11 +157,13 @@ func usage() {
 	fmt.Fprint(os.Stderr, `Aster - agentic shell for embedded Linux
 
 Usage:
+  aster
   aster [global flags] chat
   aster [global flags] run --message TEXT [--session ID]
   aster [global flags] doctor|tools|skills|sessions
   aster [global flags] export SESSION_ID
   aster [global flags] serve
+  aster [global flags] configure
 
 Global flags:
   --config FILE   base configuration JSON
@@ -159,6 +172,9 @@ Global flags:
   --yes           approve write/dangerous tool calls
   --json          machine-readable output
   --version       print version
+
+Environment:
+  ASTER_CONFIG, ASTER_PROVIDER, ASTER_BOARD, ASTER_LAUNCHER
 `)
 }
 

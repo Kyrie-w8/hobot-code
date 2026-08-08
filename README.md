@@ -7,6 +7,7 @@ Aster 是一个面向嵌入式 Linux 的 Agentic Shell。它参考 Claude Code�
 ## 当前能力
 
 - 可取消的交互式终端会话、流式文本与 reasoning summary、会话恢复和轨迹导出。
+- 响应式终端布局、动态运行状态和持久化默认启动 profile。
 - OpenAI Responses、OpenAI-compatible、Anthropic、Gemini 和离线 mock。
 - 有界 Agent 工具循环，支持 JSON Schema、超时、输出上限、白名单和人工审批。
 - 内置板卡探测、目录读取、文件读写和 Shell 工具。
@@ -49,17 +50,36 @@ export MODEL_API_KEY=""
 ## ARM64 发布与安装
 
 ```bash
-make release VERSION=0.2.0
-scp dist/aster-0.2.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
+make release VERSION=0.3.0
+scp dist/aster-0.3.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
 ssh root@10.112.10.106
-cd /tmp && tar -xzf aster-0.2.0-linux-arm64.tar.gz
-cd aster-0.2.0-linux-arm64 && ./install.sh
-aster --config /etc/aster/config.json doctor --json
+cd /tmp && tar -xzf aster-0.3.0-linux-arm64.tar.gz
+cd aster-0.3.0-linux-arm64 && ./install.sh
+aster doctor --json
 ```
 
 使用 `./install.sh --enable-service` 会同时启用仅监听
 `127.0.0.1:7337` 的 systemd 服务。安装器不会覆盖已有
 `/etc/aster/config.json` 或 `/etc/aster/aster.env`。
+
+首次选择模型和板卡后保存启动 profile：
+
+```bash
+aster \
+  --config /etc/aster/config.json \
+  --provider /etc/aster/providers/drobotics-kimi.json \
+  --board /etc/aster/boards/s600.json \
+  configure
+```
+
+以后直接运行即可：
+
+```bash
+aster
+```
+
+显式命令行参数仍会覆盖 launcher。也可以使用 `ASTER_CONFIG`、
+`ASTER_PROVIDER`、`ASTER_BOARD` 或 `ASTER_LAUNCHER` 临时覆盖。
 
 ## 终端命令
 
@@ -100,7 +120,7 @@ POST /v1/sessions/{id}/cancel         取消运行中的会话
 `turn.failed`。同一会话串行执行，不同会话可以并行。
 
 命令行子命令包括 `chat`、`run`、`doctor`、`tools`、`skills`、
-`sessions`、`export` 和 `serve`。
+`sessions`、`export`、`serve` 和 `configure`。
 
 ## 扩展
 

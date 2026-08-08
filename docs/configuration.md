@@ -6,6 +6,20 @@
 --config 基础配置 -> --provider 模型配置 -> --board 板卡配置
 ```
 
+安装后可将这三个路径保存到 `/etc/aster/launcher.json`：
+
+```bash
+aster \
+  --config /etc/aster/config.json \
+  --provider /etc/aster/providers/drobotics-kimi.json \
+  --board /etc/aster/boards/s600.json \
+  configure
+```
+
+之后 `aster`、`aster doctor` 和 `aster serve` 自动使用相同配置。非 root 用户写入
+`~/.config/aster/launcher.json`。优先级从高到低为：显式参数、`ASTER_*`
+环境变量、用户 launcher、系统 launcher、程序默认值。
+
 示例：
 
 ```bash
@@ -52,7 +66,7 @@ OpenAI-compatible 允许空 API key，适合无鉴权的本机 llama.cpp 服务�
 
 ## systemd
 
-默认服务读取 `/etc/aster/config.json` 和 `/etc/aster/aster.env`，工作目录为
+默认服务读取 launcher 选择的配置和 `/etc/aster/aster.env`，工作目录为
 `/var/lib/aster/workspace`。修改配置后执行：
 
 ```bash

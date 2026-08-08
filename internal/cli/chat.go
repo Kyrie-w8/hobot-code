@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/Kyrie-w8/aster-edge/internal/app"
 	"github.com/Kyrie-w8/aster-edge/internal/core"
@@ -85,10 +86,8 @@ func chat(ctx context.Context, runtime *app.Runtime, input *inputBroker, approva
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 
-	fmt.Printf("\n\033[1;36mAster\033[0m  %s\n", runtime.Summary())
-	fmt.Println("Type /help for commands. Ctrl-C cancels a turn or exits while idle.")
-	fmt.Println()
-
+	theme := newTerminalTheme()
+	renderBanner(runtime, theme)
 	sessionID := ""
 	queued := []string{}
 	options := chatOptions{showThinking: true}
@@ -97,9 +96,9 @@ func chat(ctx context.Context, runtime *app.Runtime, input *inputBroker, approva
 		if len(queued) > 0 {
 			line = queued[0]
 			queued = queued[1:]
-			fmt.Printf("\033[2mRunning queued prompt (%d remaining).\033[0m\n", len(queued))
+			fmt.Printf("%sQueued prompt · %d remaining%s\n", theme.dim, len(queued), theme.reset)
 		} else {
-			fmt.Print("\033[1;32m›\033[0m ")
+			renderPrompt(sessionID, options, theme)
 			select {
 			case <-ctx.Done():
 				fmt.Println()
@@ -169,6 +168,8 @@ func runInteractiveTurn(ctx context.Context, runtime *app.Runtime, input *inputB
 	}()
 
 	renderer := newEventRenderer(options)
+	ticker := time.NewTicker(120 * time.Millisecond)
+	defer ticker.Stop()
 	queued := []string{}
 	var pendingApproval *approvalRequest
 	cancelRequested := false
@@ -179,7 +180,8 @@ func runInteractiveTurn(ctx context.Context, runtime *app.Runtime, input *inputB
 			return core.AgentResult{}, ctx.Err(), queued, true
 		case <-interrupts:
 			if cancelRequested {
-				fmt.Println("\n\033[2mForced exit.\033[0m")
+				renderer.StopStatus()
+				fmt.Printf("\n%sForced exit.%s\n", renderer.theme.dim, renderer.theme.reset)
 				return core.AgentResult{}, context.Canceled, queued, true
 			}
 			cancelRequested = true
@@ -188,10 +190,12 @@ func runInteractiveTurn(ctx context.Context, runtime *app.Runtime, input *inputB
 				pendingApproval.response <- false
 				pendingApproval = nil
 			}
-			fmt.Println("\n\033[2mCancelling current turn... Press Ctrl-C again to exit.\033[0m")
+			renderer.StopStatus()
+			fmt.Printf("\n%sCancelling current turn…%s\n", renderer.theme.yellow, renderer.theme.reset)
 		case request := <-approvals.requests:
+			renderer.StopStatus()
 			pendingApproval = &request
-			renderApproval(request)
+			renderApproval(request, renderer.theme)
 		case inputEvent, ok := <-input.events:
 			if !ok || errors.Is(inputEvent.err, io.EOF) {
 				cancel()
@@ -203,18 +207,22 @@ func runInteractiveTurn(ctx context.Context, runtime *app.Runtime, input *inputB
 			}
 			line := strings.TrimSpace(inputEvent.line)
 			if pendingApproval != nil {
+				renderer.ClearStatus()
 				approved := line == "y" || line == "Y" || strings.EqualFold(line, "yes")
 				pendingApproval.response <- approved
 				pendingApproval = nil
 				if approved {
-					fmt.Println("\033[32mApproved once.\033[0m")
+					fmt.Printf("%sApproved once.%s\n", renderer.theme.green, renderer.theme.reset)
 				} else {
-					fmt.Println("\033[33mDenied.\033[0m")
+					fmt.Printf("%sDenied.%s\n", renderer.theme.yellow, renderer.theme.reset)
 				}
 			} else if line != "" {
+				renderer.ClearStatus()
 				queued = append(queued, line)
-				fmt.Printf("\n\033[2mQueued next prompt (%d).\033[0m\n", len(queued))
+				fmt.Printf("\n%sQueued next prompt · %d%s\n", renderer.theme.dim, len(queued), renderer.theme.reset)
 			}
+		case <-ticker.C:
+			renderer.Tick()
 		case event := <-events:
 			renderer.Render(event)
 		case outcome := <-results:
@@ -234,9 +242,9 @@ func runInteractiveTurn(ctx context.Context, runtime *app.Runtime, input *inputB
 	}
 }
 
-func renderApproval(request approvalRequest) {
+func renderApproval(request approvalRequest, theme terminalTheme) {
 	arguments, _ := json.MarshalIndent(request.call.Arguments, "  ", "  ")
-	fmt.Printf("\n\033[1;33mApproval required\033[0m  %s [%s]\n  %s\nApprove once? [y/N] ", request.call.Name, request.definition.Risk, arguments)
+	fmt.Printf("\n%s╭─ Approval required%s  %s [%s]\n%s│%s %s\n%s╰─%s Approve once? [y/N] ", theme.yellow+theme.bold, theme.reset, request.call.Name, request.definition.Risk, theme.dim, theme.reset, strings.ReplaceAll(string(arguments), "\n", "\n│ "), theme.dim, theme.reset)
 }
 
 func handleChatCommand(runtime *app.Runtime, line string, sessionID *string, options *chatOptions) (bool, bool) {
@@ -332,75 +340,117 @@ type eventRenderer struct {
 	options       chatOptions
 	reasoningOpen bool
 	answerOpen    bool
+	theme         terminalTheme
+	status        string
+	statusSince   time.Time
+	statusVisible bool
+	spinner       int
 }
 
 func newEventRenderer(options chatOptions) *eventRenderer {
-	return &eventRenderer{options: options}
+	return &eventRenderer{options: options, theme: newTerminalTheme()}
 }
 
 func (r *eventRenderer) Render(event core.AgentEvent) {
 	switch event.Type {
 	case core.EventProviderStarted:
 		r.closeBlocks()
-		fmt.Printf("\033[2mThinking with %v...\033[0m\n", event.Data["model"])
+		r.setStatus(fmt.Sprintf("Thinking · %v", event.Data["model"]))
 	case core.EventReasoningDelta:
 		if !r.options.showThinking || event.Delta == "" {
 			return
 		}
 		if !r.reasoningOpen {
-			fmt.Print("\033[2m┌ Reasoning\n│ \033[0m")
+			r.StopStatus()
+			fmt.Printf("%s╭─ Reasoning%s\n%s│%s ", r.theme.dim, r.theme.reset, r.theme.dim, r.theme.reset+r.theme.dim)
 			r.reasoningOpen = true
 		}
-		fmt.Print("\033[2m", event.Delta, "\033[0m")
+		fmt.Print(strings.ReplaceAll(event.Delta, "\n", "\n│ "))
 	case core.EventTextDelta:
 		if event.Delta == "" {
 			return
 		}
 		r.closeReasoning()
 		if !r.answerOpen {
-			fmt.Print("\033[1;36mAster\033[0m  ")
+			r.StopStatus()
+			fmt.Printf("%s%sASTER%s\n", r.theme.brand, r.theme.bold, r.theme.reset)
 			r.answerOpen = true
 		}
 		fmt.Print(event.Delta)
 	case core.EventToolRequested:
 		r.closeBlocks()
-		fmt.Printf("\033[1;34m● %s\033[0m\n", event.ToolCall.Name)
+		fmt.Printf("%s◆%s %s%s%s\n", r.theme.accent, r.theme.reset, r.theme.bold, event.ToolCall.Name, r.theme.reset)
 		if r.options.showDetails {
 			arguments, _ := json.MarshalIndent(event.ToolCall.Arguments, "  ", "  ")
-			fmt.Printf("\033[2m%s\033[0m\n", arguments)
+			fmt.Printf("%s%s%s\n", r.theme.dim, arguments, r.theme.reset)
 		}
+	case core.EventToolStarted:
+		r.setStatus("Running · " + event.ToolCall.Name)
 	case core.EventToolCompleted:
+		r.StopStatus()
 		if event.Execution.OK {
-			fmt.Printf("\033[32m✓ %s\033[0m \033[2m%dms\033[0m\n", event.Execution.Name, event.Execution.DurationMS)
+			fmt.Printf("%s✓%s %s  %s%dms%s\n", r.theme.green, r.theme.reset, event.Execution.Name, r.theme.dim, event.Execution.DurationMS, r.theme.reset)
 		} else {
-			fmt.Printf("\033[31m✗ %s\033[0m  %s\n", event.Execution.Name, event.Execution.Error)
+			fmt.Printf("%s✗%s %s  %s\n", r.theme.red, r.theme.reset, event.Execution.Name, event.Execution.Error)
 		}
 		if r.options.showDetails && event.Execution.Output != nil {
 			output, _ := json.MarshalIndent(event.Execution.Output, "  ", "  ")
-			fmt.Printf("\033[2m%s\033[0m\n", output)
+			fmt.Printf("%s%s%s\n", r.theme.dim, output, r.theme.reset)
 		}
 	}
 }
 
 func (r *eventRenderer) Finish(err error) {
+	r.StopStatus()
 	r.closeBlocks()
 	if errors.Is(err, context.Canceled) {
-		fmt.Println("\033[33mTurn cancelled.\033[0m")
+		fmt.Printf("%sTurn cancelled.%s\n", r.theme.yellow, r.theme.reset)
 	}
 	fmt.Println()
 }
 
 func (r *eventRenderer) closeReasoning() {
 	if r.reasoningOpen {
-		fmt.Print("\n\033[2m└\033[0m\n")
+		fmt.Printf("%s\n╰─%s\n", r.theme.dim, r.theme.reset)
 		r.reasoningOpen = false
 	}
 }
 
 func (r *eventRenderer) closeBlocks() {
+	r.StopStatus()
 	r.closeReasoning()
 	if r.answerOpen {
 		fmt.Println()
 		r.answerOpen = false
 	}
+}
+
+func (r *eventRenderer) setStatus(status string) {
+	r.ClearStatus()
+	r.status = status
+	r.statusSince = time.Now()
+	r.spinner = 0
+}
+
+func (r *eventRenderer) Tick() {
+	if r.status == "" || !r.theme.interactive {
+		return
+	}
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	elapsed := time.Since(r.statusSince).Round(100 * time.Millisecond)
+	fmt.Printf("\r\033[2K%s%s%s %s  %s%s%s", r.theme.accent, frames[r.spinner%len(frames)], r.theme.reset, r.status, r.theme.dim, elapsed, r.theme.reset)
+	r.spinner++
+	r.statusVisible = true
+}
+
+func (r *eventRenderer) ClearStatus() {
+	if r.statusVisible && r.theme.interactive {
+		fmt.Print("\r\033[2K")
+		r.statusVisible = false
+	}
+}
+
+func (r *eventRenderer) StopStatus() {
+	r.ClearStatus()
+	r.status = ""
 }
