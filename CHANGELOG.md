@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0
+
+- Add `/btw <task>` as an ephemeral full-capability side agent that can run while the parent Agent continues.
+- Snapshot the parent session's in-memory branch, effective system prompt, model, thinking level, active tools, trust state, and scoped memory context without writing side messages back.
+- Add a live, scrollable overlay with tool activity, streamed output, usage, cancellation, bounded event handling, and guaranteed temporary-session cleanup.
+- Preserve workspace and device side effects while preventing side sessions from consuming persistent-goal budgets or writing parent memory and goal state.
+
 ## 0.11.1
 
 - Move configuration and mutable state to isolated per-user XDG directories, with guarded migration of the legacy system layout.

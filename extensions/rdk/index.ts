@@ -58,6 +58,7 @@ import {
   type MemoryScope,
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
+import { registerSideAgent } from "./side-agent.ts";
 import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -628,7 +629,7 @@ function streamDrobotics(
           Accept: "application/json",
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
-          "User-Agent": "hobot-code/0.11.1",
+          "User-Agent": "hobot-code/0.12.0",
           ...configuredHeaders,
         },
         body: JSON.stringify(body),
@@ -919,6 +920,8 @@ function gateReport(state: QualityGateState, status: QualityGateStatus): string 
 export default function rdkExtension(pi: ExtensionAPI) {
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+  const sideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
+  let disposeSideAgent = async (): Promise<void> => undefined;
   let currentSnapshot: BoardSnapshot | undefined;
   let permissionPolicy: PermissionPolicy;
   let permissionPolicyError: string | undefined;
@@ -979,7 +982,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
       user: process.env.HOBOT_CODE_MEMORY_USER || "default",
       project: resolve(ctx.cwd),
       board: `${snapshot.boardId}:${snapshot.hostname}`,
-      session: ctx.sessionManager.getSessionFile(),
+      session: sideAgentMode
+        ? process.env.HOBOT_CODE_SIDE_PARENT_SESSION || ctx.sessionManager.getSessionFile()
+        : ctx.sessionManager.getSessionFile(),
     };
   }
 
@@ -1455,7 +1460,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
       try {
         goalStore = new GoalStore(goalDatabasePath());
         const session = ctx.sessionManager.getSessionFile() || `ephemeral:${process.pid}`;
-        currentGoal = goalStore.restore(resolve(ctx.cwd), session);
+        currentGoal = sideAgentMode
+          ? goalStore.current(resolve(ctx.cwd))
+          : goalStore.restore(resolve(ctx.cwd), session);
       } catch (error) {
         goalRuntimeError = error instanceof Error ? error.message : String(error);
       }
@@ -1512,6 +1519,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     applyDeniedTools();
+    if (sideAgentMode) return undefined;
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
     const expertPrompt = await renderExpertPrompt(snapshot);
@@ -1568,6 +1576,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    await disposeSideAgent();
     closeMemory();
     goalStore?.close();
     goalStore = undefined;
@@ -1582,10 +1591,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("turn_start", async () => {
+    if (sideAgentMode) return;
     goalTurnStartedAt = Date.now();
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    if (sideAgentMode) return;
     if (!goalStore || !currentGoal) return;
     const usage = "usage" in event.message ? event.message.usage : undefined;
     const tokens = usage?.totalTokens ?? 0;
@@ -1603,6 +1614,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async () => {
+    if (sideAgentMode) return;
     const duration = agentStartedAt ? Date.now() - agentStartedAt : 0;
     if (duration < notificationConfig.minDurationMs) return;
     if (agentHadFailure && notificationConfig.onFailure) {
@@ -1631,7 +1643,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
       .join("\n");
     if (!completionAssertionPattern.test(responseText)) return undefined;
     const warnings: string[] = [];
-    if (currentGoal && ["active", "paused"].includes(currentGoal.status)) {
+    if (!sideAgentMode && currentGoal && ["active", "paused"].includes(currentGoal.status)) {
       warnings.push(`[Hobot Code persistent goal: completion is not accepted because ${currentGoal.id} is still ${currentGoal.status}. Use goal_complete after satisfying the full objective.]`);
     }
     if (qualityGateState.commands.length > 0) {
@@ -1657,6 +1669,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    if (sideAgentMode && ["memory_save", "goal_progress", "goal_complete"].includes(event.toolName)) {
+      return { block: true, reason: `${event.toolName} cannot write parent state from an ephemeral side agent` };
+    }
     const action = toolAction(event.toolName);
     if (action === "deny") {
       return { block: true, reason: `${event.toolName} is denied by ${permissionPolicyPath()}` };
@@ -2322,6 +2337,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
       ].join("\n"), "info");
     },
   });
+
+  if (!sideAgentMode) disposeSideAgent = registerSideAgent(pi);
 
   for (const alias of ["exit", "q"]) {
     pi.registerCommand(alias, {

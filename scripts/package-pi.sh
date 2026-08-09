@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.11.1}
+version=${1:-0.12.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root_dir/pi-runtime/pi.lock"
 . "$root_dir/pi-runtime/tools.lock"

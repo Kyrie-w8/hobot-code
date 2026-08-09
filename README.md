@@ -25,13 +25,13 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.11.1
+make release VERSION=0.12.0
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.11.1-linux-arm64.tar.gz
+dist/hobot-code-0.12.0-linux-arm64.tar.gz
 ```
 
 在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
@@ -41,17 +41,17 @@ dist/hobot-code-0.11.1-linux-arm64.tar.gz
 ```bash
 HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
 HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
-make release VERSION=0.11.1
+make release VERSION=0.12.0
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.11.1-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.12.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.11.1-linux-arm64.tar.gz
-cd hobot-code-0.11.1-linux-arm64
+tar -xzf hobot-code-0.12.0-linux-arm64.tar.gz
+cd hobot-code-0.12.0-linux-arm64
 ./install.sh
 ```
 
@@ -104,6 +104,7 @@ hobot
 /tree           浏览和切换会话分支
 /fork           从历史消息分支
 /compact        手动压缩上下文
+/btw <task>     打开共享当前上下文的临时全能力 Agent
 /reload         重载扩展、Skills、Prompt 和主题
 /hotkeys        查看完整快捷键
 /system-prompt  查看 Pi、RDK 与条件状态层的长度
@@ -130,6 +131,18 @@ Ctrl+L          打开模型选择器
 Ctrl+P          切换下一个已启用模型
 Alt+Enter       排队 follow-up 消息
 ```
+
+`/btw` 在主 Agent 工作时也可立即执行。它从主会话的当前内存分支创建一次性快照，继承当前模型、
+thinking 等级、系统 Prompt、有效工具、Skills、记忆上下文和项目信任状态，并在浮层中独立完成任务：
+
+```text
+/btw 检查当前改动是否遗漏了升级文档
+```
+
+侧边 Agent 的消息不会写入主会话；按 `Esc` 或 `Ctrl+C` 可终止，完成后按 `Enter`、空格或 `Esc`
+关闭。关闭时临时会话、Prompt 和运行记录会被删除。它与主 Agent 共享工作区、进程、服务和设备，
+因此文件或硬件修改会保留；需要交互批准的工具在隐藏子进程中保持 fail-closed。为控制板端内存，
+每个 Hobot Code 会话同时只允许一个侧边 Agent。
 
 非交互调用同样沿用 Pi：
 

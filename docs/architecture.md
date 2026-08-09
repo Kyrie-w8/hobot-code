@@ -1,4 +1,4 @@
-# Hobot Code 0.11.1 架构
+# Hobot Code 0.12.0 架构
 
 ## 运行路径
 
@@ -21,6 +21,9 @@ flowchart LR
   R --> L["On-demand resource-aware LSP"]
   R --> N["SSH OSC and bell notifications"]
   A --> X["Pi extensions, packages, Skills"]
+  T --> W["Ephemeral side-agent overlay"]
+  W --> Q["Context snapshot and isolated Pi process"]
+  Q --> A
 ```
 
 交互路径没有 Hobot Code 自建 TUI。`runtime/hobot` 是固定版本的 Pi 官方 Bun standalone
@@ -49,6 +52,8 @@ flowchart LR
    脱敏审计；项目 Hook 必须由全局配置显式放行。
 10. SSH 通知：在批准等待、长任务完成、失败或目标预算耗尽时发出可关闭的 OSC/bell 通知。
 11. 资源感知 LSP：按文件扩展名和已安装服务按需启动，限制进程数、RSS、请求时间和空闲时间。
+12. 临时侧边 Agent：把主会话当前内存分支、有效系统 Prompt、模型、thinking 和工具集合复制到
+    临时 Pi 会话；侧边会话在浮层内并发运行，关闭时删除且不写回主会话。
 
 扩展不替换 Pi 的 `read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`，也不修改
 InteractiveMode、SessionManager、TUI 组件或消息队列。
@@ -84,6 +89,12 @@ tools 中移除，`tool_call` 再执行 fail-closed 检查；ask 工具必须在
 
 LSP 客户端不常驻预热：第一次查询匹配语言时才启动，超出进程数会回收最久未使用实例，超过
 RSS 或空闲上限会自动停止。默认发行包只提供协议客户端和配置，不捆绑各语言服务器。
+
+`/btw` 使用独立 Pi 子进程，因此主 Agent 的事件循环、消息队列和会话树保持不变。快照直接来自
+`SessionManager.getBranch()`，包含尚未刷入 JSONL 的当前用户消息，并使用父会话当轮的完整系统
+Prompt，避免重新召回或重复拼接上下文。子会话继承当前有效工具和安全策略；交互批准在无 UI 子进程
+中拒绝，持久记忆写入和目标状态变更被禁止。临时目录使用 `0700`，其中会话和 Prompt 使用 `0600`，
+浮层关闭或主会话退出时统一终止子进程并删除目录。工作区和设备副作用不属于会话数据，不会回滚。
 
 ## 部署与回滚
 

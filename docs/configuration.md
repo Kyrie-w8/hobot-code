@@ -1,4 +1,4 @@
-# Hobot Code 0.11.1 配置
+# Hobot Code 0.12.0 配置
 
 ## 路径
 
