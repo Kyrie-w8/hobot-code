@@ -25,13 +25,13 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.12.0
+make release VERSION=0.12.1
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.12.0-linux-arm64.tar.gz
+dist/hobot-code-0.12.1-linux-arm64.tar.gz
 ```
 
 在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
@@ -41,17 +41,17 @@ dist/hobot-code-0.12.0-linux-arm64.tar.gz
 ```bash
 HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
 HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
-make release VERSION=0.12.0
+make release VERSION=0.12.1
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.12.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.12.1-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.12.0-linux-arm64.tar.gz
-cd hobot-code-0.12.0-linux-arm64
+tar -xzf hobot-code-0.12.1-linux-arm64.tar.gz
+cd hobot-code-0.12.1-linux-arm64
 ./install.sh
 ```
 
@@ -133,16 +133,19 @@ Alt+Enter       排队 follow-up 消息
 ```
 
 `/btw` 在主 Agent 工作时也可立即执行。它从主会话的当前内存分支创建一次性快照，继承当前模型、
-thinking 等级、系统 Prompt、有效工具、Skills、记忆上下文和项目信任状态，并在浮层中独立完成任务：
+thinking 等级、系统 Prompt、有效工具、Skills、记忆上下文和项目信任状态，并在终端右半区启动
+独立的多轮 Agent：
 
 ```text
 /btw 检查当前改动是否遗漏了升级文档
 ```
 
-侧边 Agent 的消息不会写入主会话；按 `Esc` 或 `Ctrl+C` 可终止，完成后按 `Enter`、空格或 `Esc`
-关闭。关闭时临时会话、Prompt 和运行记录会被删除。它与主 Agent 共享工作区、进程、服务和设备，
-因此文件或硬件修改会保留；需要交互批准的工具在隐藏子进程中保持 fail-closed。为控制板端内存，
-每个 Hobot Code 会话同时只允许一个侧边 Agent。
+每轮完成后直接在浮层底部继续输入并按 `Enter` 追问；`Esc` 中断正在执行的一轮，在空闲时按 `Esc`
+关闭，`Ctrl+D` 可随时关闭。工具需要确认、选择或补充输入时，浮层会显示相应请求。侧边 Agent 的
+全部消息都不会写入主会话；关闭时临时会话、Prompt 和运行记录会被删除。它与主 Agent 共享工作区、
+进程、服务和设备，因此文件或硬件修改会保留。为控制板端内存，每个 Hobot Code 会话同时只允许
+一个侧边 Agent，整块板卡默认最多同时运行两个。可用 `HOBOT_CODE_MAX_SIDE_AGENTS=1..8` 调整板卡级
+上限；进程异常退出留下的陈旧租约会在下一次打开时自动回收。
 
 非交互调用同样沿用 Pi：
 

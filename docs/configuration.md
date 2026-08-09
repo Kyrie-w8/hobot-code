@@ -1,4 +1,4 @@
-# Hobot Code 0.12.0 配置
+# Hobot Code 0.12.1 配置
 
 ## 路径
 
@@ -173,6 +173,16 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 作用域为 `user`、`project`、`board`、`session`；类型为 `preference`、`decision`、`fact`、
 `fix`、`instruction`、`note`。重复内容会刷新时间而不是新建副本。写入、检索、删除、
 清空和过期操作都写审计事件，审计详情只保存内容哈希和作用域，不复制记忆正文。
+
+## 侧边 Agent 并发
+
+`/btw` 在每个主会话中最多打开一个侧边 Agent。板卡级并发上限默认为 2，可设置为 1 到 8：
+
+```sh
+HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
+```
+
+多个终端进程通过板卡本地的原子租约共同计数，进程异常退出留下的陈旧租约会被自动回收。
 
 ## 持久目标
 

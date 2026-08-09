@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1
+
+- Upgrade `/btw` from a one-shot response to a persistent, private multi-turn RPC Agent with an in-overlay input line.
+- Present `/btw` as a full-height right-side 50% pane and cap board-wide side-agent concurrency (default 2, configurable up to 8).
+- Keep the side conversation, thinking stream, tool activity, and usage visible across follow-up turns until the user closes it.
+- Forward confirmation, selection, and input requests from the side process into the overlay while preserving close-time deletion and parent-session isolation.
+
 ## 0.12.0
 
 - Add `/btw <task>` as an ephemeral full-capability side agent that can run while the parent Agent continues.

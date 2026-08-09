@@ -2,6 +2,11 @@ const SESSION_VERSION = 3;
 const MAX_STREAM_TEXT_CHARS = 200_000;
 const MAX_TOOL_EVENTS = 100;
 
+export function parseSideAgentLimit(value, fallback = 2) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? Math.min(8, Math.max(1, parsed)) : fallback;
+}
+
 function boundedTail(value, limit = MAX_STREAM_TEXT_CHARS) {
   if (value.length <= limit) return value;
   return `[Earlier output omitted]\n${value.slice(-limit)}`;
@@ -34,8 +39,7 @@ export function buildSideAgentArgs({
 }) {
   const args = [
     "--mode",
-    "json",
-    "--print",
+    "rpc",
     "--session",
     sessionPath,
     "--session-dir",
@@ -57,6 +61,8 @@ export function createSideAgentEventState() {
   return {
     streamingText: "",
     finalText: "",
+    thinkingText: "",
+    finalThinking: "",
     thinkingChars: 0,
     tools: [],
     turns: 0,
@@ -74,6 +80,14 @@ function assistantText(message) {
   return message.content
     .filter((part) => part?.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
+    .join("\n");
+}
+
+function assistantThinking(message) {
+  if (message?.role !== "assistant" || !Array.isArray(message.content)) return "";
+  return message.content
+    .filter((part) => part?.type === "thinking" && typeof part.thinking === "string")
+    .map((part) => part.thinking)
     .join("\n");
 }
 
@@ -98,11 +112,15 @@ export function applySideAgentEvent(state, event, redact = (value) => value) {
       next.streamingText = boundedTail(next.streamingText + update.delta);
     } else if (update?.type === "thinking_delta" && typeof update.delta === "string") {
       next.thinkingChars += update.delta.length;
+      next.thinkingText = boundedTail(next.thinkingText + update.delta);
     }
   } else if (event.type === "message_end" && event.message?.role === "assistant") {
     const text = assistantText(event.message);
+    const thinking = assistantThinking(event.message);
     if (text) next.finalText = boundedTail(text);
+    if (thinking) next.finalThinking = boundedTail(thinking);
     next.streamingText = "";
+    next.thinkingText = "";
     next.turns += 1;
     next.stopReason = event.message.stopReason;
     next.errorMessage = event.message.errorMessage;

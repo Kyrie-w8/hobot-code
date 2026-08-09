@@ -629,7 +629,7 @@ function streamDrobotics(
           Accept: "application/json",
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
-          "User-Agent": "hobot-code/0.12.0",
+          "User-Agent": "hobot-code/0.12.1",
           ...configuredHeaders,
         },
         body: JSON.stringify(body),
