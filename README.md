@@ -10,9 +10,9 @@ Hobot Code 是运行在地瓜机器人 RDK X5、RDK S100 和 RDK S600 上的终�
 - Pi 0.84.1 官方 Linux ARM64 二进制按 SHA256 固定并原样装入发行包。
 - `package.json` 使用 Pi 官方 `piConfig` 机制将主命令改为 `hobot`，项目配置目录改为 `.hobot`。
 - `extensions/rdk/index.ts` 注册 D-Robotics Kimi Provider、实时 `system_snapshot`、版本感知的
-  `rdk_docs_search`、完整 RDK 专家角色以及板端命令。
-- `prompts/rdk-expert.md` 定义证据优先级、平台路由、工程流程、BPU/多媒体/TROS 能力、
-  安全边界和交付规范，并在每轮注入实机板型与 RDK OS。
+  `rdk_docs_search`、紧凑 RDK 专家层以及板端命令。
+- `prompts/rdk-expert.md` 只定义 Pi 不具备的板卡证据、版本路由、BPU 验收与硬件安全边界，
+  并在每轮注入稳定的实机标识；详细知识通过工具和 Skills 按需加载。
 - Pi 自带的 provider、`models.json`、extensions、packages、Skills、prompt templates 和
   themes 均可继续使用。
 - 板端无需安装 Node、Bun、Go、Python 或容器。
@@ -25,13 +25,13 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.11.0
+make release VERSION=0.11.1
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.11.0-linux-arm64.tar.gz
+dist/hobot-code-0.11.1-linux-arm64.tar.gz
 ```
 
 在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
@@ -41,30 +41,30 @@ dist/hobot-code-0.11.0-linux-arm64.tar.gz
 ```bash
 HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
 HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
-make release VERSION=0.11.0
+make release VERSION=0.11.1
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.11.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.11.1-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.11.0-linux-arm64.tar.gz
-cd hobot-code-0.11.0-linux-arm64
+tar -xzf hobot-code-0.11.1-linux-arm64.tar.gz
+cd hobot-code-0.11.1-linux-arm64
 ./install.sh
 ```
 
-安装器会保留 `/etc/hobot-code/hobot.env` 和用户配置，并把当前运行时备份到
-`/usr/local/lib/hobot-code-backups/`。
+安装器会把旧 `/etc/hobot-code` 与 `/var/lib/hobot-code` 备份后迁移到安装用户目录，并把
+当前运行时备份到 `/usr/local/lib/hobot-code-backups/`。检测到运行中的 Hobot Code 时会拒绝升级。
 
 ## 模型配置
 
 默认接入 D-Robotics Kimi 网关：
 
 ```bash
-chmod 600 /etc/hobot-code/hobot.env
-vi /etc/hobot-code/hobot.env
+chmod 600 ~/.config/hobot-code/hobot.env
+vi ~/.config/hobot-code/hobot.env
 ```
 
 ```text
@@ -73,14 +73,14 @@ ANTHROPIC_AUTH_TOKEN=your-token
 ANTHROPIC_MODEL=kimi-k3
 ```
 
-密钥只保存在 root 可读的环境文件中。Kimi 网关当前只返回完整的 Anthropic 响应，
+密钥只保存在当前用户可读的环境文件中。Kimi 网关当前只返回完整的 Anthropic 响应，
 Hobot Code Provider 会将 thinking、文本、工具调用和 usage 转换为 Pi 原生事件，所以界面和
 会话行为不需要特殊分支。
 
 运行时也保留 Pi 的其他模型接入方式：
 
 - 在 `/model` 中选择已配置厂商模型。
-- 编辑 `/etc/hobot-code/agent/models.json` 添加 Ollama、vLLM、LM Studio 或兼容网关。
+- 编辑 `~/.config/hobot-code/agent/models.json` 添加 Ollama、vLLM、LM Studio 或兼容网关。
 - 使用 `/login <provider>` 配置 Pi 支持的登录型 Provider。
 - 使用 `hobot install <package>` 安装 Pi 扩展包。
 
@@ -106,7 +106,8 @@ hobot
 /compact        手动压缩上下文
 /reload         重载扩展、Skills、Prompt 和主题
 /hotkeys        查看完整快捷键
-/system-prompt  查看当前生效的 Pi + RDK 专家系统 Prompt
+/system-prompt  查看 Pi、RDK 与条件状态层的长度
+/system-prompt full  展开最近一轮的完整系统 Prompt
 /permissions    查看或修改工具权限
 /init           生成项目 AGENTS.md 和质量门配置
 /gate           查看、配置或运行质量门
@@ -141,7 +142,7 @@ hobot --resume
 
 ## 权限与质量门
 
-全局权限策略位于 `/etc/hobot-code/agent/permissions.json`，按顺序匹配工具名，支持
+全局权限策略位于 `~/.config/hobot-code/agent/permissions.json`，按顺序匹配工具名，支持
 `allow`、`ask` 和 `deny`。`deny` 工具不会进入模型上下文；`ask` 在 TUI 中显示经过密钥
 脱敏的工具、风险和目标，在非交互模式下默认拒绝：
 
@@ -190,7 +191,7 @@ Hobot Code 使用板端 SQLite + FTS5 保存经用户同意的长期上下文，
 
 模型可调用 `memory_search` 和 `memory_save`。默认允许检索，但每次模型写入都要交互确认；用户直接
 执行 `/memory add` 视为明确写入。密钥、Bearer Token、私钥、常见 secret 赋值和疑似银行卡号
-会被存储层拒绝。数据库位于 `/var/lib/hobot-code/memory/memory.db`，文件权限为 `0600`。
+会被存储层拒绝。数据库位于 `~/.local/state/hobot-code/memory/memory.db`，文件权限为 `0600`。
 
 ## P1 长期工作能力
 
@@ -213,7 +214,7 @@ Hobot Code 使用板端 SQLite + FTS5 保存经用户同意的长期上下文，
 模型通过 `goal_status`、`goal_progress`、`goal_complete` 工具参与目标管理。项目配置了质量门时，
 模型只能在最终修改后取得当前 `passed` 指纹才能完成目标；用户的 `/goal complete` 是明确人工裁决。
 
-Hook 从 `/etc/hobot-code/agent/hooks.json` 读取。`PreToolUse` 可在工具执行前阻断，`PostToolUse`
+Hook 从 `~/.config/hobot-code/agent/hooks.json` 读取。`PreToolUse` 可在工具执行前阻断，`PostToolUse`
 可追加结果或标记失败。Hook 命令使用 argv 数组，不经 Shell 解析；结构化 JSON 从 stdin 输入，
 stdout 可返回 `block`、`reason`、`appendText`、`isError`。每次运行都有超时、输出上限和脱敏审计。
 项目 `.hobot/hooks.json` 默认不执行，必须由全局配置显式开启。
@@ -243,12 +244,14 @@ SSH TUI 在等待批准、长任务完成或失败时发送 OSC 9 和/或 bell�
 知识结果是版本化文档，实机状态由 `system_snapshot` 证明；两者不一致时 Hobot Code 会明确
 提示版本不匹配。知识清单与来源索引见 `knowledge/manifest.json`。
 
-完整专家角色位于 `prompts/rdk-expert.md`。它不会替代 Pi 的编码工具规则，而是追加完整
-的地瓜平台工程约束；每次模型调用都会动态填充板卡、RDK OS、文档线、主机名和架构。
+紧凑 RDK 角色位于 `prompts/rdk-expert.md`。它与 Pi 基础 Prompt 同为英文，只追加 Pi 不具备的
+板卡证据、版本路由、BPU 验收和硬件安全约束，并要求跟随用户语言回答。板卡、RDK OS、文档线、
+主机名和架构会动态填充；没有配置的质量门、没有召回结果的记忆和不存在的目标不会产生空段落。
+详细平台流程继续由 `rdk_docs_search` 和 Skills 按需提供，维护校验禁止 RDK Prompt 超过 1700 字符。
 
-会话保存在 `/var/lib/hobot-code/sessions`，持久化记忆保存在 `/var/lib/hobot-code/memory`，
-持久目标保存在 `/var/lib/hobot-code/goals`，Hook 审计保存在 `/var/lib/hobot-code/audit`。全局配置位于 `/etc/hobot-code/agent`，
-板端扩展和 Skills 位于 `/usr/local/lib/hobot-code`。
+会话、记忆、目标和 Hook 审计保存在 `~/.local/state/hobot-code`，全局配置位于
+`~/.config/hobot-code/agent`，板端扩展和 Skills 位于 `/usr/local/lib/hobot-code`。完整目录和
+旧系统布局迁移规则见 `docs/user-directory-layout.md`。
 
 ## 回滚
 

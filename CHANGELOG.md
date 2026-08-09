@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1
+
+- Move configuration and mutable state to isolated per-user XDG directories, with guarded migration of the legacy system layout.
+- Replace the bilingual, repetitive RDK expert prompt with a compact English overlay that preserves only board-specific evidence, routing, deployment, and hardware-safety rules.
+- Omit empty quality-gate, memory, and persistent-goal sections from normal turns; inject concise state only when it exists.
+- Enforce a 1700-character budget and single-language contract for the maintained RDK prompt while keeping detailed platform knowledge available through tools and Skills.
+
 ## 0.11.0
 
 - Add user-created persistent project goals with turn/token budgets, elapsed work, progress checkpoints, continuation counts, restart recovery, and verification fingerprints.

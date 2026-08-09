@@ -1,4 +1,4 @@
-# Hobot Code 0.11 架构
+# Hobot Code 0.11.1 架构
 
 ## 运行路径
 
@@ -35,7 +35,8 @@ flowchart LR
    完整 SSE 结束事件，因此适配器使用完整响应并生成 Pi 原生 thinking、text、tool call
    和 done 事件。
 2. 硬件工具：从 device tree、`/etc/version`、sysfs、procfs 和 RDK 工具位置读取实时状态。
-3. 专家角色：把实机信息渲染进完整的 RDK 工程角色，规定证据、工作流、验收和安全边界。
+3. 专家角色：把稳定实机标识渲染进紧凑 RDK 覆盖层，只规定 Pi 不具备的证据、版本、BPU
+   验收和硬件安全边界。
 4. 知识路由：按 X5 3.x、S100 4.x、S600 5.x 检索本地知识包，返回版本匹配状态和官方来源。
 5. 安全钩子：阻止虚拟设备文件写入，并确认工作区外写入和破坏性 Shell 命令。
 6. 板卡 UX：在 Pi 原生 footer status 中显示本机摘要，并增加 `/rdk`、`/doctor`、
@@ -54,15 +55,19 @@ InteractiveMode、SessionManager、TUI 组件或消息队列。
 
 ## 数据和隐私
 
-Pi JSONL 会话存放在 `/var/lib/hobot-code/sessions`。终端展示与执行状态仍由 Pi 会话模型统一
-管理。Hobot Code 另外维护 `/var/lib/hobot-code/memory/memory.db` 作为结构化长期记忆、
-`/var/lib/hobot-code/goals/goals.db` 作为项目目标状态，不复制会话消息。
+Pi JSONL 会话存放在 `~/.local/state/hobot-code/sessions`。终端展示与执行状态仍由 Pi 会话模型统一
+管理。Hobot Code 另外在同一用户状态根目录维护 `memory/memory.db` 和 `goals/goals.db`，
+不复制会话消息。
 
-RDK footer 在本地读取状态。系统 Prompt 加入完整但不携带手册正文的专家角色；完整硬件
-详情与知识正文分别只在模型调用 `system_snapshot`、`rdk_docs_search` 时进入上下文。
+RDK footer 在本地读取状态。系统 Prompt 保留 Pi 的通用编码层，并追加不超过 1700 字符、同为
+英文的 RDK 紧凑层；它要求回答跟随用户语言。完整硬件详情与知识正文分别只在模型调用
+`system_snapshot`、`rdk_docs_search` 时进入上下文。
+`/system-prompt` 默认只报告各层字符数和状态，避免把全文刷满终端；显式执行
+`/system-prompt full` 才展开最近一轮的完整内容。
 记忆在写入前执行敏感数据检查，数据库和目录分别为 `0600` 和 `0700`。自动召回有条数上限，
-只将当前作用域内的相关条目加入模型上下文。Hook 审计写入
-`/var/lib/hobot-code/audit/hooks.jsonl`，保存输入哈希、退出状态和脱敏后的有界输出，不重复保存
+只将当前作用域内的相关条目加入模型上下文。质量门、召回记忆和持久目标采用条件状态层：仅在
+实际配置、命中或激活时加入短段落，空状态不进入 Prompt。Hook 审计写入
+`~/.local/state/hobot-code/audit/hooks.jsonl`，保存输入哈希、退出状态和脱敏后的有界输出，不重复保存
 完整工具输入。
 
 ## 控制面

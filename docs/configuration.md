@@ -1,37 +1,37 @@
-# Hobot Code 0.11 配置
+# Hobot Code 0.11.1 配置
 
 ## 路径
 
 | 路径 | 作用 |
 |---|---|
-| `/etc/hobot-code/hobot.env` | root-only 模型密钥和端点 |
-| `/etc/hobot-code/agent/settings.json` | Pi/Hobot Code 全局设置 |
-| `/etc/hobot-code/agent/models.json` | 自定义 Provider 和模型 |
-| `/etc/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
-| `/etc/hobot-code/agent/permissions.json` | allow/ask/deny 工具权限策略 |
-| `/etc/hobot-code/agent/memory.json` | 持久化记忆开关、检索与长度上限 |
-| `/etc/hobot-code/agent/goals.json` | 持久目标默认 turn/token 预算 |
-| `/etc/hobot-code/agent/hooks.json` | PreToolUse/PostToolUse Hook 和失败策略 |
-| `/etc/hobot-code/agent/notifications.json` | SSH OSC/bell 通知触发条件 |
-| `/etc/hobot-code/agent/lsp.json` | 语言服务器命令、文件匹配和资源上限 |
-| `/etc/hobot-code/agent/bin` | 固定版本的 fd 和 ripgrep |
-| `/var/lib/hobot-code/sessions` | Pi JSONL 会话 |
-| `/var/lib/hobot-code/memory/memory.db` | root-only SQLite/FTS5 持久化记忆与审计事件 |
-| `/var/lib/hobot-code/goals/goals.db` | root-only 持久目标状态机与事件 |
-| `/var/lib/hobot-code/audit/hooks.jsonl` | 脱敏 Hook 执行审计 |
+| `~/.config/hobot-code/hobot.env` | 当前用户的模型密钥和端点 |
+| `~/.config/hobot-code/agent/settings.json` | Pi/Hobot Code 全局设置 |
+| `~/.config/hobot-code/agent/models.json` | 自定义 Provider 和模型 |
+| `~/.config/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
+| `~/.config/hobot-code/agent/permissions.json` | allow/ask/deny 工具权限策略 |
+| `~/.config/hobot-code/agent/memory.json` | 持久化记忆开关、检索与长度上限 |
+| `~/.config/hobot-code/agent/goals.json` | 持久目标默认 turn/token 预算 |
+| `~/.config/hobot-code/agent/hooks.json` | PreToolUse/PostToolUse Hook 和失败策略 |
+| `~/.config/hobot-code/agent/notifications.json` | SSH OSC/bell 通知触发条件 |
+| `~/.config/hobot-code/agent/lsp.json` | 语言服务器命令、文件匹配和资源上限 |
+| `~/.local/state/hobot-code/sessions` | Pi JSONL 会话 |
+| `~/.local/state/hobot-code/memory/memory.db` | SQLite/FTS5 持久化记忆与审计事件 |
+| `~/.local/state/hobot-code/goals/goals.db` | 持久目标状态机与事件 |
+| `~/.local/state/hobot-code/audit/hooks.jsonl` | 脱敏 Hook 执行审计 |
+| `/usr/local/lib/hobot-code/bin` | 固定版本的 fd 和 ripgrep |
 | `/usr/local/lib/hobot-code/extensions` | RDK 扩展 |
 | `/usr/local/lib/hobot-code/skills` | 板端 Skills |
 | `/usr/local/lib/hobot-code/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
-| `/usr/local/lib/hobot-code/prompts/rdk-expert.md` | 动态渲染的地瓜开发专家角色模板 |
+| `/usr/local/lib/hobot-code/prompts/rdk-expert.md` | 动态渲染、带长度预算的紧凑 RDK 角色模板 |
 | `<project>/.hobot/quality-gates.json` | 项目默认质量门命令与单命令超时 |
 
-启动器设置 `HOBOT_CODING_AGENT_DIR=/etc/hobot-code/agent`。项目目录使用 `.hobot/`
+启动器遵循 `XDG_CONFIG_HOME` 与 `XDG_STATE_HOME`，并设置对应的 Agent、会话和状态路径。项目目录使用 `.hobot/`
 放置局部 settings、extensions、skills、prompts 和 themes；Pi 的 project trust 机制会在
 首次加载项目资源前询问。
 
 ## D-Robotics Kimi
 
-`/etc/hobot-code/hobot.env`：
+`~/.config/hobot-code/hobot.env`：
 
 ```text
 ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
@@ -152,7 +152,7 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 
 ## 持久化记忆
 
-`/etc/hobot-code/agent/memory.json` 默认值：
+`~/.config/hobot-code/agent/memory.json` 默认值：
 
 ```json
 {
