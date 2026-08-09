@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/aster/aster.env ]; then
+  set -a
+  . /etc/aster/aster.env
+  set +a
+fi
+
+export ASTER_CODING_AGENT_DIR="${ASTER_CODING_AGENT_DIR:-/etc/aster/agent}"
+export ASTER_CODING_AGENT_SESSION_DIR="${ASTER_CODING_AGENT_SESSION_DIR:-/var/lib/aster/pi-sessions}"
+export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
+
+exec /usr/local/lib/aster/aster "$@"

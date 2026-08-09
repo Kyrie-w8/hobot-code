@@ -1,85 +1,87 @@
-# Aster 配置
+# Aster 0.5 配置
 
-配置按三层合并，后者覆盖前者：
+## 路径
+
+| 路径 | 作用 |
+|---|---|
+| `/etc/aster/aster.env` | root-only 模型密钥和端点 |
+| `/etc/aster/agent/settings.json` | Pi/Aster 全局设置 |
+| `/etc/aster/agent/models.json` | 自定义 Provider 和模型 |
+| `/etc/aster/agent/auth.json` | `/login` 保存的认证信息 |
+| `/etc/aster/agent/bin` | 固定版本的 fd 和 ripgrep |
+| `/var/lib/aster/pi-sessions` | Pi JSONL 会话 |
+| `/usr/local/lib/aster/extensions` | RDK 扩展 |
+| `/usr/local/lib/aster/skills` | 板端 Skills |
+
+启动器设置 `ASTER_CODING_AGENT_DIR=/etc/aster/agent`。项目目录可以使用 `.aster/`
+放置局部 settings、extensions、skills、prompts 和 themes；Pi 的 project trust 机制会在
+首次加载项目资源前询问。
+
+## D-Robotics Kimi
+
+`/etc/aster/aster.env`：
 
 ```text
---config 基础配置 -> --provider 模型配置 -> --board 板卡配置
+ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
+ANTHROPIC_AUTH_TOKEN=your-token
+ANTHROPIC_MODEL=kimi-k3
 ```
 
-安装后可将这三个路径保存到 `/etc/aster/launcher.json`：
+文件权限必须是 `0600`。Aster 不把 token 写入 `models.json`、会话或日志。默认设置选择
+`drobotics/kimi-k3`，thinking 等级为 `max`，Provider 请求超时为 3000000 ms。
+
+## 添加模型
+
+Pi 支持在 `models.json` 中定义 Anthropic Messages、OpenAI Chat Completions、OpenAI
+Responses 和 Google Generative AI 兼容服务。例如本机 Ollama：
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [
+        {
+          "id": "qwen2.5-coder:7b",
+          "contextWindow": 32768,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  }
+}
+```
+
+保存后打开 `/model`；文件会重新读取，不需要重启。API key 可以写成 `$ENV_NAME` 引用，
+不要把真实密钥直接写进 JSON。
+
+## 交互设置
+
+推荐直接使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认 settings
+启用自动压缩、三次 Agent 级重试、1M Kimi 上下文、可见 thinking 和 regular TUI。
+
+扩展、Skills 和 Prompt 可用 Pi 原生命令管理：
 
 ```bash
-aster \
-  --config /etc/aster/config.json \
-  --provider /etc/aster/providers/drobotics-kimi.json \
-  --board /etc/aster/boards/s600.json \
-  configure
+aster install <npm-or-git-source>
+aster list
+aster config
+aster update --extensions
 ```
 
-之后 `aster`、`aster doctor` 和 `aster serve` 自动使用相同配置。非 root 用户写入
-`~/.config/aster/launcher.json`。优先级从高到低为：显式参数、`ASTER_*`
-环境变量、用户 launcher、系统 launcher、程序默认值。
+第三方扩展拥有当前用户的完整系统权限，安装前必须审查源码。在 root 板端尤其不要加载
+来源不明的 package 或 Skill。
 
-示例：
+## 环境覆盖
+
+可按进程覆盖：
 
 ```bash
-aster \
-  --config /etc/aster/config.json \
-  --provider /etc/aster/providers/openai-compatible.json \
-  --board /etc/aster/boards/s600.json \
-  chat
+ASTER_CODING_AGENT_DIR=/tmp/aster-agent aster
+ASTER_CODING_AGENT_SESSION_DIR=/tmp/aster-sessions aster
 ```
 
-## 关键字段
-
-| 字段 | 作用 |
-|---|---|
-| `env_file` | 可选的 root-only 环境文件；进程环境变量优先 |
-| `agent.system_prompt_file` | 系统 Prompt 文件 |
-| `agent.max_steps` | 单轮最大模型/工具循环，范围 1-64 |
-| `agent.enabled_skills` | 懒加载的 Skill 名称 |
-| `provider.type` | `openai-responses`、`openai-compatible`、`anthropic`、`gemini` 或 `mock` |
-| `provider.api_key_env` | 密钥所在环境变量名 |
-| `security.workspace_root` | 文件和 Shell 工具的根目录 |
-| `security.allowed_tools` | 可暴露工具 glob |
-| `security.denied_tools` | 优先级更高的拒绝 glob |
-| `security.approval_tools` | 每次调用均需批准的工具 glob |
-| `plugins[].manifest` | 进程插件 manifest |
-| `mcp_servers[]` | stdio MCP server 启动参数 |
-| `session.dir` | SQLite WAL 数据库及旧版 JSONL 所在目录 |
-| `server.listen` | HTTP 监听地址，默认仅本机 |
-
-JSON 字符串支持 `${ENV_NAME}` 环境变量展开。不要把真实密钥写入配置文件。
-`env_file` 必须设置为 `0600` 等不允许 group/other 访问的权限，内容使用普通
-`KEY=VALUE` 格式；Aster 只从中读取 provider 所声明的密钥变量。
-
-## Provider
-
-OpenAI-compatible 允许空 API key，适合无鉴权的本机 llama.cpp 服务。其他三个
-厂商适配要求 API key。Anthropic、OpenAI Responses、OpenAI-compatible 和 Gemini
-均支持原生 SSE 流式输出。`provider.settings` 中的生成参数会按协议筛选或传给对应接口。
-
-## 会话存储
-
-`session.dir/aster.db` 是主存储，使用 SQLite WAL。升级后首次启动会扫描同目录的
-`*.jsonl` 并自动导入；之后若使用旧版本回滚并向 JSONL 追加记录，新版本会从上次导入
-行数继续同步，不会重复导入。JSONL 不会被移动或删除。
-
-## 插件
-
-插件 manifest 声明 `command`、`args`、`env` 和工具 schema。工具调用时，Aster
-向插件 stdin 写入一条 JSON-RPC `tools/call` 请求，插件从 stdout 返回响应。命令的
-相对路径以 manifest 所在目录解析。
-
-## systemd
-
-默认服务读取 launcher 选择的配置和 `/etc/aster/aster.env`，工作目录为
-`/var/lib/aster/workspace`。修改配置后执行：
-
-```bash
-systemctl restart aster
-systemctl status aster
-```
-
-若需要直接访问硬件设备，应为具体插件配置最小权限；不要因为服务以 root 启动就把
-所有设备操作默认暴露给模型。
+`PI_SKIP_VERSION_CHECK=1` 默认开启，避免 Aster 被 Pi 的自更新提示误导。Aster 的 Pi
+运行时升级必须修改 `pi-runtime/pi.lock`、重新构建并完成板端回归。

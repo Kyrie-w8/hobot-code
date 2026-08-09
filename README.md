@@ -1,165 +1,146 @@
 # Aster
 
-Aster 是一个面向嵌入式 Linux 的 Agentic Shell。它参考 Claude Code、OpenCode
-的交互方式，但针对 RDK X5、RDK S100、RDK S600 这类 ARM64 板卡设计：一个
-静态 Go 二进制即可运行，板端不需要 Go、Python、容器或第三方运行库。
+Aster 是运行在地瓜机器人 RDK X5、RDK S100 和 RDK S600 上的终端 Agent。
+0.5 开始直接使用 Pi 的官方交互运行时，因此编辑器、流式显示、thinking、工具调用、
+会话树、分支、压缩、Skills、扩展和快捷键与 Pi 保持一致。Aster 不重写 TUI，只增加
+地瓜板卡所需的模型协议、硬件探测、安全策略和 ARM64 安装层。
 
-## 当前能力
+## 设计边界
 
-- 可取消的交互式终端会话、原生流式文本与 reasoning summary、会话恢复和轨迹导出。
-- SQLite WAL 会话存储、崩溃恢复、上下文压缩以及按轮撤销/重做。
-- 响应式终端布局、动态运行状态和持久化默认启动 profile。
-- OpenAI Responses、OpenAI-compatible、Anthropic、Gemini 和离线 mock。
-- 有界 Agent 工具循环，支持 JSON Schema、超时、输出上限、白名单和人工审批。
-- 内置板卡探测、目录读取、文件读写和 Shell 工具。
-- `SKILL.md` 技能加载、进程隔离插件、MCP stdio 客户端。
-- 本地 HTTP/SSE 服务，可作为板端 Agent 网关由其他设备调用或取消运行中的会话。
-- `linux/arm64` 静态构建、安装包和 systemd 服务。
+- Pi 0.84.1 官方 Linux ARM64 二进制按 SHA256 固定并原样装入发行包。
+- `package.json` 使用 Pi 官方 `piConfig` 机制将产品名改为 `aster`，配置目录改为 `.aster`。
+- `extensions/rdk.ts` 注册 D-Robotics Kimi Provider、`system_snapshot` 工具、`/doctor`、
+  `/rdk`、`/exit` 和 `/q`，并对板端危险命令增加确认。
+- Pi 自带的 provider、`models.json`、extensions、packages、Skills、prompt templates 和
+  themes 均可继续使用。
+- 板端无需安装 Node、Bun、Go、Python 或容器。
 
-## 本地构建
+Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENSES/`。
 
-```bash
-make test
-make build
+## 构建 ARM64 包
 
-./dist/aster \
-  --config config/aster.example.json \
-  --board config/boards/x5.json \
-  doctor --json
-```
-
-默认使用离线 mock。进入交互界面：
+构建机需要 `curl`、`tar` 和 SHA256 工具。发行脚本会下载并校验 Pi、fd 和 ripgrep
+的官方 ARM64 产物：
 
 ```bash
-./dist/aster --config config/aster.example.json chat
+make release VERSION=0.5.0
 ```
 
-接入本地 llama.cpp、vLLM、Ollama 兼容网关或其他 OpenAI-compatible 服务：
+输出：
+
+```text
+dist/aster-0.5.0-linux-arm64.tar.gz
+```
+
+## 安装
 
 ```bash
-export MODEL_API_KEY=""
-./dist/aster \
-  --config config/aster.example.json \
-  --provider config/providers/openai-compatible.json \
-  --board config/boards/s600.json \
-  chat
+scp dist/aster-0.5.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+ssh root@RDK_IP
+cd /tmp
+tar -xzf aster-0.5.0-linux-arm64.tar.gz
+cd aster-0.5.0-linux-arm64
+./install.sh
 ```
 
-先修改 provider overlay 中的 `model` 和 `base_url`。其他厂商示例在
-`config/providers/`，密钥只从环境变量读取。
+安装器会保留 `/etc/aster/aster.env`，将现有 Aster 命令和运行时备份到
+`/usr/local/lib/aster-backups/`，并将旧 Go 版第一次备份为 `aster-legacy`。
 
-## ARM64 发布与安装
+## 模型配置
+
+默认接入 D-Robotics Kimi 网关：
 
 ```bash
-make release VERSION=0.4.0
-scp dist/aster-0.4.0-linux-arm64.tar.gz root@10.112.10.106:/tmp/
-ssh root@10.112.10.106
-cd /tmp && tar -xzf aster-0.4.0-linux-arm64.tar.gz
-cd aster-0.4.0-linux-arm64 && ./install.sh
-aster doctor --json
+chmod 600 /etc/aster/aster.env
+vi /etc/aster/aster.env
 ```
 
-使用 `./install.sh --enable-service` 会同时启用仅监听
-`127.0.0.1:7337` 的 systemd 服务。安装器不会覆盖已有
-`/etc/aster/config.json` 或 `/etc/aster/aster.env`。
-
-首次选择模型和板卡后保存启动 profile：
-
-```bash
-aster \
-  --config /etc/aster/config.json \
-  --provider /etc/aster/providers/drobotics-kimi.json \
-  --board /etc/aster/boards/s600.json \
-  configure
+```text
+ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
+ANTHROPIC_AUTH_TOKEN=your-token
+ANTHROPIC_MODEL=kimi-k3
 ```
 
-以后直接运行即可：
+密钥只保存在 root 可读的环境文件中。Kimi 网关当前只返回完整的 Anthropic 响应，
+Aster Provider 会将 thinking、文本、工具调用和 usage 转换为 Pi 原生事件，所以界面和
+会话行为不需要特殊分支。
+
+运行时也保留 Pi 的其他模型接入方式：
+
+- 在 `/model` 中选择已配置厂商模型。
+- 编辑 `/etc/aster/agent/models.json` 添加 Ollama、vLLM、LM Studio 或兼容网关。
+- 使用 `/login <provider>` 配置 Pi 支持的登录型 Provider。
+- 使用 `aster install <package>` 安装 Pi 扩展包。
+
+详细字段见 [配置说明](docs/configuration.md)。
+
+## 使用
+
+启动只需要：
 
 ```bash
 aster
 ```
 
-显式命令行参数仍会覆盖 launcher。也可以使用 `ASTER_CONFIG`、
-`ASTER_PROVIDER`、`ASTER_BOARD` 或 `ASTER_LAUNCHER` 临时覆盖。
-
-## 终端命令
+常用 Pi 交互保持不变：
 
 ```text
+/model          选择模型
+/settings       打开设置
 /new            新会话
-/session        当前会话 ID
-/sessions       会话列表
-/resume ID      恢复历史会话
-/compact        压缩当前上下文并保留审计记录
-/undo           撤销最近一轮
-/redo           恢复最近撤销的一轮
-/models         当前 Provider 和模型
-/thinking       展开或折叠模型返回的 reasoning summary
-/details        展开或折叠工具参数与结果
-/tools          查看当前模型可见工具
-/skills         查看已发现 Skills
-/doctor         查看板卡、模型和扩展状态
-/export [ID]    导出当前或指定会话
-/clear          清屏
-/q              退出，也支持 /quit 和 /exit
+/resume         恢复会话
+/tree           浏览和切换会话分支
+/fork           从历史消息分支
+/compact        手动压缩上下文
+/reload         重载扩展、Skills、Prompt 和主题
+/hotkeys        查看完整快捷键
+/quit           退出；Aster 另外提供 /q 和 /exit
 ```
-
-空闲时 `Ctrl-C` 退出；模型或工具运行时第一次 `Ctrl-C` 取消当前轮，第二次
-强制退出。运行期间输入的新消息会排队到下一轮。reasoning summary 只展示模型
-明确返回的内容，不生成或猜测隐藏思维链。
-
-会话保存在 `session.dir/aster.db`，使用 SQLite WAL 和完整同步写入。升级时会自动
-增量导入同目录的旧版 `.jsonl` 会话，原文件不会删除；若进程在一轮对话中异常退出，
-下次启动会归档未完成轮次，避免把半条工具链重新发送给模型。`aster doctor --json`
-中的 `session_backend` 和 `recovered_sessions` 可用于确认状态。
-
-## HTTP 和 SSE
-
-`serve` 模式提供以下本机接口：
 
 ```text
-POST /v1/chat                         同步运行
-POST /v1/chat/events                  SSE 流式事件
-GET  /v1/sessions                     会话列表
-GET  /v1/sessions/{id}                导出会话
-POST /v1/sessions/{id}/cancel         取消运行中的会话
+Escape          中断当前模型或工具
+Ctrl+C          清空编辑区
+Ctrl+D          编辑区为空时退出
+Ctrl+T          显示/隐藏 thinking
+Ctrl+O          展开/折叠工具输出
+Shift+Tab       切换 thinking 等级
+Ctrl+L          打开模型选择器
+Ctrl+P          切换下一个已启用模型
+Alt+Enter       排队 follow-up 消息
 ```
 
-事件包括 `turn.started`、`provider.started`、`reasoning.delta`、`text.delta`、
-`tool.requested`、`tool.completed`、`turn.completed`、`turn.cancelled` 和
-`turn.failed`。同一会话串行执行，不同会话可以并行。
+非交互调用同样沿用 Pi：
 
-命令行子命令包括 `chat`、`run`、`doctor`、`tools`、`skills`、
-`sessions`、`export`、`serve` 和 `configure`。
-
-## 扩展
-
-Skills 放在 `skills/<name>/SKILL.md`，通过配置中的
-`agent.enabled_skills` 启用。插件 manifest 示例位于
-`examples/plugins/uptime/`。MCP server 直接加入配置：
-
-```json
-{
-  "mcp_servers": [
-    {
-      "name": "robot",
-      "command": "/usr/local/bin/robot-mcp",
-      "args": [],
-      "protocol_version": "2025-06-18",
-      "enabled": true
-    }
-  ]
-}
+```bash
+aster -p "检查这个项目并给出结论"
+aster --mode json "输出 JSON 事件流"
+aster --continue
+aster --resume
 ```
 
-MCP 工具会以 `<server>__<tool>` 暴露，并默认要求人工批准。
+## RDK 适配
+
+`/rdk` 显示简要板卡状态，`/doctor` 显示完整诊断。模型需要实时硬件信息时会调用
+`system_snapshot`，读取板卡型号、CPU、内存、负载、温度、BPU 设备节点和 RDK 工具。
+实时硬件详情不会自动加入每次系统 Prompt。
+
+会话保存在 `/var/lib/aster/pi-sessions`，与 0.4 的 SQLite 数据分离。全局配置位于
+`/etc/aster/agent`，板端扩展和 Skills 位于 `/usr/local/lib/aster`。
+
+## 回滚
+
+```bash
+aster-rollback
+```
+
+该命令恢复最近一次安装前的 Aster 命令和运行时。旧数据库、Pi JSONL 会话、模型密钥
+和用户配置均不会被删除。
 
 ## 安全边界
 
-- 默认写文件、Shell、插件和 MCP 工具需要终端批准。
-- `--yes` 仅适合明确受控的自动化环境。
-- 文件和 Shell 工作目录被限制在 `security.workspace_root`。
-- HTTP 服务没有交互审批能力，因此默认拒绝需要批准的工具。
-- Aster 是控制面 Agent，不应进入电机、CAN、GPIO 等硬实时闭环。
-- `hrt_model_exec` 存在不代表任意 LLM 已转换并可在 BPU 上运行；本地模型仍需独立验证精度、内存、延迟和温度。
+- 对工作目录外的写入和高风险 Shell 命令要求交互确认；非交互模式默认拒绝。
+- `/proc`、`/sys`、`/dev` 下的直接文件写入被文件工具阻止。
+- `system_snapshot` 只证明当前节点和工具存在，不证明任意模型已完成 BPU 转换。
+- Aster 是控制面 Agent，不应进入电机、CAN、GPIO、安全或急停的硬实时闭环。
 
-详细设计见 [架构](docs/architecture.md) 和 [配置说明](docs/configuration.md)。
+旧 Go 0.4 源码暂时保留用于回滚和迁移参考，`make legacy-release` 仍可构建它。

@@ -1,56 +1,49 @@
-# Aster 架构
+# Aster 0.5 架构
 
 ## 运行路径
 
 ```mermaid
 flowchart LR
-  U["Terminal / HTTP/SSE client"] --> E["Typed event stream"]
-  E --> A["Cancellable turn loop"]
-  A --> P["Provider adapter"]
-  P --> M["Cloud / LAN / local model"]
-  A --> G["Policy and approval gate"]
-  G --> T["Built-in tools"]
-  G --> X["Process plugins"]
-  G --> C["MCP stdio servers"]
-  A --> S["SQLite WAL messages and lifecycle events"]
-  K["SKILL.md catalog"] --> A
-  B["Live board detector"] --> A
+  U["Terminal user"] --> T["Pi TUI and editor"]
+  T --> S["Pi session, tree, compaction"]
+  S --> A["Pi agent and tool loop"]
+  A --> P["Provider registry"]
+  P --> K["Aster D-Robotics Kimi adapter"]
+  P --> V["Pi built-in and models.json providers"]
+  A --> B["Pi built-in coding tools"]
+  A --> R["Aster RDK extension"]
+  R --> H["Board, BPU, thermal status"]
+  A --> X["Pi extensions, packages, Skills"]
 ```
 
-`Agent` 只处理统一的 `Message`、`ToolCall` 和 `ToolDefinition`，厂商协议由
-provider adapter 转换。工具执行前依次经过：工具是否注册、参数是否符合 schema、
-allow/deny 策略、风险审批、context 超时和输出截断。
+交互路径没有 Aster 自建 TUI。`runtime/aster` 是固定版本的 Pi 官方 Bun standalone
+二进制；它读取同目录的 Aster `package.json`，由 Pi 自己生成标题、帮助、配置路径、
+会话 UI 和快捷键。这使交互升级可以跟随明确的 Pi 上游版本，而无需维护两套编辑器。
 
-每轮请求使用独立 context，并通过有序的 `AgentEvent` 暴露模型文本、模型提供的
-reasoning summary、工具生命周期、完成、取消和错误。Anthropic、OpenAI Responses、
-OpenAI-compatible 和 Gemini adapter 均解析厂商原生 SSE；若兼容网关返回空事件流，
-adapter 会回退到同协议的非流式请求。
+## 产品适配层
 
-## 部署边界
+`extensions/rdk.ts` 是唯一必须加载的产品扩展，包含四类适配：
 
-发布产物使用 `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`。X5、S100、S600
-共用同一二进制，差异由实时探测和 board overlay 表达，不维护硬件分支。
+1. D-Robotics Provider：使用 Bearer token 调用 Anthropic-compatible 网关。网关不发送
+   完整 SSE 结束事件，因此适配器使用完整响应并生成 Pi 原生 thinking、text、tool call
+   和 done 事件。
+2. 硬件工具：从 device tree、sysfs、procfs 和 RDK 工具位置读取实时状态。
+3. 安全钩子：阻止虚拟设备文件写入，并确认工作区外写入和破坏性 Shell 命令。
+4. 板卡 UX：在 Pi 原生 footer status 中显示本机摘要，并增加 `/rdk`、`/doctor` 和退出别名。
 
-Aster 可以直接使用云模型，也可以把 OpenAI-compatible provider 指向局域网中的
-vLLM/llama.cpp 服务。BPU 上的模型执行不是通用协议：具体模型需要转换、量化、
-精度回归和性能测量后，再通过插件或 MCP server 接入。
+扩展不替换 Pi 的 `read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`，也不修改
+InteractiveMode、SessionManager、TUI 组件或消息队列。
 
-## 扩展模型
+## 数据和隐私
 
-- Built-in tool：和 Aster 同进程，适合低风险、稳定、通用能力。
-- Plugin：每次调用启动独立进程，通过一条 JSON-RPC 请求和响应通信。
-- MCP：Aster 启动并保持 stdio server，通过 `initialize`、`tools/list`、
-  `tools/call` 接入完整工具集合。
-- Skill：只包含可审计指令和元数据，可声明所需工具与支持板卡。
+Pi JSONL 会话存放在 `/var/lib/aster/pi-sessions`。0.4 的 SQLite 数据保持原路径且不自动
+转换，避免不完整映射破坏工具轨迹。需要迁移时应显式导出旧会话再导入 Pi。
 
-## 会话和训练数据
+RDK footer 在本地读取状态。实时板卡详情不会自动写入系统 Prompt；只有用户要求诊断且
+模型调用 `system_snapshot` 时，工具结果才进入当前模型上下文。
 
-会话目录包含一个 SQLite 数据库，使用 WAL、外键和完整同步写入。消息按
-user、assistant、tool 的统一格式保存，工具调用及结果不会被压成普通文本。旧版每会话
-一个 JSONL 文件会按行数增量导入，原文件保留以支持回滚。启动时检测到未完成轮次会将
-其归档并记录 `session.recovered`，不会把不完整上下文继续发送给模型。
+## 部署与回滚
 
-`/undo` 和 `/redo` 只改变当前上下文的可见状态，底层记录及 checkpoint 保留；新分支
-产生后，已撤销分支会被归档。`/compact` 使用当前模型生成续聊摘要，将其作为独立的
-`context` 消息注入系统 Prompt，并保留压缩前的完整审计轨迹。`aster export SESSION_ID`
-同时输出当前消息和所有历史记录，便于审计或转换成训练数据。
+发行包包含 Pi、fd、ripgrep 的官方 ARM64 二进制及许可证，并锁定版本和 SHA256。
+安装目录为 `/usr/local/lib/aster`，短启动器为 `/usr/local/bin/aster`。安装前的命令和
+运行时放入 `/usr/local/lib/aster-backups/<UTC timestamp>`，`aster-rollback` 可恢复。

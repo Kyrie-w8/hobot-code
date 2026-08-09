@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- Replace the custom terminal UI with the pinned official Pi 0.84.1 ARM64 runtime, preserving Pi interaction behavior exactly.
+- Brand the unchanged Pi runtime as Aster through the supported `piConfig` package mechanism.
+- Add a D-Robotics Kimi provider that maps the gateway's complete Anthropic response into native Pi thinking, text, tool-call, usage, and completion events.
+- Add live RDK board status, `system_snapshot`, `/rdk`, `/doctor`, `/q`, and `/exit` through a Pi extension.
+- Add board-safe write and destructive-command approval hooks without replacing Pi's built-in tools.
+- Bundle pinned fd and ripgrep ARM64 binaries for network-independent first startup.
+- Add install-time backup, isolated Pi sessions, legacy Go binary preservation, and `aster-rollback`.
+
 ## 0.4.0
 
 - Replace per-session JSONL writes with a crash-safe SQLite WAL store while preserving and incrementally importing legacy files.
