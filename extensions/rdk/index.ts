@@ -24,6 +24,21 @@ import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime }
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
+import {
+  describeToolCall,
+  fingerprintWorkspace,
+  initializeProject,
+  isMcpTool,
+  loadPolicy,
+  loadQualityConfig,
+  parsePolicy,
+  parseQualityConfig,
+  redactSensitiveText,
+  resolveToolAction,
+  setPolicyRule,
+  writePolicy,
+} from "./control-plane.mjs";
+
 const execFileAsync = promisify(execFile);
 const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
 const DEFAULT_MODEL = "kimi-k3";
@@ -82,6 +97,47 @@ interface KnowledgeSearchOptions {
   topic?: string;
   limit?: number;
 }
+
+type PermissionAction = "allow" | "ask" | "deny";
+
+interface PermissionRule {
+  tool: string;
+  action: PermissionAction;
+}
+
+interface PermissionPolicy {
+  schemaVersion: 1;
+  default: PermissionAction;
+  rules: PermissionRule[];
+}
+
+interface QualityGateResult {
+  command: string;
+  code: number | null;
+  killed: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+}
+
+interface QualityGateRun {
+  passed: boolean;
+  startedAt: string;
+  durationMs: number;
+  workspaceFingerprint?: string;
+  results: QualityGateResult[];
+}
+
+interface QualityGateState {
+  schemaVersion: 1;
+  timeoutMs: number;
+  commands: string[];
+  source: "project" | "session";
+  lastRun?: QualityGateRun;
+  invalidated?: boolean;
+}
+
+type QualityGateStatus = "disabled" | "missing" | "running" | "passed" | "failed" | "stale";
 
 function sanitizeText(value: string): string {
   return value.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
@@ -524,7 +580,7 @@ function streamDrobotics(
           Accept: "application/json",
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
-          "User-Agent": "hobot-code/0.7",
+          "User-Agent": "hobot-code/0.9",
           ...configuredHeaders,
         },
         body: JSON.stringify(body),
@@ -626,6 +682,13 @@ const knowledgeSearchSchema = Type.Object({
   ),
 });
 
+const qualityGateSchema = Type.Object({
+  action: Type.Union([
+    Type.Literal("status"),
+    Type.Literal("run"),
+  ], { description: "Show quality gate status or run every configured command" }),
+});
+
 const criticalVirtualRoots = ["/proc", "/sys", "/dev"];
 const destructiveCommandPatterns = [
   /(^|\s)rm\s+[^\n]*(?:-rf|-fr|--recursive)/i,
@@ -635,11 +698,234 @@ const destructiveCommandPatterns = [
   /systemctl\s+(?:reboot|poweroff|halt)/i,
   />\s*\/sys\//i,
 ];
+const mutatingToolNames = new Set(["bash", "edit", "write"]);
+const completionAssertionPattern = /(?:已|已经|全部|现已)(?:完成|实现|修复|通过|部署)|(?:implementation|task|work|changes?)\s+(?:is|are)\s+(?:complete|done)|all\s+(?:checks|tests|gates)\s+pass/i;
+const qualityGateEntryType = "hobot-quality-gates";
+
+function permissionPolicyPath(): string {
+  return resolve(process.env.HOBOT_CODE_PERMISSION_POLICY || "/etc/hobot-code/agent/permissions.json");
+}
+
+function outputTail(value: string, maxLength = 4000): string {
+  const redacted = redactSensitiveText(value, maxLength * 2);
+  return redacted.length > maxLength ? `...${redacted.slice(-maxLength)}` : redacted;
+}
+
+function qualityStatusText(status: QualityGateStatus): string {
+  switch (status) {
+    case "disabled": return "disabled";
+    case "missing": return "not run";
+    case "running": return "running";
+    case "passed": return "passed";
+    case "failed": return "failed";
+    case "stale": return "stale";
+  }
+}
+
+function normalizeQualityState(value: unknown): QualityGateState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<QualityGateState>;
+  try {
+    const config = parseQualityConfig({
+      schemaVersion: candidate.schemaVersion,
+      timeoutMs: candidate.timeoutMs,
+      commands: candidate.commands,
+    });
+    return {
+      ...config,
+      source: candidate.source === "session" ? "session" : "project",
+      ...(candidate.lastRun ? { lastRun: candidate.lastRun } : {}),
+      ...(candidate.invalidated ? { invalidated: true } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function gateReport(state: QualityGateState, status: QualityGateStatus): string {
+  const commands = state.commands.length > 0
+    ? state.commands.map((command, index) => `${index + 1}. ${command}`).join("\n")
+    : "(none)";
+  const latest = state.lastRun
+    ? `${state.lastRun.passed ? "passed" : "failed"} at ${state.lastRun.startedAt} in ${state.lastRun.durationMs} ms`
+    : "never";
+  return [
+    `Status: ${qualityStatusText(status)}`,
+    `Source: ${state.source}`,
+    `Timeout per command: ${state.timeoutMs} ms`,
+    `Last run: ${latest}`,
+    "Commands:",
+    commands,
+  ].join("\n");
+}
 
 export default function rdkExtension(pi: ExtensionAPI) {
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
   let currentSnapshot: BoardSnapshot | undefined;
+  let permissionPolicy: PermissionPolicy;
+  let permissionPolicyError: string | undefined;
+  let qualityGateState: QualityGateState = {
+    schemaVersion: 1,
+    timeoutMs: 120_000,
+    commands: [],
+    source: "project",
+  };
+  let qualityGateStatus: QualityGateStatus = "disabled";
+  let qualityConfigError: string | undefined;
+  const qualityGateBlockedCalls = new Set<string>();
+
+  function toolAction(toolName: string): PermissionAction {
+    const info = pi.getAllTools().find((tool) => tool.name === toolName);
+    return resolveToolAction(permissionPolicy, toolName, isMcpTool(info ?? toolName)) as PermissionAction;
+  }
+
+  function toolIsMcp(toolName: string): boolean {
+    const info = pi.getAllTools().find((tool) => tool.name === toolName);
+    return isMcpTool(info ?? toolName);
+  }
+
+  function applyDeniedTools(): string[] {
+    const denied = pi.getAllTools()
+      .map((tool) => tool.name)
+      .filter((name) => toolAction(name) === "deny");
+    if (denied.length > 0) {
+      const deniedSet = new Set(denied);
+      pi.setActiveTools(pi.getActiveTools().filter((name) => !deniedSet.has(name)));
+    }
+    return denied;
+  }
+
+  function persistQualityState(): void {
+    pi.appendEntry(qualityGateEntryType, { ...qualityGateState });
+  }
+
+  function setQualityStatus(ctx: { ui: { setStatus: (key: string, value: string) => void } }, status: QualityGateStatus): void {
+    qualityGateStatus = status;
+    ctx.ui.setStatus("hobot-gates", `gates: ${qualityStatusText(status)}`);
+  }
+
+  async function evaluateQualityStatus(cwd: string): Promise<QualityGateStatus> {
+    if (qualityGateState.commands.length === 0) return "disabled";
+    if (qualityGateStatus === "running") return "running";
+    if (!qualityGateState.lastRun) return "missing";
+    if (!qualityGateState.lastRun.passed) return "failed";
+    if (qualityGateState.invalidated || !qualityGateState.lastRun.workspaceFingerprint) return "stale";
+    try {
+      const current = await fingerprintWorkspace(cwd);
+      return current.digest === qualityGateState.lastRun.workspaceFingerprint ? "passed" : "stale";
+    } catch {
+      return "stale";
+    }
+  }
+
+  async function restoreQualityState(ctx: { cwd: string; sessionManager: { getBranch: () => unknown[] } }): Promise<void> {
+    let restored: QualityGateState | undefined;
+    for (const entry of ctx.sessionManager.getBranch()) {
+      const candidate = entry as { type?: string; customType?: string; data?: unknown };
+      if (candidate.type === "custom" && candidate.customType === qualityGateEntryType) {
+        restored = normalizeQualityState(candidate.data) ?? restored;
+      }
+    }
+    if (restored) {
+      qualityGateState = restored;
+      qualityConfigError = undefined;
+      return;
+    }
+    const loaded = await loadQualityConfig(ctx.cwd);
+    qualityGateState = { ...loaded.config, source: "project" };
+    qualityConfigError = loaded.error;
+  }
+
+  async function runQualityGates(
+    cwd: string,
+    signal?: AbortSignal,
+    ctx?: { ui: { setStatus: (key: string, value: string) => void } },
+  ): Promise<{ text: string; details: JsonRecord }> {
+    if (qualityGateState.commands.length === 0) {
+      return {
+        text: "No quality gates are configured. Run /init or /gate set <command> before claiming completion.",
+        details: { status: "disabled" },
+      };
+    }
+
+    qualityGateStatus = "running";
+    ctx?.ui.setStatus("hobot-gates", "gates: running");
+    const started = Date.now();
+    const results: QualityGateResult[] = [];
+
+    for (const command of qualityGateState.commands) {
+      const commandStarted = Date.now();
+      try {
+        const result = await pi.exec("sh", ["-c", command], {
+          timeout: qualityGateState.timeoutMs,
+          signal,
+        });
+        results.push({
+          command,
+          code: result.code,
+          killed: result.killed,
+          durationMs: Date.now() - commandStarted,
+          stdout: outputTail(result.stdout),
+          stderr: outputTail(result.stderr),
+        });
+        if (result.code !== 0 || result.killed) break;
+      } catch (error) {
+        results.push({
+          command,
+          code: null,
+          killed: signal?.aborted ?? false,
+          durationMs: Date.now() - commandStarted,
+          stdout: "",
+          stderr: outputTail(error instanceof Error ? error.message : String(error)),
+        });
+        break;
+      }
+    }
+
+    let passed = results.length === qualityGateState.commands.length
+      && results.every((result) => result.code === 0 && !result.killed);
+    let workspaceFingerprint: string | undefined;
+    try {
+      workspaceFingerprint = (await fingerprintWorkspace(cwd)).digest;
+    } catch (error) {
+      passed = false;
+      results.push({
+        command: "workspace fingerprint",
+        code: null,
+        killed: false,
+        durationMs: 0,
+        stdout: "",
+        stderr: outputTail(error instanceof Error ? error.message : String(error)),
+      });
+    }
+
+    qualityGateState = {
+      ...qualityGateState,
+      invalidated: false,
+      lastRun: {
+        passed,
+        startedAt: new Date(started).toISOString(),
+        durationMs: Date.now() - started,
+        workspaceFingerprint,
+        results,
+      },
+    };
+    persistQualityState();
+    const status: QualityGateStatus = passed ? "passed" : "failed";
+    qualityGateStatus = status;
+    ctx?.ui.setStatus("hobot-gates", `gates: ${status}`);
+
+    const lines = results.map((result) => [
+      `${result.code === 0 && !result.killed ? "PASS" : "FAIL"} ${result.command} (${result.durationMs} ms)`,
+      result.stdout ? `stdout:\n${result.stdout}` : undefined,
+      result.stderr ? `stderr:\n${result.stderr}` : undefined,
+    ].filter(Boolean).join("\n"));
+    return {
+      text: [`Quality gates ${status}.`, ...lines].join("\n\n"),
+      details: { status, passed, results },
+    };
+  }
 
   pi.registerProvider("drobotics", {
     name: "D-Robotics AI Gateway",
@@ -716,7 +1002,41 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "quality_gate",
+    label: "Hobot Code quality gate",
+    description: "Inspect or run the verification commands configured for this session. A passing result is tied to the current workspace fingerprint.",
+    promptSnippet: "Run project verification commands and certify the current workspace before declaring completion",
+    promptGuidelines: [
+      "Use quality_gate with action run after the final code change when project quality gates are configured.",
+      "Do not claim that work is complete when Hobot Code reports the quality gate as missing, stale, or failed.",
+    ],
+    parameters: qualityGateSchema,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (params.action === "run") {
+        const result = await runQualityGates(ctx.cwd, signal, ctx);
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: result.details,
+        };
+      }
+      const status = await evaluateQualityStatus(ctx.cwd);
+      setQualityStatus(ctx, status);
+      return {
+        content: [{ type: "text", text: gateReport(qualityGateState, status) }],
+        details: { status, state: qualityGateState },
+      };
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
+    const loadedPolicy = await loadPolicy(permissionPolicyPath());
+    permissionPolicy = loadedPolicy.policy as PermissionPolicy;
+    permissionPolicyError = loadedPolicy.error;
+    applyDeniedTools();
+    await restoreQualityState(ctx);
+    setQualityStatus(ctx, await evaluateQualityStatus(ctx.cwd));
+
     try {
       const snapshot = await getBoardSnapshot(false);
       currentSnapshot = snapshot;
@@ -724,38 +1044,288 @@ export default function rdkExtension(pi: ExtensionAPI) {
     } catch {
       ctx.ui.setStatus("hobot-rdk", "RDK status unavailable");
     }
+
+    if (permissionPolicyError) {
+      ctx.ui.notify(`Permission policy fallback is active: ${permissionPolicyError}`, "warning");
+    }
+    if (qualityConfigError) {
+      ctx.ui.notify(`Quality gate config was ignored: ${qualityConfigError}`, "warning");
+    }
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("session_tree", async (_event, ctx) => {
+    await restoreQualityState(ctx);
+    setQualityStatus(ctx, await evaluateQualityStatus(ctx.cwd));
+  });
+
+  pi.on("before_agent_start", async (event, ctx) => {
+    applyDeniedTools();
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
     const expertPrompt = await renderExpertPrompt(snapshot);
+    const status = await evaluateQualityStatus(ctx.cwd);
+    setQualityStatus(ctx, status);
+    const qualityInstructions = qualityGateState.commands.length > 0
+      ? [
+          "## Hobot Code quality gate",
+          `Current status: ${qualityStatusText(status)}.`,
+          `Configured commands: ${qualityGateState.commands.join(" ; ")}.`,
+          "After the final change, call quality_gate with action run. Do not state that the task is complete unless its current status is passed.",
+        ].join("\n")
+      : "## Hobot Code quality gate\nNo commands are configured for this session. Use /init or /gate set to enable completion verification for this project.";
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${expertPrompt}`,
+      systemPrompt: `${event.systemPrompt}\n\n${expertPrompt}\n\n${qualityInstructions}`,
+    };
+  });
+
+  pi.on("message_end", async (event, ctx) => {
+    if (event.message.role !== "assistant") return undefined;
+    const toolCalls = event.message.content.filter((block) => block.type === "toolCall");
+    const hasMutation = toolCalls.some((block) => mutatingToolNames.has(block.name) || toolIsMcp(block.name));
+    if (hasMutation) {
+      for (const block of toolCalls) {
+        if (block.name === "quality_gate" && block.arguments?.action === "run") {
+          qualityGateBlockedCalls.add(block.id);
+        }
+      }
+    }
+
+    if (qualityGateState.commands.length === 0) return undefined;
+    const responseText = event.message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    if (!completionAssertionPattern.test(responseText)) return undefined;
+    const status = await evaluateQualityStatus(ctx.cwd);
+    setQualityStatus(ctx, status);
+    if (status === "passed") return undefined;
+    return {
+      message: {
+        ...event.message,
+        content: [
+          ...event.message.content,
+          {
+            type: "text",
+            text: `\n\n[Hobot Code quality gate: completion is not accepted because the gate is ${qualityStatusText(status)}. Run /gate run or call quality_gate after the final change.]`,
+          },
+        ],
+      },
     };
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    const action = toolAction(event.toolName);
+    if (action === "deny") {
+      return { block: true, reason: `${event.toolName} is denied by ${permissionPolicyPath()}` };
+    }
+    if (event.toolName === "quality_gate" && qualityGateBlockedCalls.delete(event.toolCallId)) {
+      return {
+        block: true,
+        reason: "Run quality_gate in a separate tool batch after all mutating tools have finished",
+      };
+    }
+
+    const approvalReasons: string[] = [];
+    if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
+
     if (event.toolName === "write" || event.toolName === "edit") {
       const path = resolve(ctx.cwd, String(event.input.path ?? ""));
       if (criticalVirtualRoots.some((root) => path === root || path.startsWith(`${root}/`))) {
         return { block: true, reason: `Direct writes under ${path} are blocked by the RDK safety policy` };
       }
       if (!path.startsWith(`${resolve(ctx.cwd)}/`) && path !== resolve(ctx.cwd)) {
-        if (!ctx.hasUI) return { block: true, reason: "Write outside the working directory requires interactive approval" };
-        const approved = await ctx.ui.confirm("Write outside workspace?", path);
-        if (!approved) return { block: true, reason: "Write cancelled by user" };
+        approvalReasons.push("the target is outside the current workspace");
       }
     }
 
     if (event.toolName === "bash") {
       const command = String(event.input.command ?? "");
-      if (!destructiveCommandPatterns.some((pattern) => pattern.test(command))) return undefined;
-      if (!ctx.hasUI) return { block: true, reason: "Destructive command requires interactive approval" };
-      const approved = await ctx.ui.confirm("Run destructive command?", command);
-      if (!approved) return { block: true, reason: "Command cancelled by user" };
+      if (destructiveCommandPatterns.some((pattern) => pattern.test(command))) {
+        approvalReasons.push("the command matches an RDK destructive-operation rule");
+      }
+    }
+
+    if (approvalReasons.length > 0) {
+      if (!ctx.hasUI) {
+        return {
+          block: true,
+          reason: `${event.toolName} requires interactive approval: ${approvalReasons.join("; ")}`,
+        };
+      }
+      const detail = [
+        describeToolCall(event.toolName, event.input, qualityGateState.commands),
+        `Reason: ${approvalReasons.join("; ")}`,
+      ].join("\n");
+      const approved = await ctx.ui.confirm(`Allow ${event.toolName}?`, detail);
+      if (!approved) return { block: true, reason: `${event.toolName} was cancelled by the user` };
+    }
+
+    if (mutatingToolNames.has(event.toolName) || toolIsMcp(event.toolName)) {
+      if (qualityGateState.lastRun) {
+        qualityGateState = { ...qualityGateState, invalidated: true };
+        setQualityStatus(ctx, "stale");
+      }
     }
     return undefined;
+  });
+
+  pi.registerCommand("init", {
+    description: "Initialize AGENTS.md and Hobot Code quality gates for this project",
+    handler: async (_args, ctx) => {
+      const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
+      currentSnapshot = snapshot;
+      try {
+        const result = await initializeProject(ctx.cwd, snapshot);
+        const loaded = await loadQualityConfig(ctx.cwd);
+        qualityGateState = { ...loaded.config, source: "project" };
+        qualityConfigError = loaded.error;
+        persistQualityState();
+        setQualityStatus(ctx, await evaluateQualityStatus(ctx.cwd));
+        const created = result.created.length > 0 ? result.created.join("\n") : "(none)";
+        const preserved = result.preserved.length > 0 ? result.preserved.join("\n") : "(none)";
+        ctx.ui.notify(
+          `Project initialized.\nCreated:\n${created}\nPreserved unchanged:\n${preserved}\nReloading project context...`,
+          "info",
+        );
+        await ctx.reload();
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("permissions", {
+    description: "Inspect or change allow/ask/deny tool permissions",
+    handler: async (args, ctx) => {
+      const input = String(args ?? "").trim();
+      const [operation = "status", first, second] = input.split(/\s+/);
+      const previouslyDenied = new Set(
+        pi.getAllTools()
+          .map((tool) => tool.name)
+          .filter((name) => toolAction(name) === "deny"),
+      );
+
+      try {
+        if (operation === "reload") {
+          const loaded = await loadPolicy(permissionPolicyPath());
+          permissionPolicy = loaded.policy as PermissionPolicy;
+          permissionPolicyError = loaded.error;
+        } else if (operation === "set") {
+          if (!first || !second) throw new Error("Usage: /permissions set <tool-pattern|mcp:*> <allow|ask|deny>");
+          permissionPolicy = await writePolicy(
+            permissionPolicyPath(),
+            setPolicyRule(permissionPolicy, first, second),
+          ) as PermissionPolicy;
+          permissionPolicyError = undefined;
+        } else if (operation === "default") {
+          if (!first) throw new Error("Usage: /permissions default <allow|ask|deny>");
+          permissionPolicy = await writePolicy(
+            permissionPolicyPath(),
+            parsePolicy({ ...permissionPolicy, default: first }),
+          ) as PermissionPolicy;
+          permissionPolicyError = undefined;
+        } else if (operation !== "status") {
+          throw new Error("Usage: /permissions [status|reload|set <pattern> <action>|default <action>]");
+        }
+
+        if (operation !== "status") {
+          const active = new Set(pi.getActiveTools());
+          for (const name of previouslyDenied) {
+            if (toolAction(name) !== "deny") active.add(name);
+          }
+          pi.setActiveTools([...active]);
+        }
+        const hidden = applyDeniedTools();
+        const rules = permissionPolicy.rules
+          .map((rule) => `${rule.tool}: ${rule.action}`)
+          .join("\n");
+        ctx.ui.notify([
+          `Policy: ${permissionPolicyPath()}`,
+          `Default: ${permissionPolicy.default}`,
+          permissionPolicyError ? `Fallback: ${permissionPolicyError}` : undefined,
+          `Hidden tools: ${hidden.length > 0 ? hidden.join(", ") : "none"}`,
+          "Rules:",
+          rules || "(none)",
+        ].filter(Boolean).join("\n"), permissionPolicyError ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("gate", {
+    description: "Configure, inspect, or run session quality gates",
+    handler: async (args, ctx) => {
+      const input = String(args ?? "").trim();
+      const space = input.indexOf(" ");
+      const operation = (space < 0 ? input : input.slice(0, space)) || "status";
+      const remainder = space < 0 ? "" : input.slice(space + 1).trim();
+
+      try {
+        if (operation === "run") {
+          const result = await runQualityGates(ctx.cwd, undefined, ctx);
+          ctx.ui.notify(result.text, result.details.passed ? "info" : "warning");
+          return;
+        }
+        if (operation === "reload") {
+          const loaded = await loadQualityConfig(ctx.cwd);
+          qualityGateState = { ...loaded.config, source: "project" };
+          qualityConfigError = loaded.error;
+        } else if (operation === "set") {
+          if (!remainder) throw new Error("Usage: /gate set <command> or /gate set [\"command 1\",\"command 2\"]");
+          const commands = remainder.startsWith("[") ? JSON.parse(remainder) : [remainder];
+          const config = parseQualityConfig({ ...qualityGateState, commands });
+          qualityGateState = { ...config, source: "session" };
+          qualityConfigError = undefined;
+        } else if (operation === "add") {
+          if (!remainder) throw new Error("Usage: /gate add <command>");
+          const config = parseQualityConfig({
+            ...qualityGateState,
+            commands: [...qualityGateState.commands, remainder],
+          });
+          qualityGateState = { ...config, source: "session" };
+        } else if (operation === "remove") {
+          const index = Number(remainder) - 1;
+          if (!Number.isInteger(index) || index < 0 || index >= qualityGateState.commands.length) {
+            throw new Error("Usage: /gate remove <1-based-command-index>");
+          }
+          const commands = qualityGateState.commands.filter((_command, commandIndex) => commandIndex !== index);
+          qualityGateState = {
+            ...parseQualityConfig({ ...qualityGateState, commands }),
+            source: "session",
+          };
+        } else if (operation === "timeout") {
+          const seconds = Number(remainder);
+          const config = parseQualityConfig({
+            ...qualityGateState,
+            timeoutMs: Math.round(seconds * 1000),
+          });
+          qualityGateState = { ...config, source: "session" };
+        } else if (operation === "clear") {
+          qualityGateState = {
+            schemaVersion: 1,
+            timeoutMs: qualityGateState.timeoutMs,
+            commands: [],
+            source: "session",
+          };
+        } else if (operation !== "status") {
+          throw new Error("Usage: /gate [status|run|reload|set|add|remove|timeout|clear]");
+        }
+
+        if (!["status", "run"].includes(operation)) {
+          qualityGateState = { ...qualityGateState, lastRun: undefined, invalidated: false };
+          persistQualityState();
+        }
+        const status = await evaluateQualityStatus(ctx.cwd);
+        setQualityStatus(ctx, status);
+        ctx.ui.notify([
+          qualityConfigError ? `Config warning: ${qualityConfigError}` : undefined,
+          gateReport(qualityGateState, status),
+        ].filter(Boolean).join("\n"), qualityConfigError ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
   });
 
   pi.registerCommand("doctor", {

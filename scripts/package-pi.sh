@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.8.0}
+version=${1:-0.9.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root_dir/pi-runtime/pi.lock"
 . "$root_dir/pi-runtime/tools.lock"
@@ -59,12 +59,13 @@ install -m 0644 "$root_dir/pi-runtime/package.json" "$stage_dir/runtime/package.
 install -m 0644 "$root_dir/CHANGELOG.md" "$stage_dir/runtime/CHANGELOG.md"
 install -m 0644 "$root_dir/pi-runtime/pi.lock" "$stage_dir/PI_RUNTIME"
 install -m 0644 "$root_dir/pi-runtime/tools.lock" "$stage_dir/TOOLS_RUNTIME"
-install -m 0644 "$root_dir/extensions/rdk.ts" "$stage_dir/extensions/rdk.ts"
+cp -R "$root_dir/extensions/." "$stage_dir/extensions/"
 cp -R "$root_dir/skills/." "$stage_dir/skills/"
 cp -R "$root_dir/knowledge/." "$stage_dir/knowledge/"
 install -m 0644 "$root_dir/prompts/rdk-expert.md" "$stage_dir/prompts/rdk-expert.md"
 install -m 0644 "$root_dir/packaging/pi/settings.json" "$stage_dir/config/settings.json"
 install -m 0644 "$root_dir/packaging/pi/models.json" "$stage_dir/config/models.json"
+install -m 0644 "$root_dir/packaging/pi/permissions.json" "$stage_dir/config/permissions.json"
 install -m 0600 "$root_dir/packaging/pi/hobot.env.example" "$stage_dir/config/hobot.env.example"
 install -m 0755 "$root_dir/packaging/pi/hobot-launcher" "$stage_dir/hobot-launcher"
 install -m 0755 "$root_dir/scripts/install-pi.sh" "$stage_dir/install.sh"

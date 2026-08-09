@@ -9,7 +9,7 @@ Hobot Code 是运行在地瓜机器人 RDK X5、RDK S100 和 RDK S600 上的终�
 
 - Pi 0.84.1 官方 Linux ARM64 二进制按 SHA256 固定并原样装入发行包。
 - `package.json` 使用 Pi 官方 `piConfig` 机制将主命令改为 `hobot`，项目配置目录改为 `.hobot`。
-- `extensions/rdk.ts` 注册 D-Robotics Kimi Provider、实时 `system_snapshot`、版本感知的
+- `extensions/rdk/index.ts` 注册 D-Robotics Kimi Provider、实时 `system_snapshot`、版本感知的
   `rdk_docs_search`、完整 RDK 专家角色以及板端命令。
 - `prompts/rdk-expert.md` 定义证据优先级、平台路由、工程流程、BPU/多媒体/TROS 能力、
   安全边界和交付规范，并在每轮注入实机板型与 RDK OS。
@@ -25,13 +25,13 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.8.0
+make release VERSION=0.9.0
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.8.0-linux-arm64.tar.gz
+dist/hobot-code-0.9.0-linux-arm64.tar.gz
 ```
 
 在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
@@ -41,17 +41,17 @@ dist/hobot-code-0.8.0-linux-arm64.tar.gz
 ```bash
 HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
 HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
-make release VERSION=0.8.0
+make release VERSION=0.9.0
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.8.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.9.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.8.0-linux-arm64.tar.gz
-cd hobot-code-0.8.0-linux-arm64
+tar -xzf hobot-code-0.9.0-linux-arm64.tar.gz
+cd hobot-code-0.9.0-linux-arm64
 ./install.sh
 ```
 
@@ -107,6 +107,9 @@ hobot
 /reload         重载扩展、Skills、Prompt 和主题
 /hotkeys        查看完整快捷键
 /system-prompt  查看当前生效的 Pi + RDK 专家系统 Prompt
+/permissions    查看或修改工具权限
+/init           生成项目 AGENTS.md 和质量门配置
+/gate           查看、配置或运行质量门
 /quit           退出；Hobot Code 另外提供 /q 和 /exit
 ```
 
@@ -130,6 +133,38 @@ hobot --mode json "输出 JSON 事件流"
 hobot --continue
 hobot --resume
 ```
+
+## 权限与质量门
+
+全局权限策略位于 `/etc/hobot-code/agent/permissions.json`，按顺序匹配工具名，支持
+`allow`、`ask` 和 `deny`。`deny` 工具不会进入模型上下文；`ask` 在 TUI 中显示经过密钥
+脱敏的工具、风险和目标，在非交互模式下默认拒绝：
+
+```text
+/permissions status
+/permissions set bash ask
+/permissions set mcp:* deny
+/permissions default ask
+/permissions reload
+```
+
+RDK 安全底线优先于通用策略：`/proc`、`/sys`、`/dev` 直接写入始终拒绝，工作区外写入和
+破坏性 Shell 命令始终需要交互确认。
+
+在项目根目录运行 `/init` 会创建 `AGENTS.md` 和 `.hobot/quality-gates.json`，自动识别
+Make、Node、Go、Rust 或 pytest 验证命令，已有文件保持不变。质量门配置和最近结果随会话
+持久化，通过结果绑定工作区指纹；门禁之后再次修改文件会变为 `stale`：
+
+```text
+/gate status
+/gate set make check
+/gate set ["npm run check","npm test"]
+/gate timeout 300
+/gate run
+```
+
+配置质量门后，Agent 只有在最终修改之后取得当前 `passed` 结果才能声明完成；否则 Hobot Code
+会在回复中标记该完成声明不被接受。
 
 ## RDK 适配
 

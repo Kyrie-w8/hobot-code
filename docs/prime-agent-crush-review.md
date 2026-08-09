@@ -74,3 +74,8 @@ Crush 是完整 Go TUI Agent，包含多模型、会话、LSP、MCP、Hook、权
 
 下一版应先实现 P0，不应同时引入 daemon、LSP 和多 Agent。P0 完成后，Hobot Code 才具备从
 “Pi 的 RDK 适配发行版”走向“成熟地瓜开发工作台”的清晰控制面。
+
+## 实施状态
+
+Hobot Code 0.9.0 已完成 P0：声明式权限、`/init` 项目初始化和带工作区指纹的质量门。
+P1 将在 P0 的板端验证稳定后按持久目标、Hook、远程通知、资源感知 LSP 的顺序实施。

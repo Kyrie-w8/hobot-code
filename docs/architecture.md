@@ -1,4 +1,4 @@
-# Hobot Code 0.8 架构
+# Hobot Code 0.9 架构
 
 ## 运行路径
 
@@ -24,7 +24,7 @@ flowchart LR
 
 ## 产品适配层
 
-`extensions/rdk.ts` 是唯一必须加载的产品扩展，包含四类适配：
+`extensions/rdk/index.ts` 是唯一必须加载的产品扩展，包含四类适配：
 
 1. D-Robotics Provider：使用 Bearer token 调用 Anthropic-compatible 网关。网关不发送
    完整 SSE 结束事件，因此适配器使用完整响应并生成 Pi 原生 thinking、text、tool call
@@ -46,6 +46,16 @@ Pi JSONL 会话存放在 `/var/lib/hobot-code/sessions`。终端展示与执行�
 
 RDK footer 在本地读取状态。系统 Prompt 加入完整但不携带手册正文的专家角色；完整硬件
 详情与知识正文分别只在模型调用 `system_snapshot`、`rdk_docs_search` 时进入上下文。
+
+## 控制面
+
+`extensions/rdk/control-plane.mjs` 提供无第三方依赖、可单测的权限、初始化、脱敏和
+工作区指纹逻辑，`extensions/rdk/index.ts` 只负责接入 Pi 生命周期。会话启动时 deny 工具从 active
+tools 中移除，`tool_call` 再执行 fail-closed 检查；ask 工具必须在交互 TUI 中确认。
+
+质量门配置来自项目 `.hobot/quality-gates.json`，会话覆盖与结果通过 Pi custom entry 保存，
+不引入第二套数据库。结果只对运行后取得的工作区指纹有效；后续写入、编辑、Shell 或 MCP
+调用会保守地将结果标记为 stale。质量门与修改工具出现在同一并行批次时，门禁调用会被拒绝。
 
 ## 部署与回滚
 

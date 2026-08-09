@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "default": "ask",
+  "rules": [
+    { "tool": "read", "action": "allow" },
+    { "tool": "write", "action": "allow" },
+    { "tool": "edit", "action": "allow" },
+    { "tool": "bash", "action": "allow" },
+    { "tool": "system_snapshot", "action": "allow" },
+    { "tool": "rdk_docs_search", "action": "allow" },
+    { "tool": "quality_gate", "action": "ask" },
+    { "tool": "mcp:*", "action": "ask" }
+  ]
+}

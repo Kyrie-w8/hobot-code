@@ -44,6 +44,9 @@ fi
 if [ ! -e /etc/hobot-code/agent/models.json ]; then
   install -m 0640 "$package_dir/config/models.json" /etc/hobot-code/agent/models.json
 fi
+if [ ! -e /etc/hobot-code/agent/permissions.json ]; then
+  install -m 0640 "$package_dir/config/permissions.json" /etc/hobot-code/agent/permissions.json
+fi
 if [ ! -e /etc/hobot-code/hobot.env ]; then
   install -m 0600 "$package_dir/config/hobot.env.example" /etc/hobot-code/hobot.env
 fi

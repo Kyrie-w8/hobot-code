@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0
+
+- Add ordered allow/ask/deny permissions for built-in, RDK, plugin, and MCP tools; denied tools are removed from the active model context.
+- Add redacted, target-specific approval dialogs and fail-closed behavior for non-interactive sessions.
+- Add `/init` to create a board-aware `AGENTS.md` and `.hobot/quality-gates.json` without overwriting existing project files.
+- Add persistent session quality gates with configurable commands and timeouts, bounded output, workspace fingerprints, stale detection, and completion enforcement.
+- Add `/permissions`, `/gate`, and a model-callable `quality_gate` tool with unit coverage for policy, initialization, redaction, and fingerprints.
+
 ## 0.8.0
 
 - Remove the obsolete predecessor implementation, service mode, packaging chain, command aliases, paths, and environment namespaces.

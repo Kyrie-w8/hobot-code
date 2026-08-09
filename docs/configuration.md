@@ -1,4 +1,4 @@
-# Hobot Code 0.8 配置
+# Hobot Code 0.9 配置
 
 ## 路径
 
@@ -8,12 +8,14 @@
 | `/etc/hobot-code/agent/settings.json` | Pi/Hobot Code 全局设置 |
 | `/etc/hobot-code/agent/models.json` | 自定义 Provider 和模型 |
 | `/etc/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
+| `/etc/hobot-code/agent/permissions.json` | allow/ask/deny 工具权限策略 |
 | `/etc/hobot-code/agent/bin` | 固定版本的 fd 和 ripgrep |
 | `/var/lib/hobot-code/sessions` | Pi JSONL 会话 |
 | `/usr/local/lib/hobot-code/extensions` | RDK 扩展 |
 | `/usr/local/lib/hobot-code/skills` | 板端 Skills |
 | `/usr/local/lib/hobot-code/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
 | `/usr/local/lib/hobot-code/prompts/rdk-expert.md` | 动态渲染的地瓜开发专家角色模板 |
+| `<project>/.hobot/quality-gates.json` | 项目默认质量门命令与单命令超时 |
 
 启动器设置 `HOBOT_CODING_AGENT_DIR=/etc/hobot-code/agent`。项目目录使用 `.hobot/`
 放置局部 settings、extensions、skills、prompts 和 themes；Pi 的 project trust 机制会在
@@ -102,3 +104,40 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 专家模板中的 `BOARD_NAME`、`BOARD_ID`、`RDK_OS_VERSION`、`DOCUMENTATION_TRACK`、
 `HOSTNAME` 和 `ARCHITECTURE` 占位符由扩展动态替换。修改模板后运行 `make pi-check`，
 可在板端用 `/system-prompt` 检查最终内容。
+
+## 工具权限
+
+规则按数组顺序匹配，第一条命中规则生效；未命中时使用 `default`。`mcp:*` 匹配所有 MCP
+来源工具，普通 `*` 可用于工具名通配。示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "default": "ask",
+  "rules": [
+    { "tool": "read", "action": "allow" },
+    { "tool": "bash", "action": "ask" },
+    { "tool": "mcp:*", "action": "deny" }
+  ]
+}
+```
+
+`/permissions set <pattern> <action>` 会把规则放到数组开头并原子写回配置。配置不存在或无效时
+使用内置的保守默认值并显示警告。deny 工具从 Pi 活跃工具集合中移除，工具调用阶段仍会再次
+检查，防止动态插件绕过。密钥、Bearer Token 和常见 secret 字段不会出现在确认详情中。
+
+## 质量门
+
+项目配置格式：
+
+```json
+{
+  "schemaVersion": 1,
+  "timeoutMs": 120000,
+  "commands": ["make check"]
+}
+```
+
+每个会话会从项目配置初始化，然后用 Pi custom entry 持久化会话覆盖和最近运行结果。
+`/gate set`、`add`、`remove`、`timeout` 和 `clear` 只改变当前会话，`/gate reload` 重新加载项目
+配置。命令顺序执行，首个失败即停止，输出脱敏并截断；通过结果记录当前工作区指纹。
