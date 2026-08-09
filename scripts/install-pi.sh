@@ -110,7 +110,7 @@ fi
 if [ ! -e "$state_root/.system-layout-migrated" ]; then
   for state_name in sessions memory goals audit; do
     if [ -d "$legacy_state/$state_name" ]; then
-      cp -a -n "$legacy_state/$state_name/." "$state_root/$state_name/"
+      cp -a --update=none "$legacy_state/$state_name/." "$state_root/$state_name/"
     fi
   done
   : > "$state_root/.system-layout-migrated"
