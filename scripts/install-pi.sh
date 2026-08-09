@@ -41,6 +41,21 @@ if [ -n "$active_pids" ]; then
   exit 1
 fi
 
+copy_missing_tree() {
+  source_tree=$1
+  target_tree=$2
+  (cd "$source_tree" && find . -mindepth 1 -type d -print) |
+    while IFS= read -r relative_path; do
+      mkdir -p "$target_tree/$relative_path"
+    done
+  (cd "$source_tree" && find . -mindepth 1 -type f -print) |
+    while IFS= read -r relative_path; do
+      if [ ! -e "$target_tree/$relative_path" ]; then
+        cp -p "$source_tree/$relative_path" "$target_tree/$relative_path"
+      fi
+    done
+}
+
 install -d -m 0755 /usr/local/lib /usr/local/bin /usr/local/sbin /usr/local/lib/hobot-code-backups
 install -d -m 0750 "$backup_dir"
 
@@ -62,11 +77,6 @@ for config_name in settings.json models.json permissions.json memory.json goals.
   install -m 0644 "$package_dir/config/$config_name" "$new_runtime/default-config/$config_name"
 done
 install -m 0644 "$package_dir/config/hobot.env.example" "$new_runtime/default-config/hobot.env.example"
-
-if [ -d /usr/local/lib/hobot-code ]; then
-  mv /usr/local/lib/hobot-code "$backup_dir/runtime-installed"
-fi
-mv "$new_runtime" /usr/local/lib/hobot-code
 
 if [ -d "$legacy_config" ]; then
   cp -a "$legacy_config" "$backup_dir/legacy-etc-hobot-code"
@@ -110,7 +120,7 @@ fi
 if [ ! -e "$state_root/.system-layout-migrated" ]; then
   for state_name in sessions memory goals audit; do
     if [ -d "$legacy_state/$state_name" ]; then
-      cp -a --update=none "$legacy_state/$state_name/." "$state_root/$state_name/"
+      copy_missing_tree "$legacy_state/$state_name" "$state_root/$state_name"
     fi
   done
   : > "$state_root/.system-layout-migrated"
@@ -122,10 +132,15 @@ find "$state_root" -type d -exec chmod 0700 {} \;
 find "$config_root" -type f -exec chmod 0600 {} \;
 find "$state_root" -type f -exec chmod 0600 {} \;
 
-rm -rf "$legacy_config" "$legacy_state"
+if [ -d /usr/local/lib/hobot-code ]; then
+  mv /usr/local/lib/hobot-code "$backup_dir/runtime-installed"
+fi
+mv "$new_runtime" /usr/local/lib/hobot-code
 
 install -m 0755 "$package_dir/hobot-launcher" /usr/local/bin/hobot
 install -m 0755 "$package_dir/rollback.sh" /usr/local/sbin/hobot-rollback
+
+rm -rf "$legacy_config" "$legacy_state"
 
 if [ -d "$backup_dir/runtime-installed" ]; then
   printf '%s\n' "$backup_dir" > /usr/local/lib/hobot-code/LAST_BACKUP
