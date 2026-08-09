@@ -21,12 +21,16 @@ if [ -e /usr/local/bin/aster ]; then
     install -m 0755 /usr/local/bin/aster /usr/local/bin/aster-legacy
   fi
 fi
+if [ -e /usr/local/bin/hobot ]; then
+  install -m 0755 /usr/local/bin/hobot "$backup_dir/hobot-command"
+fi
 install -d -m 0755 "$new_runtime"
 cp -R "$package_dir/runtime/." "$new_runtime/"
-install -d -m 0755 "$new_runtime/extensions" "$new_runtime/skills" "$new_runtime/knowledge"
+install -d -m 0755 "$new_runtime/extensions" "$new_runtime/skills" "$new_runtime/knowledge" "$new_runtime/prompts"
 cp -R "$package_dir/extensions/." "$new_runtime/extensions/"
 cp -R "$package_dir/skills/." "$new_runtime/skills/"
 cp -R "$package_dir/knowledge/." "$new_runtime/knowledge/"
+cp -R "$package_dir/prompts/." "$new_runtime/prompts/"
 install -m 0644 "$package_dir/PI_RUNTIME" "$new_runtime/PI_RUNTIME"
 install -m 0644 "$package_dir/VERSION" "$new_runtime/VERSION"
 
@@ -50,15 +54,18 @@ if [ ! -e /etc/aster/aster.env ]; then
   install -m 0600 "$package_dir/config/aster.env.example" /etc/aster/aster.env
 fi
 
-install -m 0755 "$package_dir/aster-launcher" /usr/local/bin/aster
+install -m 0755 "$package_dir/hobot-launcher" /usr/local/bin/hobot
+install -m 0755 "$package_dir/hobot-launcher" /usr/local/bin/aster
+install -m 0755 "$package_dir/rollback.sh" /usr/local/sbin/hobot-rollback
 install -m 0755 "$package_dir/rollback.sh" /usr/local/sbin/aster-rollback
 
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet aster.service; then
   systemctl disable --now aster.service
-  printf 'Stopped legacy aster.service; Aster 0.5 is an interactive Pi-compatible CLI.\n'
+  printf 'Stopped legacy aster.service; Hobot Code is an interactive Pi-compatible CLI.\n'
 fi
 
 printf '%s\n' "$backup_dir" > /usr/local/lib/aster/LAST_BACKUP
-/usr/local/bin/aster --version
-printf 'Installed Aster %s. Run: aster\n' "$version"
-printf 'Rollback: aster-rollback\n'
+/usr/local/bin/hobot --version
+printf 'Installed Hobot Code %s. Run: hobot\n' "$version"
+printf 'Compatibility alias: aster\n'
+printf 'Rollback: hobot-rollback\n'

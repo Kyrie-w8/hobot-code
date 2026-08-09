@@ -1,11 +1,11 @@
 {
-  "name": "aster-edge",
-  "version": "0.6.0",
-  "description": "Pi-compatible agent adapted for D-Robotics RDK boards",
+  "name": "hobot-code",
+  "version": "0.7.0",
+  "description": "Hobot Code, a Pi-compatible development agent for D-Robotics RDK boards",
   "type": "module",
   "piConfig": {
-    "name": "aster",
-    "configDir": ".aster"
+    "name": "hobot",
+    "configDir": ".hobot"
   },
   "license": "MIT",
   "repository": {

@@ -27,6 +27,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
 const DEFAULT_MODEL = "kimi-k3";
+const DEFAULT_EXPERT_PROMPT_PATH = "/usr/local/lib/aster/prompts/rdk-expert.md";
+const EXPERT_PROMPT_MARKER = "# Hobot Code 地瓜机器人 RDK 开发专家";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -250,7 +252,41 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 function knowledgeRoot(): string {
-  return resolve(process.env.ASTER_RDK_KNOWLEDGE_DIR || "/usr/local/lib/aster/knowledge");
+  return resolve(
+    process.env.HOBOT_CODE_RDK_KNOWLEDGE_DIR
+      || process.env.ASTER_RDK_KNOWLEDGE_DIR
+      || "/usr/local/lib/aster/knowledge",
+  );
+}
+
+function expertPromptPath(): string {
+  return resolve(
+    process.env.HOBOT_CODE_RDK_EXPERT_PROMPT
+      || process.env.ASTER_RDK_EXPERT_PROMPT
+      || DEFAULT_EXPERT_PROMPT_PATH,
+  );
+}
+
+async function renderExpertPrompt(snapshot: BoardSnapshot): Promise<string> {
+  let prompt: string;
+  try {
+    prompt = await readFile(expertPromptPath(), "utf8");
+  } catch {
+    prompt = `${EXPERT_PROMPT_MARKER}\n\nYou are a D-Robotics RDK embedded AI expert. Use rdk_docs_search for versioned platform knowledge and system_snapshot for live evidence. Do not make specialized claims while the complete expert prompt file is unavailable.`;
+  }
+
+  const replacements: Record<string, string> = {
+    "{{BOARD_NAME}}": snapshot.board,
+    "{{BOARD_ID}}": snapshot.boardId,
+    "{{RDK_OS_VERSION}}": snapshot.rdkOsVersion,
+    "{{DOCUMENTATION_TRACK}}": snapshot.documentationTrack,
+    "{{HOSTNAME}}": snapshot.hostname,
+    "{{ARCHITECTURE}}": snapshot.architecture,
+  };
+  for (const [token, value] of Object.entries(replacements)) {
+    prompt = prompt.replaceAll(token, () => sanitizeText(value));
+  }
+  return prompt.trim();
 }
 
 async function loadKnowledgeManifest(root: string): Promise<KnowledgeManifest> {
@@ -490,7 +526,7 @@ function streamDrobotics(
           Accept: "application/json",
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
-          "User-Agent": "aster-edge/0.5",
+          "User-Agent": "hobot-code/0.7",
           ...configuredHeaders,
         },
         body: JSON.stringify(body),
@@ -686,17 +722,18 @@ export default function rdkExtension(pi: ExtensionAPI) {
     try {
       const snapshot = await getBoardSnapshot(false);
       currentSnapshot = snapshot;
-      ctx.ui.setStatus("aster-rdk", compactBoardSummary(snapshot));
+      ctx.ui.setStatus("hobot-rdk", compactBoardSummary(snapshot));
     } catch {
-      ctx.ui.setStatus("aster-rdk", "RDK status unavailable");
+      ctx.ui.setStatus("hobot-rdk", "RDK status unavailable");
     }
   });
 
   pi.on("before_agent_start", async (event) => {
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
+    const expertPrompt = await renderExpertPrompt(snapshot);
     return {
-      systemPrompt: `${event.systemPrompt}\n\n## D-Robotics board runtime\nDetected board: ${snapshot.board} (${snapshot.boardId}); RDK OS: ${snapshot.rdkOsVersion}; documentation track: ${snapshot.documentationTrack}. For specialized RDK claims, first use rdk_docs_search and check its versionMatch field. Use system_snapshot for live hardware facts; documentation is not evidence of installed packages, connected peripherals, or a compatible converted model. Keep CPU, memory, disk, and thermal load bounded. Do not place an LLM agent in a motor, CAN, GPIO, or other hard real-time control loop.`,
+      systemPrompt: `${event.systemPrompt}\n\n${expertPrompt}`,
     };
   });
 
@@ -724,7 +761,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("doctor", {
-    description: "Show live D-Robotics board and Aster runtime status",
+    description: "Show live D-Robotics board and Hobot Code runtime status",
     handler: async (_args, ctx) => {
       const snapshot = await getBoardSnapshot(true);
       ctx.ui.notify(JSON.stringify(snapshot, null, 2), "info");
@@ -757,9 +794,22 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("system-prompt", {
+    description: "Show the effective Pi and D-Robotics expert system prompt",
+    handler: async (_args, ctx) => {
+      const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
+      currentSnapshot = snapshot;
+      const currentPrompt = ctx.getSystemPrompt();
+      const prompt = currentPrompt.includes(EXPERT_PROMPT_MARKER)
+        ? currentPrompt
+        : `${currentPrompt}\n\n${await renderExpertPrompt(snapshot)}`;
+      ctx.ui.notify(prompt, "info");
+    },
+  });
+
   for (const alias of ["exit", "q"]) {
     pi.registerCommand(alias, {
-      description: "Quit Aster",
+      description: "Quit Hobot Code",
       handler: async (_args, ctx) => ctx.shutdown(),
     });
   }

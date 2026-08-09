@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+- Rename the product to Hobot Code with `hobot` as the primary command and `aster` as a compatibility alias.
+- Add a complete D-Robotics RDK expert role covering evidence, platform routing, model deployment, multimedia, TROS, hardware interfaces, performance, safety, and delivery standards.
+- Render the expert role with the live board model, RDK OS version, documentation track, hostname, and architecture on every agent turn.
+- Add `/system-prompt` for inspecting the effective Pi and Hobot Code expert prompt.
+- Package and validate the standalone expert prompt while retaining a conservative missing-file fallback.
+- Update bundled Skills to use Pi's current `read`, `bash`, `edit`, and `write` tool contract.
+
 ## 0.6.0
 
 - Detect X5, S100, and S600 board IDs plus the complete `/etc/version` RDK OS string.
