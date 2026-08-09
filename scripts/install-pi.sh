@@ -118,7 +118,7 @@ if [ ! -e "$config_root/hobot.env" ]; then
 fi
 
 if [ ! -e "$state_root/.system-layout-migrated" ]; then
-  for state_name in sessions memory goals audit; do
+  for state_name in memory goals audit; do
     if [ -d "$legacy_state/$state_name" ]; then
       copy_missing_tree "$legacy_state/$state_name" "$state_root/$state_name"
     fi
