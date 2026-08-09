@@ -25,15 +25,15 @@
     }
   },
   "httpIdleTimeoutMs": 3000000,
-  "sessionDir": "/var/lib/aster/pi-sessions",
+  "sessionDir": "/var/lib/hobot-code/sessions",
   "enabledModels": [
     "drobotics/kimi-k3"
   ],
   "extensions": [
-    "/usr/local/lib/aster/extensions"
+    "/usr/local/lib/hobot-code/extensions"
   ],
   "skills": [
-    "/usr/local/lib/aster/skills"
+    "/usr/local/lib/hobot-code/skills"
   ],
   "enableSkillCommands": true
 }

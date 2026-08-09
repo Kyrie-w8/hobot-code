@@ -1,27 +1,27 @@
-# Hobot Code 0.7 配置
+# Hobot Code 0.8 配置
 
 ## 路径
 
 | 路径 | 作用 |
 |---|---|
-| `/etc/aster/aster.env` | root-only 模型密钥和端点 |
-| `/etc/aster/agent/settings.json` | Pi/Hobot Code 全局设置（兼容路径） |
-| `/etc/aster/agent/models.json` | 自定义 Provider 和模型 |
-| `/etc/aster/agent/auth.json` | `/login` 保存的认证信息 |
-| `/etc/aster/agent/bin` | 固定版本的 fd 和 ripgrep |
-| `/var/lib/aster/pi-sessions` | Pi JSONL 会话 |
-| `/usr/local/lib/aster/extensions` | RDK 扩展 |
-| `/usr/local/lib/aster/skills` | 板端 Skills |
-| `/usr/local/lib/aster/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
-| `/usr/local/lib/aster/prompts/rdk-expert.md` | 动态渲染的地瓜开发专家角色模板 |
+| `/etc/hobot-code/hobot.env` | root-only 模型密钥和端点 |
+| `/etc/hobot-code/agent/settings.json` | Pi/Hobot Code 全局设置 |
+| `/etc/hobot-code/agent/models.json` | 自定义 Provider 和模型 |
+| `/etc/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
+| `/etc/hobot-code/agent/bin` | 固定版本的 fd 和 ripgrep |
+| `/var/lib/hobot-code/sessions` | Pi JSONL 会话 |
+| `/usr/local/lib/hobot-code/extensions` | RDK 扩展 |
+| `/usr/local/lib/hobot-code/skills` | 板端 Skills |
+| `/usr/local/lib/hobot-code/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
+| `/usr/local/lib/hobot-code/prompts/rdk-expert.md` | 动态渲染的地瓜开发专家角色模板 |
 
-启动器设置 `HOBOT_CODING_AGENT_DIR=/etc/aster/agent`。项目目录使用 `.hobot/`
+启动器设置 `HOBOT_CODING_AGENT_DIR=/etc/hobot-code/agent`。项目目录使用 `.hobot/`
 放置局部 settings、extensions、skills、prompts 和 themes；Pi 的 project trust 机制会在
 首次加载项目资源前询问。
 
 ## D-Robotics Kimi
 
-`/etc/aster/aster.env`：
+`/etc/hobot-code/hobot.env`：
 
 ```text
 ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
@@ -102,7 +102,3 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 专家模板中的 `BOARD_NAME`、`BOARD_ID`、`RDK_OS_VERSION`、`DOCUMENTATION_TRACK`、
 `HOSTNAME` 和 `ARCHITECTURE` 占位符由扩展动态替换。修改模板后运行 `make pi-check`，
 可在板端用 `/system-prompt` 检查最终内容。
-
-迁移期继续识别 `ASTER_CODING_AGENT_DIR`、`ASTER_CODING_AGENT_SESSION_DIR`、
-`ASTER_RDK_KNOWLEDGE_DIR` 和 `ASTER_RDK_EXPERT_PROMPT`，已有 `/etc/aster`、
-`/var/lib/aster` 数据不会被移动或重建。

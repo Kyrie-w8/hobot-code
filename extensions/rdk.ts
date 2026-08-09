@@ -27,7 +27,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
 const DEFAULT_MODEL = "kimi-k3";
-const DEFAULT_EXPERT_PROMPT_PATH = "/usr/local/lib/aster/prompts/rdk-expert.md";
+const DEFAULT_EXPERT_PROMPT_PATH = "/usr/local/lib/hobot-code/prompts/rdk-expert.md";
 const EXPERT_PROMPT_MARKER = "# Hobot Code 地瓜机器人 RDK 开发专家";
 
 type JsonRecord = Record<string, unknown>;
@@ -254,15 +254,13 @@ function occurrences(haystack: string, needle: string): number {
 function knowledgeRoot(): string {
   return resolve(
     process.env.HOBOT_CODE_RDK_KNOWLEDGE_DIR
-      || process.env.ASTER_RDK_KNOWLEDGE_DIR
-      || "/usr/local/lib/aster/knowledge",
+      || "/usr/local/lib/hobot-code/knowledge",
   );
 }
 
 function expertPromptPath(): string {
   return resolve(
     process.env.HOBOT_CODE_RDK_EXPERT_PROMPT
-      || process.env.ASTER_RDK_EXPERT_PROMPT
       || DEFAULT_EXPERT_PROMPT_PATH,
   );
 }

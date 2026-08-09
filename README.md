@@ -25,36 +25,46 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.7.0
+make release VERSION=0.8.0
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.7.0-linux-arm64.tar.gz
+dist/hobot-code-0.8.0-linux-arm64.tar.gz
+```
+
+在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
+归档，并通过 `HOBOT_CODE_TOOL_BUNDLE_DIR` 提供已经解压的 `fd`、`rg` 及对应许可证。
+脚本仍会按 `pi-runtime/pi.lock` 和 `pi-runtime/tools.lock` 校验每个文件：
+
+```bash
+HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
+HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
+make release VERSION=0.8.0
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.7.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.8.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.7.0-linux-arm64.tar.gz
-cd hobot-code-0.7.0-linux-arm64
+tar -xzf hobot-code-0.8.0-linux-arm64.tar.gz
+cd hobot-code-0.8.0-linux-arm64
 ./install.sh
 ```
 
-安装器会保留 `/etc/aster/aster.env`，将现有 Hobot Code/Aster 命令和运行时备份到
-`/usr/local/lib/aster-backups/`。这些旧路径作为无损升级兼容层继续使用。
+安装器会保留 `/etc/hobot-code/hobot.env` 和用户配置，并把当前运行时备份到
+`/usr/local/lib/hobot-code-backups/`。
 
 ## 模型配置
 
 默认接入 D-Robotics Kimi 网关：
 
 ```bash
-chmod 600 /etc/aster/aster.env
-vi /etc/aster/aster.env
+chmod 600 /etc/hobot-code/hobot.env
+vi /etc/hobot-code/hobot.env
 ```
 
 ```text
@@ -70,7 +80,7 @@ Hobot Code Provider 会将 thinking、文本、工具调用和 usage 转换为 P
 运行时也保留 Pi 的其他模型接入方式：
 
 - 在 `/model` 中选择已配置厂商模型。
-- 编辑 `/etc/aster/agent/models.json` 添加 Ollama、vLLM、LM Studio 或兼容网关。
+- 编辑 `/etc/hobot-code/agent/models.json` 添加 Ollama、vLLM、LM Studio 或兼容网关。
 - 使用 `/login <provider>` 配置 Pi 支持的登录型 Provider。
 - 使用 `hobot install <package>` 安装 Pi 扩展包。
 
@@ -127,7 +137,7 @@ hobot --resume
 `system_snapshot`，读取板卡型号、完整 RDK OS 版本、CPU、内存、负载、温度、BPU 设备
 节点和 RDK 工具。实时硬件详情不会自动加入每次系统 Prompt。
 
-板卡专业知识位于 `/usr/local/lib/aster/knowledge`。Hobot Code 根据 device tree 中的型号和
+板卡专业知识位于 `/usr/local/lib/hobot-code/knowledge`。Hobot Code 根据 device tree 中的型号和
 `/etc/version` 自动选择 X5 3.x、S100 4.x 或 S600 5.x 资料，通过 `rdk_docs_search` 按需
 返回短摘要、适用版本和地瓜官方来源，不把整套文档塞进上下文。用户也可直接运行：
 
@@ -142,8 +152,8 @@ hobot --resume
 完整专家角色位于 `prompts/rdk-expert.md`。它不会替代 Pi 的编码工具规则，而是追加完整
 的地瓜平台工程约束；每次模型调用都会动态填充板卡、RDK OS、文档线、主机名和架构。
 
-会话保存在 `/var/lib/aster/pi-sessions`，与 0.4 的 SQLite 数据分离。全局配置位于
-`/etc/aster/agent`，板端扩展和 Skills 位于 `/usr/local/lib/aster`。
+会话保存在 `/var/lib/hobot-code/sessions`。全局配置位于 `/etc/hobot-code/agent`，
+板端扩展和 Skills 位于 `/usr/local/lib/hobot-code`。
 
 ## 回滚
 
@@ -151,8 +161,7 @@ hobot --resume
 hobot-rollback
 ```
 
-该命令恢复最近一次安装前的 Hobot Code/Aster 命令和运行时。旧数据库、Pi JSONL 会话、模型密钥
-和用户配置均不会被删除。
+该命令恢复最近一次安装前的 Hobot Code 命令和运行时；会话、模型密钥和用户配置不会被删除。
 
 ## 安全边界
 
@@ -161,5 +170,4 @@ hobot-rollback
 - `system_snapshot` 只证明当前节点和工具存在，不证明任意模型已完成 BPU 转换。
 - Hobot Code 是控制面 Agent，不应进入电机、CAN、GPIO、安全或急停的硬实时闭环。
 
-`hobot` 是主命令，`aster` 与 `aster-rollback` 在迁移期继续作为兼容别名。旧 Go 0.4
-源码暂时保留用于回滚和迁移参考，`make legacy-release` 仍可构建它。
+Hobot Code 仅提供 `hobot` 和 `hobot-rollback`，不携带其他历史命令或运行时。

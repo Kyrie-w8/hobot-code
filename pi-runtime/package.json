@@ -1,6 +1,6 @@
 {
   "name": "hobot-code",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Hobot Code, a Pi-compatible development agent for D-Robotics RDK boards",
   "type": "module",
   "piConfig": {
@@ -10,6 +10,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kyrie-w8/aster-edge.git"
+    "url": "https://github.com/Kyrie-w8/hobot-code.git"
   }
 }

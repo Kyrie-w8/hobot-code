@@ -1,4 +1,4 @@
-# Hobot Code 0.7 架构
+# Hobot Code 0.8 架构
 
 ## 运行路径
 
@@ -41,8 +41,8 @@ InteractiveMode、SessionManager、TUI 组件或消息队列。
 
 ## 数据和隐私
 
-Pi JSONL 会话存放在 `/var/lib/aster/pi-sessions`。0.4 的 SQLite 数据保持原路径且不自动
-转换，避免不完整映射破坏工具轨迹。需要迁移时应显式导出旧会话再导入 Pi。
+Pi JSONL 会话存放在 `/var/lib/hobot-code/sessions`。终端展示与执行状态由 Pi 会话模型统一
+管理，Hobot Code 不维护第二套数据库或消息模型。
 
 RDK footer 在本地读取状态。系统 Prompt 加入完整但不携带手册正文的专家角色；完整硬件
 详情与知识正文分别只在模型调用 `system_snapshot`、`rdk_docs_search` 时进入上下文。
@@ -50,6 +50,5 @@ RDK footer 在本地读取状态。系统 Prompt 加入完整但不携带手册�
 ## 部署与回滚
 
 发行包包含 Pi、fd、ripgrep 的官方 ARM64 二进制及许可证，并锁定版本和 SHA256。
-为兼容现有部署，安装目录暂时保留 `/usr/local/lib/aster`；主启动器为
-`/usr/local/bin/hobot`，`/usr/local/bin/aster` 是兼容别名。安装前的命令和运行时放入
-`/usr/local/lib/aster-backups/<UTC timestamp>`，`hobot-rollback` 可恢复。
+安装目录为 `/usr/local/lib/hobot-code`，启动器为 `/usr/local/bin/hobot`。安装前的命令和
+运行时放入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`，`hobot-rollback` 可恢复。

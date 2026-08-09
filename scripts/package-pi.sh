@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.7.0}
+version=${1:-0.8.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root_dir/pi-runtime/pi.lock"
 . "$root_dir/pi-runtime/tools.lock"
 
-cache_dir=${ASTER_PI_CACHE_DIR:-$root_dir/dist/pi-cache}
+cache_dir=${HOBOT_CODE_PI_CACHE_DIR:-$root_dir/dist/pi-cache}
 archive="$cache_dir/pi-linux-arm64-$PI_VERSION.tar.gz"
 fd_archive="$cache_dir/fd-linux-arm64-$FD_VERSION.tar.gz"
 rg_archive="$cache_dir/ripgrep-linux-arm64-$RIPGREP_VERSION.tar.gz"
@@ -14,17 +14,14 @@ stage_dir="$root_dir/dist/hobot-code-$version-linux-arm64"
 output="$root_dir/dist/hobot-code-$version-linux-arm64.tar.gz"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/hobot-code-pi-package.XXXXXX")
 trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
+tool_bundle_dir=${HOBOT_CODE_TOOL_BUNDLE_DIR:-}
 
 mkdir -p "$cache_dir" "$root_dir/dist"
 
-download_and_verify() {
-  url=$1
-  destination=$2
-  expected=$3
-  label=$4
-  if [ ! -f "$destination" ]; then
-    curl -fL --retry 3 --retry-delay 2 "$url" -o "$destination"
-  fi
+verify_file() {
+  destination=$1
+  expected=$2
+  label=$3
   if command -v sha256sum >/dev/null 2>&1; then
     actual=$(sha256sum "$destination" | awk '{print $1}')
   else
@@ -36,9 +33,22 @@ download_and_verify() {
   fi
 }
 
+download_and_verify() {
+  url=$1
+  destination=$2
+  expected=$3
+  label=$4
+  if [ ! -f "$destination" ]; then
+    curl -fL --retry 3 --retry-delay 2 "$url" -o "$destination"
+  fi
+  verify_file "$destination" "$expected" "$label"
+}
+
 download_and_verify "$PI_LINUX_ARM64_URL" "$archive" "$PI_LINUX_ARM64_SHA256" "Pi archive"
-download_and_verify "$FD_LINUX_ARM64_URL" "$fd_archive" "$FD_LINUX_ARM64_SHA256" "fd archive"
-download_and_verify "$RIPGREP_LINUX_ARM64_URL" "$rg_archive" "$RIPGREP_LINUX_ARM64_SHA256" "ripgrep archive"
+if [ -z "$tool_bundle_dir" ]; then
+  download_and_verify "$FD_LINUX_ARM64_URL" "$fd_archive" "$FD_LINUX_ARM64_SHA256" "fd archive"
+  download_and_verify "$RIPGREP_LINUX_ARM64_URL" "$rg_archive" "$RIPGREP_LINUX_ARM64_SHA256" "ripgrep archive"
+fi
 
 tar -xzf "$archive" -C "$temp_dir"
 rm -rf "$stage_dir"
@@ -55,23 +65,38 @@ cp -R "$root_dir/knowledge/." "$stage_dir/knowledge/"
 install -m 0644 "$root_dir/prompts/rdk-expert.md" "$stage_dir/prompts/rdk-expert.md"
 install -m 0644 "$root_dir/packaging/pi/settings.json" "$stage_dir/config/settings.json"
 install -m 0644 "$root_dir/packaging/pi/models.json" "$stage_dir/config/models.json"
-install -m 0600 "$root_dir/packaging/pi/aster.env.example" "$stage_dir/config/aster.env.example"
-install -m 0755 "$root_dir/packaging/pi/aster-launcher" "$stage_dir/hobot-launcher"
+install -m 0600 "$root_dir/packaging/pi/hobot.env.example" "$stage_dir/config/hobot.env.example"
+install -m 0755 "$root_dir/packaging/pi/hobot-launcher" "$stage_dir/hobot-launcher"
 install -m 0755 "$root_dir/scripts/install-pi.sh" "$stage_dir/install.sh"
 install -m 0755 "$root_dir/scripts/rollback-pi.sh" "$stage_dir/rollback.sh"
 install -m 0644 "$root_dir/LICENSES/pi-mono-MIT.txt" "$stage_dir/licenses/pi-mono-MIT.txt"
 install -m 0644 "$root_dir/LICENSE" "$stage_dir/licenses/hobot-code-MIT.txt"
 
-tar -xzf "$fd_archive" -C "$temp_dir"
-tar -xzf "$rg_archive" -C "$temp_dir"
-fd_root="$temp_dir/fd-v$FD_VERSION-aarch64-unknown-linux-gnu"
-rg_root="$temp_dir/ripgrep-$RIPGREP_VERSION-aarch64-unknown-linux-gnu"
-install -m 0755 "$fd_root/fd" "$stage_dir/managed-bin/fd"
-install -m 0755 "$rg_root/rg" "$stage_dir/managed-bin/rg"
-install -m 0644 "$fd_root/LICENSE-MIT" "$stage_dir/licenses/fd-MIT.txt"
-install -m 0644 "$fd_root/LICENSE-APACHE" "$stage_dir/licenses/fd-APACHE-2.0.txt"
-install -m 0644 "$rg_root/LICENSE-MIT" "$stage_dir/licenses/ripgrep-MIT.txt"
-install -m 0644 "$rg_root/UNLICENSE" "$stage_dir/licenses/ripgrep-UNLICENSE.txt"
+if [ -n "$tool_bundle_dir" ]; then
+  verify_file "$tool_bundle_dir/fd" "$FD_LINUX_ARM64_BINARY_SHA256" "fd binary"
+  verify_file "$tool_bundle_dir/rg" "$RIPGREP_LINUX_ARM64_BINARY_SHA256" "ripgrep binary"
+  verify_file "$tool_bundle_dir/fd-MIT.txt" "$FD_MIT_SHA256" "fd MIT license"
+  verify_file "$tool_bundle_dir/fd-APACHE-2.0.txt" "$FD_APACHE_SHA256" "fd Apache license"
+  verify_file "$tool_bundle_dir/ripgrep-MIT.txt" "$RIPGREP_MIT_SHA256" "ripgrep MIT license"
+  verify_file "$tool_bundle_dir/ripgrep-UNLICENSE.txt" "$RIPGREP_UNLICENSE_SHA256" "ripgrep unlicense"
+  install -m 0755 "$tool_bundle_dir/fd" "$stage_dir/managed-bin/fd"
+  install -m 0755 "$tool_bundle_dir/rg" "$stage_dir/managed-bin/rg"
+  install -m 0644 "$tool_bundle_dir/fd-MIT.txt" "$stage_dir/licenses/fd-MIT.txt"
+  install -m 0644 "$tool_bundle_dir/fd-APACHE-2.0.txt" "$stage_dir/licenses/fd-APACHE-2.0.txt"
+  install -m 0644 "$tool_bundle_dir/ripgrep-MIT.txt" "$stage_dir/licenses/ripgrep-MIT.txt"
+  install -m 0644 "$tool_bundle_dir/ripgrep-UNLICENSE.txt" "$stage_dir/licenses/ripgrep-UNLICENSE.txt"
+else
+  tar -xzf "$fd_archive" -C "$temp_dir"
+  tar -xzf "$rg_archive" -C "$temp_dir"
+  fd_root="$temp_dir/fd-v$FD_VERSION-aarch64-unknown-linux-gnu"
+  rg_root="$temp_dir/ripgrep-$RIPGREP_VERSION-aarch64-unknown-linux-gnu"
+  install -m 0755 "$fd_root/fd" "$stage_dir/managed-bin/fd"
+  install -m 0755 "$rg_root/rg" "$stage_dir/managed-bin/rg"
+  install -m 0644 "$fd_root/LICENSE-MIT" "$stage_dir/licenses/fd-MIT.txt"
+  install -m 0644 "$fd_root/LICENSE-APACHE" "$stage_dir/licenses/fd-APACHE-2.0.txt"
+  install -m 0644 "$rg_root/LICENSE-MIT" "$stage_dir/licenses/ripgrep-MIT.txt"
+  install -m 0644 "$rg_root/UNLICENSE" "$stage_dir/licenses/ripgrep-UNLICENSE.txt"
+fi
 
 printf '%s\n' "$version" > "$stage_dir/VERSION"
 COPYFILE_DISABLE=1 tar --no-xattrs -C "$root_dir/dist" -czf "$output" "hobot-code-$version-linux-arm64"

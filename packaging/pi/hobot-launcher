@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/hobot-code/hobot.env ]; then
+  set -a
+  . /etc/hobot-code/hobot.env
+  set +a
+fi
+
+hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-/etc/hobot-code/agent}
+hobot_session_dir=${HOBOT_CODING_AGENT_SESSION_DIR:-/var/lib/hobot-code/sessions}
+export HOBOT_CODING_AGENT_DIR="$hobot_agent_dir"
+export HOBOT_CODING_AGENT_SESSION_DIR="$hobot_session_dir"
+export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
+
+exec /usr/local/lib/hobot-code/hobot "$@"

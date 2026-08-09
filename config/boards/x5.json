@@ -1,6 +1,0 @@
-{
-  "board": {
-    "profile": "x5",
-    "prompt": "RDK X5 has 8 ARM64 CPU cores and about 7 GiB visible RAM. Prefer LAN/cloud models, short context, and local preprocessing. hrt_model_exec availability does not imply that an arbitrary LLM is compatible."
-  }
-}
