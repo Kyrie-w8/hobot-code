@@ -1,4 +1,4 @@
-# Hobot Code 0.9 配置
+# Hobot Code 0.10 配置
 
 ## 路径
 
@@ -9,8 +9,10 @@
 | `/etc/hobot-code/agent/models.json` | 自定义 Provider 和模型 |
 | `/etc/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
 | `/etc/hobot-code/agent/permissions.json` | allow/ask/deny 工具权限策略 |
+| `/etc/hobot-code/agent/memory.json` | 持久化记忆开关、检索与长度上限 |
 | `/etc/hobot-code/agent/bin` | 固定版本的 fd 和 ripgrep |
 | `/var/lib/hobot-code/sessions` | Pi JSONL 会话 |
+| `/var/lib/hobot-code/memory/memory.db` | root-only SQLite/FTS5 持久化记忆与审计事件 |
 | `/usr/local/lib/hobot-code/extensions` | RDK 扩展 |
 | `/usr/local/lib/hobot-code/skills` | 板端 Skills |
 | `/usr/local/lib/hobot-code/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
@@ -141,3 +143,27 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 每个会话会从项目配置初始化，然后用 Pi custom entry 持久化会话覆盖和最近运行结果。
 `/gate set`、`add`、`remove`、`timeout` 和 `clear` 只改变当前会话，`/gate reload` 重新加载项目
 配置。命令顺序执行，首个失败即停止，输出脱敏并截断；通过结果记录当前工作区指纹。
+
+## 持久化记忆
+
+`/etc/hobot-code/agent/memory.json` 默认值：
+
+```json
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "autoRecall": true,
+  "maxInjected": 6,
+  "maxSearchResults": 10,
+  "maxContentChars": 4000,
+  "defaultExpiresDays": null
+}
+```
+
+`maxInjected` 是每轮自动召回的最大条数，`maxSearchResults` 是单次显式检索上限，
+`defaultExpiresDays` 为 `null` 时不自动过期。修改后执行 `/memory reload`。开发测试可用
+`HOBOT_CODE_MEMORY_CONFIG`、`HOBOT_CODE_MEMORY_DB` 和 `HOBOT_CODE_MEMORY_USER` 覆盖路径或本地用户键。
+
+作用域为 `user`、`project`、`board`、`session`；类型为 `preference`、`decision`、`fact`、
+`fix`、`instruction`、`note`。重复内容会刷新时间而不是新建副本。写入、检索、删除、
+清空和过期操作都写审计事件，审计详情只保存内容哈希和作用域，不复制记忆正文。

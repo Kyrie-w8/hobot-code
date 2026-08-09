@@ -9,10 +9,14 @@ import {
   describeToolCall,
   fingerprintWorkspace,
   initializeProject,
+  memoryMatchQuery,
+  parseMemoryConfig,
   parsePolicy,
   parseQualityConfig,
   resolveToolAction,
+  sensitiveMemoryReasons,
   setPolicyRule,
+  validateMemoryInput,
 } from "../extensions/rdk/control-plane.mjs";
 
 const snapshot = {
@@ -50,6 +54,14 @@ test("approval descriptions redact credentials", () => {
   const description = describeToolCall("bash", { command: "curl -H 'Authorization: Bearer secret-value' sk-private123" });
   assert.doesNotMatch(description, /secret-value|sk-private123/);
   assert.match(description, /REDACTED/);
+  assert.doesNotMatch(
+    describeToolCall("memory_save", {
+      scope: "project",
+      kind: "fact",
+      content: "-----BEGIN PRIVATE KEY-----\nvery-secret-material\n-----END PRIVATE KEY-----",
+    }),
+    /very-secret-material/,
+  );
 });
 
 test("project initialization creates defaults and never overwrites AGENTS.md", async () => {
@@ -84,4 +96,27 @@ test("workspace fingerprint changes after a source edit", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("memory config and scope validation are bounded", () => {
+  assert.deepEqual(parseMemoryConfig({
+    schemaVersion: 1,
+    enabled: true,
+    autoRecall: true,
+    maxInjected: 6,
+    maxSearchResults: 10,
+    maxContentChars: 4000,
+    defaultExpiresDays: null,
+  }).maxInjected, 6);
+  assert.equal(validateMemoryInput("project", "decision", "Use make check").content, "Use make check");
+  assert.throws(() => validateMemoryInput("global", "fact", "value"), /scope/);
+});
+
+test("memory rejects secrets and builds a bounded FTS query", () => {
+  assert.deepEqual(sensitiveMemoryReasons("ANTHROPIC_AUTH_TOKEN=secret-value"), ["secret assignment"]);
+  assert.throws(
+    () => validateMemoryInput("user", "preference", "Use token sk-private123"),
+    /sensitive data/,
+  );
+  assert.equal(memoryMatchQuery("S600 部署 S600"), '"S600" OR "部署"');
 });

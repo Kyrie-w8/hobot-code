@@ -9,6 +9,8 @@
     { "tool": "system_snapshot", "action": "allow" },
     { "tool": "rdk_docs_search", "action": "allow" },
     { "tool": "quality_gate", "action": "ask" },
+    { "tool": "memory_search", "action": "allow" },
+    { "tool": "memory_save", "action": "ask" },
     { "tool": "mcp:*", "action": "ask" }
   ]
 }

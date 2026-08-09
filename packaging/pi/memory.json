@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "autoRecall": true,
+  "maxInjected": 6,
+  "maxSearchResults": 10,
+  "maxContentChars": 4000,
+  "defaultExpiresDays": null
+}

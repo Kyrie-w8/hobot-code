@@ -25,13 +25,13 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.9.0
+make release VERSION=0.10.0
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.9.0-linux-arm64.tar.gz
+dist/hobot-code-0.10.0-linux-arm64.tar.gz
 ```
 
 在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
@@ -41,17 +41,17 @@ dist/hobot-code-0.9.0-linux-arm64.tar.gz
 ```bash
 HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
 HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
-make release VERSION=0.9.0
+make release VERSION=0.10.0
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.9.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.10.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.9.0-linux-arm64.tar.gz
-cd hobot-code-0.9.0-linux-arm64
+tar -xzf hobot-code-0.10.0-linux-arm64.tar.gz
+cd hobot-code-0.10.0-linux-arm64
 ./install.sh
 ```
 
@@ -110,6 +110,7 @@ hobot
 /permissions    查看或修改工具权限
 /init           生成项目 AGENTS.md 和质量门配置
 /gate           查看、配置或运行质量门
+/memory         查看和管理持久化记忆
 /quit           退出；Hobot Code 另外提供 /q 和 /exit
 ```
 
@@ -166,6 +167,27 @@ Make、Node、Go、Rust 或 pytest 验证命令，已有文件保持不变。质
 配置质量门后，Agent 只有在最终修改之后取得当前 `passed` 结果才能声明完成；否则 Hobot Code
 会在回复中标记该完成声明不被接受。
 
+## 持久化记忆
+
+Hobot Code 使用板端 SQLite + FTS5 保存经用户同意的长期上下文，分为 `user`、`project`、
+`board` 和 `session` 四个作用域。每轮只注入与当前问题相关的少量记忆；记忆只是可能过期
+的上下文，不能覆盖当前用户指令或实机证据。
+
+```text
+/memory status
+/memory list [user|project|board|session]
+/memory search <query>
+/memory add <scope> <preference|decision|fact|fix|instruction|note> <text>
+/memory forget <memory-id>
+/memory clear <scope>
+/memory prune
+/memory audit
+```
+
+模型可调用 `memory_search` 和 `memory_save`。默认允许检索，但每次模型写入都要交互确认；用户直接
+执行 `/memory add` 视为明确写入。密钥、Bearer Token、私钥、常见 secret 赋值和疑似银行卡号
+会被存储层拒绝。数据库位于 `/var/lib/hobot-code/memory/memory.db`，文件权限为 `0600`。
+
 ## RDK 适配
 
 `/rdk` 显示简要板卡状态，`/doctor` 显示完整诊断。模型需要实时硬件信息时会调用
@@ -187,7 +209,7 @@ Make、Node、Go、Rust 或 pytest 验证命令，已有文件保持不变。质
 完整专家角色位于 `prompts/rdk-expert.md`。它不会替代 Pi 的编码工具规则，而是追加完整
 的地瓜平台工程约束；每次模型调用都会动态填充板卡、RDK OS、文档线、主机名和架构。
 
-会话保存在 `/var/lib/hobot-code/sessions`。全局配置位于 `/etc/hobot-code/agent`，
+会话保存在 `/var/lib/hobot-code/sessions`，持久化记忆保存在 `/var/lib/hobot-code/memory`。全局配置位于 `/etc/hobot-code/agent`，
 板端扩展和 Skills 位于 `/usr/local/lib/hobot-code`。
 
 ## 回滚

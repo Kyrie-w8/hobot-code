@@ -13,8 +13,23 @@ export const DEFAULT_POLICY = Object.freeze({
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
     Object.freeze({ tool: "quality_gate", action: "ask" }),
+    Object.freeze({ tool: "memory_search", action: "allow" }),
+    Object.freeze({ tool: "memory_save", action: "ask" }),
     Object.freeze({ tool: "mcp:*", action: "ask" }),
   ]),
+});
+
+export const MEMORY_SCOPES = Object.freeze(["user", "project", "board", "session"]);
+export const MEMORY_KINDS = Object.freeze(["preference", "decision", "fact", "fix", "instruction", "note"]);
+
+export const DEFAULT_MEMORY_CONFIG = Object.freeze({
+  schemaVersion: 1,
+  enabled: true,
+  autoRecall: true,
+  maxInjected: 6,
+  maxSearchResults: 10,
+  maxContentChars: 4000,
+  defaultExpiresDays: null,
 });
 
 const permissionActions = new Set(["allow", "ask", "deny"]);
@@ -117,9 +132,11 @@ export function setPolicyRule(policy, tool, action) {
 
 export function redactSensitiveText(value, limit = 800) {
   const text = String(value ?? "")
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|$)/gi, "[REDACTED PRIVATE KEY]")
     .replace(/\b(?:sk|ak)-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]")
     .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
-    .replace(/((?:TOKEN|SECRET|PASSWORD|API_KEY)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]");
+    .replace(/((?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[REDACTED NUMBER]");
   return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }
 
@@ -129,6 +146,8 @@ export function describeToolCall(toolName, input, qualityCommands = []) {
   if (["read", "write", "edit"].includes(toolName)) target = data.path;
   else if (toolName === "bash") target = data.command;
   else if (toolName === "quality_gate" && data.action === "run") target = qualityCommands.join("\n");
+  else if (toolName === "memory_save") target = `${data.scope ?? ""}/${data.kind ?? ""}: ${data.content ?? ""}`;
+  else if (toolName === "memory_search") target = data.query;
   else target = JSON.stringify(data);
 
   const risk = toolName === "read"
@@ -137,12 +156,109 @@ export function describeToolCall(toolName, input, qualityCommands = []) {
       ? "Modifies files on the board."
       : toolName === "bash"
         ? "Executes a shell command with the current user privileges."
-        : toolName === "quality_gate"
+      : toolName === "quality_gate"
           ? "Executes the configured verification commands."
+          : toolName === "memory_save"
+            ? "Persists information and may expose it to models in future sessions."
+            : toolName === "memory_search"
+              ? "Retrieves persistent information and exposes matching results to the selected model."
           : isMcpTool(toolName)
             ? "Calls an external MCP tool which may read or change external state."
             : "Calls an extension or plugin tool.";
   return `Tool: ${toolName}\nRisk: ${risk}\nTarget:\n${redactSensitiveText(target || "(no target)")}`;
+}
+
+export function parseMemoryConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("memory config must be a JSON object");
+  }
+  if (value.schemaVersion !== 1) throw new Error("memory config schemaVersion must be 1");
+  if (typeof value.enabled !== "boolean" || typeof value.autoRecall !== "boolean") {
+    throw new Error("memory enabled and autoRecall must be booleans");
+  }
+  const maxInjected = Number(value.maxInjected);
+  const maxSearchResults = Number(value.maxSearchResults);
+  const maxContentChars = Number(value.maxContentChars);
+  if (!Number.isInteger(maxInjected) || maxInjected < 0 || maxInjected > 20) {
+    throw new Error("memory maxInjected must be between 0 and 20");
+  }
+  if (!Number.isInteger(maxSearchResults) || maxSearchResults < 1 || maxSearchResults > 50) {
+    throw new Error("memory maxSearchResults must be between 1 and 50");
+  }
+  if (!Number.isInteger(maxContentChars) || maxContentChars < 100 || maxContentChars > 20_000) {
+    throw new Error("memory maxContentChars must be between 100 and 20000");
+  }
+  const defaultExpiresDays = value.defaultExpiresDays === null || value.defaultExpiresDays === undefined
+    ? null
+    : Number(value.defaultExpiresDays);
+  if (defaultExpiresDays !== null
+    && (!Number.isInteger(defaultExpiresDays) || defaultExpiresDays < 1 || defaultExpiresDays > 3650)) {
+    throw new Error("memory defaultExpiresDays must be null or between 1 and 3650");
+  }
+  return {
+    schemaVersion: 1,
+    enabled: value.enabled,
+    autoRecall: value.autoRecall,
+    maxInjected,
+    maxSearchResults,
+    maxContentChars,
+    defaultExpiresDays,
+  };
+}
+
+export async function loadMemoryConfig(path) {
+  try {
+    return { config: parseMemoryConfig(JSON.parse(await readFile(path, "utf8"))) };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { config: { ...DEFAULT_MEMORY_CONFIG }, error: "memory config file is missing" };
+    }
+    return {
+      config: { ...DEFAULT_MEMORY_CONFIG },
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function normalizeMemoryContent(value, maxLength = DEFAULT_MEMORY_CONFIG.maxContentChars) {
+  const content = String(value ?? "").replace(/\0/g, "").replace(/\s+/g, " ").trim();
+  if (!content) throw new Error("memory content must not be empty");
+  if (content.length > maxLength) throw new Error(`memory content exceeds ${maxLength} characters`);
+  return content;
+}
+
+export function sensitiveMemoryReasons(value) {
+  const content = String(value ?? "");
+  const checks = [
+    [/(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)/i, "private key"],
+    [/\bBearer\s+[^\s,;]{8,}/i, "bearer token"],
+    [/\b(?:sk|ak)-[A-Za-z0-9_-]{8,}\b/i, "API token"],
+    [/\bAKIA[0-9A-Z]{16}\b/, "AWS access key"],
+    [/(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY)\s*[=:]\s*[^\s,;]{4,}/i, "secret assignment"],
+    [/\b(?:\d[ -]*?){13,19}\b/, "payment-card-like number"],
+  ];
+  return checks.filter(([pattern]) => pattern.test(content)).map(([_pattern, reason]) => reason);
+}
+
+export function validateMemoryInput(scope, kind, content, maxLength = DEFAULT_MEMORY_CONFIG.maxContentChars) {
+  if (!MEMORY_SCOPES.includes(scope)) throw new Error(`memory scope must be one of: ${MEMORY_SCOPES.join(", ")}`);
+  if (!MEMORY_KINDS.includes(kind)) throw new Error(`memory kind must be one of: ${MEMORY_KINDS.join(", ")}`);
+  const normalized = normalizeMemoryContent(content, maxLength);
+  const sensitive = sensitiveMemoryReasons(normalized);
+  if (sensitive.length > 0) {
+    throw new Error(`memory rejected because it may contain sensitive data: ${sensitive.join(", ")}`);
+  }
+  return { scope, kind, content: normalized };
+}
+
+export function memoryMatchQuery(value) {
+  const terms = String(value ?? "")
+    .normalize("NFKC")
+    .match(/[\p{L}\p{N}_+.-]+/gu) ?? [];
+  return [...new Set(terms.map((term) => term.slice(0, 80)).filter(Boolean))]
+    .slice(0, 16)
+    .map((term) => `"${term.replaceAll('"', '""')}"`)
+    .join(" OR ");
 }
 
 export function parseQualityConfig(value) {

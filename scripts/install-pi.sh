@@ -34,7 +34,7 @@ fi
 mv "$new_runtime" /usr/local/lib/hobot-code
 
 install -d -m 0750 /etc/hobot-code /etc/hobot-code/agent
-install -d -m 0700 /var/lib/hobot-code /var/lib/hobot-code/sessions
+install -d -m 0700 /var/lib/hobot-code /var/lib/hobot-code/sessions /var/lib/hobot-code/memory
 install -d -m 0755 /etc/hobot-code/agent/bin
 install -m 0755 "$package_dir/managed-bin/fd" /etc/hobot-code/agent/bin/fd
 install -m 0755 "$package_dir/managed-bin/rg" /etc/hobot-code/agent/bin/rg
@@ -46,6 +46,9 @@ if [ ! -e /etc/hobot-code/agent/models.json ]; then
 fi
 if [ ! -e /etc/hobot-code/agent/permissions.json ]; then
   install -m 0640 "$package_dir/config/permissions.json" /etc/hobot-code/agent/permissions.json
+fi
+if [ ! -e /etc/hobot-code/agent/memory.json ]; then
+  install -m 0640 "$package_dir/config/memory.json" /etc/hobot-code/agent/memory.json
 fi
 if [ ! -e /etc/hobot-code/hobot.env ]; then
   install -m 0600 "$package_dir/config/hobot.env.example" /etc/hobot-code/hobot.env

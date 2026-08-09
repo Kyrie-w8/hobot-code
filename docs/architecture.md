@@ -1,4 +1,4 @@
-# Hobot Code 0.9 架构
+# Hobot Code 0.10 架构
 
 ## 运行路径
 
@@ -15,6 +15,7 @@ flowchart LR
   R --> H["Board, BPU, thermal status"]
   R --> D["Versioned local RDK knowledge"]
   R --> E["Dynamic RDK expert role"]
+  R --> M["Scoped SQLite and FTS5 memory"]
   A --> X["Pi extensions, packages, Skills"]
 ```
 
@@ -24,7 +25,7 @@ flowchart LR
 
 ## 产品适配层
 
-`extensions/rdk/index.ts` 是唯一必须加载的产品扩展，包含四类适配：
+`extensions/rdk/index.ts` 是唯一必须加载的产品扩展，包含七类适配：
 
 1. D-Robotics Provider：使用 Bearer token 调用 Anthropic-compatible 网关。网关不发送
    完整 SSE 结束事件，因此适配器使用完整响应并生成 Pi 原生 thinking、text、tool call
@@ -35,17 +36,21 @@ flowchart LR
 5. 安全钩子：阻止虚拟设备文件写入，并确认工作区外写入和破坏性 Shell 命令。
 6. 板卡 UX：在 Pi 原生 footer status 中显示本机摘要，并增加 `/rdk`、`/doctor`、
    `/knowledge`、`/system-prompt` 和退出别名。
+7. 持久化记忆：使用 Bun 内置 SQLite/FTS5 按 user、project、board、session 隔离，
+   支持过期、去重、检索、召回、审计和用户删除。
 
 扩展不替换 Pi 的 `read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`，也不修改
 InteractiveMode、SessionManager、TUI 组件或消息队列。
 
 ## 数据和隐私
 
-Pi JSONL 会话存放在 `/var/lib/hobot-code/sessions`。终端展示与执行状态由 Pi 会话模型统一
-管理，Hobot Code 不维护第二套数据库或消息模型。
+Pi JSONL 会话存放在 `/var/lib/hobot-code/sessions`。终端展示与执行状态仍由 Pi 会话模型统一
+管理。Hobot Code 只另外维护 `/var/lib/hobot-code/memory/memory.db` 作为结构化长期记忆，不复制会话消息。
 
 RDK footer 在本地读取状态。系统 Prompt 加入完整但不携带手册正文的专家角色；完整硬件
 详情与知识正文分别只在模型调用 `system_snapshot`、`rdk_docs_search` 时进入上下文。
+记忆在写入前执行敏感数据检查，数据库和目录分别为 `0600` 和 `0700`。自动召回有条数上限，
+只将当前作用域内的相关条目加入模型上下文。
 
 ## 控制面
 
