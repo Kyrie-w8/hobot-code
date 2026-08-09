@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "knowledgeVersion": "2026.08.1",
+  "updatedAt": "2026-08-09",
+  "documents": [
+    {
+      "id": "rdk-system-diagnostics",
+      "title": "RDK 系统识别与诊断",
+      "file": "common/system-diagnostics.md",
+      "boards": ["all"],
+      "rdkOs": ["*"],
+      "topics": ["diagnostics", "system", "version"],
+      "sources": [
+        {
+          "title": "rdkos_info command manual",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/Appendix/rdk-command-manual/cmd_rdkos_info"
+        },
+        {
+          "title": "RDK X series manual",
+          "url": "https://developer.d-robotics.cc/rdk_x_doc/en/RDK"
+        },
+        {
+          "title": "RDK S100/S600 manual",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/RDK"
+        }
+      ]
+    },
+    {
+      "id": "rdk-bpu-model-deployment",
+      "title": "BPU 模型转换、部署与验证",
+      "file": "common/bpu-model-deployment.md",
+      "boards": ["all"],
+      "rdkOs": ["*"],
+      "topics": ["bpu", "model", "toolchain", "inference"],
+      "sources": [
+        {
+          "title": "D-Robotics RDK Model Zoo",
+          "url": "https://github.com/D-Robotics/rdk_model_zoo"
+        },
+        {
+          "title": "RDK S Model Zoo",
+          "url": "https://github.com/D-Robotics/rdk_model_zoo_s"
+        },
+        {
+          "title": "RDK S AI toolchain FAQ",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/en/FAQ/toolchain"
+        }
+      ]
+    },
+    {
+      "id": "rdk-tros-multimedia",
+      "title": "TogetheROS.Bot 与多媒体开发路由",
+      "file": "common/tros-multimedia.md",
+      "boards": ["all"],
+      "rdkOs": ["*"],
+      "topics": ["tros", "ros", "multimedia", "camera", "codec"],
+      "sources": [
+        {
+          "title": "RDK X series manual",
+          "url": "https://developer.d-robotics.cc/rdk_x_doc/en/RDK"
+        },
+        {
+          "title": "RDK S multimedia examples",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/multimedia_development/multimedia_application/overview"
+        },
+        {
+          "title": "RDK S Camsys subsystem",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/Advanced_development/multimedia_development/multimedia_development/camsys"
+        }
+      ]
+    },
+    {
+      "id": "rdk-operational-safety",
+      "title": "板端操作安全边界",
+      "file": "common/operational-safety.md",
+      "boards": ["all"],
+      "rdkOs": ["*"],
+      "topics": ["safety", "power", "boot", "realtime"],
+      "sources": [
+        {
+          "title": "RDK X5 hardware introduction",
+          "url": "https://developer.d-robotics.cc/rdk_x_doc/en/Quick_start/hardware_introduction/rdk_x5"
+        },
+        {
+          "title": "RDK X release history",
+          "url": "https://developer.d-robotics.cc/rdk_x_doc/en/Release_Note/release_note"
+        }
+      ]
+    },
+    {
+      "id": "rdk-x5-platform",
+      "title": "RDK X5 平台知识",
+      "file": "boards/x5.md",
+      "boards": ["x5"],
+      "rdkOs": ["3.*"],
+      "topics": ["hardware", "x5", "bpu", "multimedia", "version"],
+      "sources": [
+        {
+          "title": "RDK X5 product page",
+          "url": "https://developer.d-robotics.cc/en/rdkx5"
+        },
+        {
+          "title": "RDK X release history",
+          "url": "https://developer.d-robotics.cc/rdk_x_doc/en/Release_Note/release_note"
+        },
+        {
+          "title": "RDK X5 hardware introduction",
+          "url": "https://developer.d-robotics.cc/rdk_x_doc/en/Quick_start/hardware_introduction/rdk_x5"
+        }
+      ]
+    },
+    {
+      "id": "rdk-s100-platform",
+      "title": "RDK S100 平台知识",
+      "file": "boards/s100.md",
+      "boards": ["s100"],
+      "rdkOs": ["4.*"],
+      "topics": ["hardware", "s100", "bpu", "multimedia", "version"],
+      "sources": [
+        {
+          "title": "RDK S100 hardware introduction",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/Quick_start/hardware_introduction/rdk_s100"
+        },
+        {
+          "title": "RDK S100 release 4.0.5",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/Release_Note/s100/v4_0_5"
+        },
+        {
+          "title": "RDK S algorithm toolchain versions",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/Advanced_development/toolchain_development/algorithm_toolchain"
+        }
+      ]
+    },
+    {
+      "id": "rdk-s600-platform",
+      "title": "RDK S600 平台知识",
+      "file": "boards/s600.md",
+      "boards": ["s600"],
+      "rdkOs": ["5.*"],
+      "topics": ["hardware", "s600", "bpu", "multimedia", "vdsp", "version"],
+      "sources": [
+        {
+          "title": "RDK S600 product page",
+          "url": "https://developer.d-robotics.cc/rdks600"
+        },
+        {
+          "title": "RDK S100/S600 manual",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/RDK?p=RDK+S600&v=5.1.0"
+        },
+        {
+          "title": "RDK S VDSP development",
+          "url": "https://developer.d-robotics.cc/rdk_s_doc/Advanced_development/vdsp_development"
+        }
+      ]
+    }
+  ]
+}

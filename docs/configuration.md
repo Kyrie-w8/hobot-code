@@ -12,6 +12,7 @@
 | `/var/lib/aster/pi-sessions` | Pi JSONL 会话 |
 | `/usr/local/lib/aster/extensions` | RDK 扩展 |
 | `/usr/local/lib/aster/skills` | 板端 Skills |
+| `/usr/local/lib/aster/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
 
 启动器设置 `ASTER_CODING_AGENT_DIR=/etc/aster/agent`。项目目录可以使用 `.aster/`
 放置局部 settings、extensions、skills、prompts 和 themes；Pi 的 project trust 机制会在
@@ -85,3 +86,13 @@ ASTER_CODING_AGENT_SESSION_DIR=/tmp/aster-sessions aster
 
 `PI_SKIP_VERSION_CHECK=1` 默认开启，避免 Aster 被 Pi 的自更新提示误导。Aster 的 Pi
 运行时升级必须修改 `pi-runtime/pi.lock`、重新构建并完成板端回归。
+
+知识目录可在开发和测试时按进程覆盖：
+
+```bash
+ASTER_RDK_KNOWLEDGE_DIR=/path/to/knowledge aster
+```
+
+生产环境建议使用安装包内的只读知识目录。更新知识时修改 `knowledge/manifest.json` 的
+`knowledgeVersion` 和 `updatedAt`，运行 `make pi-check` 后重新打包；不要直接在板端堆放
+没有版本和来源的零散说明。

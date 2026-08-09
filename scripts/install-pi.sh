@@ -23,9 +23,10 @@ if [ -e /usr/local/bin/aster ]; then
 fi
 install -d -m 0755 "$new_runtime"
 cp -R "$package_dir/runtime/." "$new_runtime/"
-install -d -m 0755 "$new_runtime/extensions" "$new_runtime/skills"
+install -d -m 0755 "$new_runtime/extensions" "$new_runtime/skills" "$new_runtime/knowledge"
 cp -R "$package_dir/extensions/." "$new_runtime/extensions/"
 cp -R "$package_dir/skills/." "$new_runtime/skills/"
+cp -R "$package_dir/knowledge/." "$new_runtime/knowledge/"
 install -m 0644 "$package_dir/PI_RUNTIME" "$new_runtime/PI_RUNTIME"
 install -m 0644 "$package_dir/VERSION" "$new_runtime/VERSION"
 

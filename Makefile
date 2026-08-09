@@ -1,5 +1,5 @@
 APP := aster
-VERSION ?= 0.5.0
+VERSION ?= 0.6.0
 LEGACY_VERSION ?= 0.4.0
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || printf none)
 LDFLAGS := -s -w -X github.com/Kyrie-w8/aster-edge/internal/cli.Version=$(VERSION) -X github.com/Kyrie-w8/aster-edge/internal/cli.Commit=$(COMMIT)
@@ -29,6 +29,7 @@ legacy-release:
 pi-check:
 	sh -n scripts/package-pi.sh scripts/install-pi.sh scripts/rollback-pi.sh packaging/pi/aster-launcher
 	node -e 'for (const f of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(f, "utf8"))' pi-runtime/package.json packaging/pi/settings.json packaging/pi/models.json
+	node scripts/validate-knowledge.mjs
 
 pi-release: pi-check
 	./scripts/package-pi.sh $(VERSION)

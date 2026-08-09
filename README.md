@@ -9,8 +9,8 @@ Aster 是运行在地瓜机器人 RDK X5、RDK S100 和 RDK S600 上的终端 Ag
 
 - Pi 0.84.1 官方 Linux ARM64 二进制按 SHA256 固定并原样装入发行包。
 - `package.json` 使用 Pi 官方 `piConfig` 机制将产品名改为 `aster`，配置目录改为 `.aster`。
-- `extensions/rdk.ts` 注册 D-Robotics Kimi Provider、`system_snapshot` 工具、`/doctor`、
-  `/rdk`、`/exit` 和 `/q`，并对板端危险命令增加确认。
+- `extensions/rdk.ts` 注册 D-Robotics Kimi Provider、实时 `system_snapshot`、版本感知的
+  `rdk_docs_search`、`/doctor`、`/rdk`、`/knowledge`、`/exit` 和 `/q`。
 - Pi 自带的 provider、`models.json`、extensions、packages、Skills、prompt templates 和
   themes 均可继续使用。
 - 板端无需安装 Node、Bun、Go、Python 或容器。
@@ -23,23 +23,23 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.5.0
+make release VERSION=0.6.0
 ```
 
 输出：
 
 ```text
-dist/aster-0.5.0-linux-arm64.tar.gz
+dist/aster-0.6.0-linux-arm64.tar.gz
 ```
 
 ## 安装
 
 ```bash
-scp dist/aster-0.5.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/aster-0.6.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf aster-0.5.0-linux-arm64.tar.gz
-cd aster-0.5.0-linux-arm64
+tar -xzf aster-0.6.0-linux-arm64.tar.gz
+cd aster-0.6.0-linux-arm64
 ./install.sh
 ```
 
@@ -121,8 +121,20 @@ aster --resume
 ## RDK 适配
 
 `/rdk` 显示简要板卡状态，`/doctor` 显示完整诊断。模型需要实时硬件信息时会调用
-`system_snapshot`，读取板卡型号、CPU、内存、负载、温度、BPU 设备节点和 RDK 工具。
-实时硬件详情不会自动加入每次系统 Prompt。
+`system_snapshot`，读取板卡型号、完整 RDK OS 版本、CPU、内存、负载、温度、BPU 设备
+节点和 RDK 工具。实时硬件详情不会自动加入每次系统 Prompt。
+
+板卡专业知识位于 `/usr/local/lib/aster/knowledge`。Aster 根据 device tree 中的型号和
+`/etc/version` 自动选择 X5 3.x、S100 4.x 或 S600 5.x 资料，通过 `rdk_docs_search` 按需
+返回短摘要、适用版本和地瓜官方来源，不把整套文档塞进上下文。用户也可直接运行：
+
+```text
+/knowledge BPU 模型如何转换和验证
+/knowledge S600 的 VDSP 有几个核心
+```
+
+知识结果是版本化文档，实机状态由 `system_snapshot` 证明；两者不一致时 Aster 会明确
+提示版本不匹配。知识清单与来源索引见 `knowledge/manifest.json`。
 
 会话保存在 `/var/lib/aster/pi-sessions`，与 0.4 的 SQLite 数据分离。全局配置位于
 `/etc/aster/agent`，板端扩展和 Skills 位于 `/usr/local/lib/aster`。

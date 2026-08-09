@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.5.0}
+version=${1:-0.6.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root_dir/pi-runtime/pi.lock"
 . "$root_dir/pi-runtime/tools.lock"
@@ -42,7 +42,7 @@ download_and_verify "$RIPGREP_LINUX_ARM64_URL" "$rg_archive" "$RIPGREP_LINUX_ARM
 
 tar -xzf "$archive" -C "$temp_dir"
 rm -rf "$stage_dir"
-mkdir -p "$stage_dir/runtime" "$stage_dir/extensions" "$stage_dir/skills" "$stage_dir/config" "$stage_dir/licenses" "$stage_dir/managed-bin"
+mkdir -p "$stage_dir/runtime" "$stage_dir/extensions" "$stage_dir/skills" "$stage_dir/knowledge" "$stage_dir/config" "$stage_dir/licenses" "$stage_dir/managed-bin"
 cp -R "$temp_dir/pi/." "$stage_dir/runtime/"
 mv "$stage_dir/runtime/pi" "$stage_dir/runtime/aster"
 install -m 0644 "$root_dir/pi-runtime/package.json" "$stage_dir/runtime/package.json"
@@ -51,6 +51,7 @@ install -m 0644 "$root_dir/pi-runtime/pi.lock" "$stage_dir/PI_RUNTIME"
 install -m 0644 "$root_dir/pi-runtime/tools.lock" "$stage_dir/TOOLS_RUNTIME"
 install -m 0644 "$root_dir/extensions/rdk.ts" "$stage_dir/extensions/rdk.ts"
 cp -R "$root_dir/skills/." "$stage_dir/skills/"
+cp -R "$root_dir/knowledge/." "$stage_dir/knowledge/"
 install -m 0644 "$root_dir/packaging/pi/settings.json" "$stage_dir/config/settings.json"
 install -m 0644 "$root_dir/packaging/pi/models.json" "$stage_dir/config/models.json"
 install -m 0600 "$root_dir/packaging/pi/aster.env.example" "$stage_dir/config/aster.env.example"

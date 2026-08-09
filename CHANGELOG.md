@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Detect X5, S100, and S600 board IDs plus the complete `/etc/version` RDK OS string.
+- Add a versioned local RDK knowledge pack with official D-Robotics source indexes.
+- Add `rdk_docs_search` and `/knowledge` with board, RDK OS, topic, and version-match routing.
+- Keep knowledge out of the base context while prompting the agent to distinguish documentation from live evidence.
+- Validate and package the knowledge manifest and documents in the ARM64 installer.
+
 ## 0.5.0
 
 - Replace the custom terminal UI with the pinned official Pi 0.84.1 ARM64 runtime, preserving Pi interaction behavior exactly.

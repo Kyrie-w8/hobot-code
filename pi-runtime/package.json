@@ -1,6 +1,6 @@
 {
   "name": "aster-edge",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Pi-compatible agent adapted for D-Robotics RDK boards",
   "type": "module",
   "piConfig": {

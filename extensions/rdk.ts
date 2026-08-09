@@ -32,6 +32,9 @@ type JsonRecord = Record<string, unknown>;
 
 interface BoardSnapshot {
   board: string;
+  boardId: "x5" | "s100" | "s600" | "unknown";
+  rdkOsVersion: string;
+  documentationTrack: string;
   hostname: string;
   platform: string;
   kernel: string;
@@ -46,6 +49,36 @@ interface BoardSnapshot {
   thermalZones: Array<{ name: string; celsius: number }>;
   rdkUtilities: Record<string, boolean>;
   processes?: string;
+}
+
+interface KnowledgeSource {
+  title: string;
+  url: string;
+}
+
+interface KnowledgeDocument {
+  id: string;
+  title: string;
+  file: string;
+  boards: string[];
+  rdkOs: string[];
+  topics: string[];
+  sources: KnowledgeSource[];
+}
+
+interface KnowledgeManifest {
+  schemaVersion: number;
+  knowledgeVersion: string;
+  updatedAt: string;
+  documents: KnowledgeDocument[];
+}
+
+interface KnowledgeSearchOptions {
+  query: string;
+  boardId: BoardSnapshot["boardId"];
+  rdkOsVersion: string;
+  topic?: string;
+  limit?: number;
 }
 
 function sanitizeText(value: string): string {
@@ -73,6 +106,21 @@ function parseOsRelease(raw: string | undefined): Record<string, string> {
       .replace(/^['\"]|['\"]$/g, "");
   }
   return result;
+}
+
+function detectBoardId(board: string | undefined): BoardSnapshot["boardId"] {
+  const normalized = board?.toLowerCase() ?? "";
+  if (normalized.includes("s600")) return "s600";
+  if (normalized.includes("s100")) return "s100";
+  if (normalized.includes("x5")) return "x5";
+  return "unknown";
+}
+
+function documentationTrack(boardId: BoardSnapshot["boardId"], version: string): string {
+  if (boardId === "x5") return `RDK X series ${version || "3.x"}`;
+  if (boardId === "s100") return `RDK S100 ${version || "4.x"}`;
+  if (boardId === "s600") return `RDK S600 ${version || "5.x"}`;
+  return "Unmatched RDK documentation track";
 }
 
 async function listMatching(directory: string, pattern: RegExp): Promise<string[]> {
@@ -113,14 +161,20 @@ async function readThermals(): Promise<Array<{ name: string; celsius: number }>>
 }
 
 async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot> {
-  const [board, osRelease, devEntries, thermalZones, somStatus, modelExec] = await Promise.all([
+  const [board, versionFile, osRelease, devEntries, thermalZones, somStatus, modelExec, rdkosInfo] = await Promise.all([
     readText(["/sys/firmware/devicetree/base/model", "/proc/device-tree/model"]),
+    readText(["/etc/version"]),
     readText(["/etc/os-release"]),
     listMatching("/dev", /^(bpu|hobot|ion|dnn)/i),
     readThermals(),
     commandExists(["/usr/bin/hrut_somstatus", "/usr/local/bin/hrut_somstatus"]),
     commandExists(["/usr/bin/hrt_model_exec", "/usr/local/bin/hrt_model_exec"]),
+    commandExists(["/usr/bin/rdkos_info", "/usr/local/bin/rdkos_info"]),
   ]);
+
+  const os = parseOsRelease(osRelease);
+  const boardId = detectBoardId(board);
+  const rdkOsVersion = versionFile || os.VERSION_ID?.replace(/^V/i, "") || "unknown";
 
   let processes: string | undefined;
   if (includeProcesses) {
@@ -137,6 +191,9 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
 
   return {
     board: board || "Unknown ARM64 Linux board",
+    boardId,
+    rdkOsVersion,
+    documentationTrack: documentationTrack(boardId, rdkOsVersion),
     hostname: hostname(),
     platform: platform(),
     kernel: release(),
@@ -146,12 +203,13 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
     memoryFreeMiB: Math.round(freemem() / 1024 / 1024),
     loadAverage: loadavg().map((value) => Math.round(value * 100) / 100),
     uptimeSeconds: Math.round(uptime()),
-    os: parseOsRelease(osRelease),
+    os,
     bpuDevices: devEntries.map((name) => `/dev/${name}`),
     thermalZones,
     rdkUtilities: {
       hrut_somstatus: somStatus,
       hrt_model_exec: modelExec,
+      rdkos_info: rdkosInfo,
     },
     ...(processes ? { processes } : {}),
   };
@@ -160,13 +218,120 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
 function compactBoardSummary(snapshot: BoardSnapshot): string {
   const temperature = snapshot.thermalZones[0]?.celsius;
   return [
-    snapshot.board,
+    `${snapshot.board} | RDK OS ${snapshot.rdkOsVersion}`,
     `${snapshot.cpuCores} CPU`,
     `${snapshot.memoryTotalMiB} MiB RAM`,
     temperature === undefined ? undefined : `${temperature} C`,
   ]
     .filter(Boolean)
     .join(" | ");
+}
+
+function wildcardMatches(value: string, pattern: string): boolean {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i").test(value);
+}
+
+function queryTerms(query: string): string[] {
+  const normalized = query.toLowerCase().trim();
+  const terms = normalized.match(/[\p{L}\p{N}][\p{L}\p{N}_.+-]*/gu) ?? [];
+  return [...new Set([normalized, ...terms].filter((term) => term.length > 1))];
+}
+
+function occurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let offset = 0;
+  while ((offset = haystack.indexOf(needle, offset)) >= 0) {
+    count += 1;
+    offset += needle.length;
+  }
+  return count;
+}
+
+function knowledgeRoot(): string {
+  return resolve(process.env.ASTER_RDK_KNOWLEDGE_DIR || "/usr/local/lib/aster/knowledge");
+}
+
+async function loadKnowledgeManifest(root: string): Promise<KnowledgeManifest> {
+  const manifest = JSON.parse(await readFile(resolve(root, "manifest.json"), "utf8")) as KnowledgeManifest;
+  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.documents)) {
+    throw new Error("Unsupported or invalid RDK knowledge manifest");
+  }
+  return manifest;
+}
+
+function selectSnippet(body: string, terms: string[]): string {
+  const paragraphs = body
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const paragraph = paragraphs
+    .map((candidate) => {
+      const normalized = candidate.toLowerCase();
+      const score = terms.reduce((total, term) => total + occurrences(normalized, term), 0);
+      return { candidate, score };
+    })
+    .sort((left, right) => right.score - left.score || right.candidate.length - left.candidate.length)[0]
+    ?.candidate ?? "";
+  return paragraph.length > 700 ? `${paragraph.slice(0, 697)}...` : paragraph;
+}
+
+async function searchKnowledge(options: KnowledgeSearchOptions): Promise<JsonRecord> {
+  const root = knowledgeRoot();
+  const manifest = await loadKnowledgeManifest(root);
+  const terms = queryTerms(options.query);
+  if (terms.length === 0) throw new Error("Knowledge query must not be empty");
+  const requestedTopic = options.topic?.toLowerCase().trim();
+  const limit = Math.max(1, Math.min(options.limit ?? 4, 8));
+  const results: Array<JsonRecord & { score: number }> = [];
+
+  for (const document of manifest.documents) {
+    if (!document.boards.includes("all") && !document.boards.includes(options.boardId)) continue;
+    if (requestedTopic && !document.topics.some((topic) => topic.toLowerCase() === requestedTopic)) continue;
+
+    const documentPath = resolve(root, document.file);
+    if (documentPath !== root && !documentPath.startsWith(`${root}/`)) {
+      throw new Error(`Knowledge document escapes its root: ${document.file}`);
+    }
+    const body = await readFile(documentPath, "utf8");
+    const title = document.title.toLowerCase();
+    const topics = document.topics.join(" ").toLowerCase();
+    const normalizedBody = body.toLowerCase();
+    let lexicalScore = 0;
+    for (const term of terms) {
+      lexicalScore += occurrences(title, term) * 12;
+      lexicalScore += occurrences(topics, term) * 8;
+      lexicalScore += Math.min(occurrences(normalizedBody, term), 8) * 2;
+    }
+    if (lexicalScore <= 0) continue;
+    let score = lexicalScore;
+    if (document.boards.includes(options.boardId)) score += 3;
+    const versionMatch = document.rdkOs.some((pattern) => wildcardMatches(options.rdkOsVersion, pattern));
+    if (versionMatch) score += 3;
+    results.push({
+      score,
+      id: document.id,
+      title: document.title,
+      boards: document.boards,
+      applicableRdkOs: document.rdkOs,
+      detectedRdkOs: options.rdkOsVersion,
+      versionMatch,
+      topics: document.topics,
+      snippet: selectSnippet(body, terms),
+      sources: document.sources,
+    });
+  }
+
+  results.sort((left, right) => right.score - left.score || String(left.id).localeCompare(String(right.id)));
+  return {
+    knowledgeVersion: manifest.knowledgeVersion,
+    updatedAt: manifest.updatedAt,
+    detectedBoard: options.boardId,
+    detectedRdkOs: options.rdkOsVersion,
+    query: options.query,
+    results: results.slice(0, limit).map(({ score: _score, ...result }) => result),
+  };
 }
 
 function convertContentBlocks(content: Array<TextContent | ImageContent>): unknown {
@@ -414,6 +579,19 @@ const systemSnapshotSchema = Type.Object({
   ),
 });
 
+const knowledgeSearchSchema = Type.Object({
+  query: Type.String({ description: "Question or keywords about D-Robotics RDK development" }),
+  board: Type.Optional(
+    Type.String({ description: "Override detected board: x5, s100, s600, or unknown" }),
+  ),
+  topic: Type.Optional(
+    Type.String({ description: "Optional exact topic filter such as bpu, multimedia, tros, diagnostics, or safety" }),
+  ),
+  limit: Type.Optional(
+    Type.Integer({ minimum: 1, maximum: 8, description: "Maximum number of knowledge documents" }),
+  ),
+});
+
 const criticalVirtualRoots = ["/proc", "/sys", "/dev"];
 const destructiveCommandPatterns = [
   /(^|\s)rm\s+[^\n]*(?:-rf|-fr|--recursive)/i,
@@ -427,6 +605,7 @@ const destructiveCommandPatterns = [
 export default function rdkExtension(pi: ExtensionAPI) {
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+  let currentSnapshot: BoardSnapshot | undefined;
 
   pi.registerProvider("drobotics", {
     name: "D-Robotics AI Gateway",
@@ -463,6 +642,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     parameters: systemSnapshotSchema,
     async execute(_toolCallId, params) {
       const snapshot = await getBoardSnapshot(params.includeProcesses ?? false);
+      currentSnapshot = snapshot;
       return {
         content: [{ type: "text", text: JSON.stringify(snapshot, null, 2) }],
         details: snapshot,
@@ -470,9 +650,42 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "rdk_docs_search",
+    label: "Search RDK board knowledge",
+    description: "Search the local, versioned D-Robotics RDK knowledge pack and return concise results with official source URLs and version applicability.",
+    promptSnippet: "Search board-specific, version-aware RDK documentation before making specialized platform claims",
+    promptGuidelines: [
+      "Use rdk_docs_search before advising on BPU conversion, multimedia, TROS, drivers, board interfaces, or RDK-version-specific commands.",
+      "Treat search results as documentation and system_snapshot as live evidence; call out a version mismatch instead of silently applying incompatible instructions.",
+      "Preserve source URLs in technical answers when they materially support the recommendation.",
+    ],
+    parameters: knowledgeSearchSchema,
+    async execute(_toolCallId, params) {
+      const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
+      currentSnapshot = snapshot;
+      const requestedBoard = String(params.board ?? snapshot.boardId).toLowerCase();
+      const boardId: BoardSnapshot["boardId"] = ["x5", "s100", "s600"].includes(requestedBoard)
+        ? requestedBoard as BoardSnapshot["boardId"]
+        : "unknown";
+      const result = await searchKnowledge({
+        query: params.query,
+        boardId,
+        rdkOsVersion: snapshot.rdkOsVersion,
+        topic: params.topic,
+        limit: params.limit,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     try {
       const snapshot = await getBoardSnapshot(false);
+      currentSnapshot = snapshot;
       ctx.ui.setStatus("aster-rdk", compactBoardSummary(snapshot));
     } catch {
       ctx.ui.setStatus("aster-rdk", "RDK status unavailable");
@@ -480,8 +693,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event) => {
+    const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
+    currentSnapshot = snapshot;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n## D-Robotics board runtime\nThis agent runs on a D-Robotics embedded board. Use system_snapshot only when live hardware facts are needed. Keep CPU, memory, disk, and thermal load bounded. Do not place an LLM agent in a motor, CAN, GPIO, or other hard real-time control loop.`,
+      systemPrompt: `${event.systemPrompt}\n\n## D-Robotics board runtime\nDetected board: ${snapshot.board} (${snapshot.boardId}); RDK OS: ${snapshot.rdkOsVersion}; documentation track: ${snapshot.documentationTrack}. For specialized RDK claims, first use rdk_docs_search and check its versionMatch field. Use system_snapshot for live hardware facts; documentation is not evidence of installed packages, connected peripherals, or a compatible converted model. Keep CPU, memory, disk, and thermal load bounded. Do not place an LLM agent in a motor, CAN, GPIO, or other hard real-time control loop.`,
     };
   });
 
@@ -520,6 +735,25 @@ export default function rdkExtension(pi: ExtensionAPI) {
     description: "Show a concise live RDK board summary",
     handler: async (_args, ctx) => {
       ctx.ui.notify(compactBoardSummary(await getBoardSnapshot(false)), "info");
+    },
+  });
+
+  pi.registerCommand("knowledge", {
+    description: "Search the local RDK knowledge pack",
+    handler: async (args, ctx) => {
+      const query = String(args ?? "").trim();
+      if (!query) {
+        ctx.ui.notify("Usage: /knowledge <question or keywords>", "warning");
+        return;
+      }
+      const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
+      currentSnapshot = snapshot;
+      const result = await searchKnowledge({
+        query,
+        boardId: snapshot.boardId,
+        rdkOsVersion: snapshot.rdkOsVersion,
+      });
+      ctx.ui.notify(JSON.stringify(result, null, 2), "info");
     },
   });
 
