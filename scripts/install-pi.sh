@@ -35,6 +35,7 @@ mv "$new_runtime" /usr/local/lib/hobot-code
 
 install -d -m 0750 /etc/hobot-code /etc/hobot-code/agent
 install -d -m 0700 /var/lib/hobot-code /var/lib/hobot-code/sessions /var/lib/hobot-code/memory
+install -d -m 0700 /var/lib/hobot-code/goals /var/lib/hobot-code/audit
 install -d -m 0755 /etc/hobot-code/agent/bin
 install -m 0755 "$package_dir/managed-bin/fd" /etc/hobot-code/agent/bin/fd
 install -m 0755 "$package_dir/managed-bin/rg" /etc/hobot-code/agent/bin/rg
@@ -49,6 +50,18 @@ if [ ! -e /etc/hobot-code/agent/permissions.json ]; then
 fi
 if [ ! -e /etc/hobot-code/agent/memory.json ]; then
   install -m 0640 "$package_dir/config/memory.json" /etc/hobot-code/agent/memory.json
+fi
+if [ ! -e /etc/hobot-code/agent/goals.json ]; then
+  install -m 0640 "$package_dir/config/goals.json" /etc/hobot-code/agent/goals.json
+fi
+if [ ! -e /etc/hobot-code/agent/hooks.json ]; then
+  install -m 0640 "$package_dir/config/hooks.json" /etc/hobot-code/agent/hooks.json
+fi
+if [ ! -e /etc/hobot-code/agent/notifications.json ]; then
+  install -m 0640 "$package_dir/config/notifications.json" /etc/hobot-code/agent/notifications.json
+fi
+if [ ! -e /etc/hobot-code/agent/lsp.json ]; then
+  install -m 0640 "$package_dir/config/lsp.json" /etc/hobot-code/agent/lsp.json
 fi
 if [ ! -e /etc/hobot-code/hobot.env ]; then
   install -m 0600 "$package_dir/config/hobot.env.example" /etc/hobot-code/hobot.env

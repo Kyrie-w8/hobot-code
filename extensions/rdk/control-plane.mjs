@@ -15,6 +15,10 @@ export const DEFAULT_POLICY = Object.freeze({
     Object.freeze({ tool: "quality_gate", action: "ask" }),
     Object.freeze({ tool: "memory_search", action: "allow" }),
     Object.freeze({ tool: "memory_save", action: "ask" }),
+    Object.freeze({ tool: "goal_status", action: "allow" }),
+    Object.freeze({ tool: "goal_progress", action: "allow" }),
+    Object.freeze({ tool: "goal_complete", action: "ask" }),
+    Object.freeze({ tool: "lsp", action: "allow" }),
     Object.freeze({ tool: "mcp:*", action: "ask" }),
   ]),
 });
@@ -30,6 +34,52 @@ export const DEFAULT_MEMORY_CONFIG = Object.freeze({
   maxSearchResults: 10,
   maxContentChars: 4000,
   defaultExpiresDays: null,
+});
+
+export const DEFAULT_GOAL_CONFIG = Object.freeze({
+  schemaVersion: 1,
+  enabled: true,
+  defaultTurnBudget: 50,
+  defaultTokenBudget: null,
+});
+
+export const DEFAULT_HOOK_CONFIG = Object.freeze({
+  schemaVersion: 1,
+  enabled: true,
+  failurePolicy: "block",
+  timeoutMs: 5000,
+  maxOutputChars: 4000,
+  allowProjectHooks: false,
+  hooks: Object.freeze([]),
+});
+
+export const DEFAULT_NOTIFICATION_CONFIG = Object.freeze({
+  schemaVersion: 1,
+  enabled: true,
+  allowLocal: false,
+  bell: true,
+  protocol: "osc9",
+  onApproval: true,
+  onComplete: true,
+  onFailure: true,
+  minDurationMs: 5000,
+});
+
+export const DEFAULT_LSP_CONFIG = Object.freeze({
+  schemaVersion: 1,
+  enabled: true,
+  maxProcesses: 1,
+  maxMemoryMiB: 256,
+  idleTimeoutMs: 60_000,
+  requestTimeoutMs: 10_000,
+  diagnosticsWaitMs: 500,
+  servers: Object.freeze([
+    Object.freeze({ id: "clangd", extensions: Object.freeze([".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"]), languageId: "cpp", command: Object.freeze(["clangd", "--background-index=false"]) }),
+    Object.freeze({ id: "pylsp", extensions: Object.freeze([".py"]), languageId: "python", command: Object.freeze(["pylsp"]) }),
+    Object.freeze({ id: "typescript", extensions: Object.freeze([".ts", ".tsx", ".js", ".jsx"]), languageId: "typescript", command: Object.freeze(["typescript-language-server", "--stdio"]) }),
+    Object.freeze({ id: "gopls", extensions: Object.freeze([".go"]), languageId: "go", command: Object.freeze(["gopls"]) }),
+    Object.freeze({ id: "rust-analyzer", extensions: Object.freeze([".rs"]), languageId: "rust", command: Object.freeze(["rust-analyzer"]) }),
+  ]),
 });
 
 const permissionActions = new Set(["allow", "ask", "deny"]);
@@ -148,6 +198,7 @@ export function describeToolCall(toolName, input, qualityCommands = []) {
   else if (toolName === "quality_gate" && data.action === "run") target = qualityCommands.join("\n");
   else if (toolName === "memory_save") target = `${data.scope ?? ""}/${data.kind ?? ""}: ${data.content ?? ""}`;
   else if (toolName === "memory_search") target = data.query;
+  else if (toolName === "goal_complete") target = data.outcome;
   else target = JSON.stringify(data);
 
   const risk = toolName === "read"
@@ -162,6 +213,8 @@ export function describeToolCall(toolName, input, qualityCommands = []) {
             ? "Persists information and may expose it to models in future sessions."
             : toolName === "memory_search"
               ? "Retrieves persistent information and exposes matching results to the selected model."
+            : toolName === "goal_complete"
+              ? "Marks the current user-created persistent goal complete."
           : isMcpTool(toolName)
             ? "Calls an external MCP tool which may read or change external state."
             : "Calls an extension or plugin tool.";
@@ -216,6 +269,194 @@ export async function loadMemoryConfig(path) {
     return {
       config: { ...DEFAULT_MEMORY_CONFIG },
       error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function boundedInteger(value, label, minimum, maximum) {
+  const normalized = Number(value);
+  if (!Number.isInteger(normalized) || normalized < minimum || normalized > maximum) {
+    throw new Error(`${label} must be between ${minimum} and ${maximum}`);
+  }
+  return normalized;
+}
+
+export function parseGoalConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1) {
+    throw new Error("goal config must be a schemaVersion 1 JSON object");
+  }
+  if (typeof value.enabled !== "boolean") throw new Error("goal enabled must be boolean");
+  const defaultTurnBudget = boundedInteger(value.defaultTurnBudget, "goal defaultTurnBudget", 1, 10_000);
+  const defaultTokenBudget = value.defaultTokenBudget === null || value.defaultTokenBudget === undefined
+    ? null
+    : boundedInteger(value.defaultTokenBudget, "goal defaultTokenBudget", 1000, 1_000_000_000);
+  return { schemaVersion: 1, enabled: value.enabled, defaultTurnBudget, defaultTokenBudget };
+}
+
+export async function loadGoalConfig(path) {
+  try {
+    return { config: parseGoalConfig(JSON.parse(await readFile(path, "utf8"))) };
+  } catch (error) {
+    return {
+      config: { ...DEFAULT_GOAL_CONFIG },
+      error: error?.code === "ENOENT" ? "goal config file is missing" : error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function parseHookConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1) {
+    throw new Error("hook config must be a schemaVersion 1 JSON object");
+  }
+  if (typeof value.enabled !== "boolean" || typeof value.allowProjectHooks !== "boolean") {
+    throw new Error("hook enabled and allowProjectHooks must be booleans");
+  }
+  if (!["block", "warn"].includes(value.failurePolicy)) throw new Error("hook failurePolicy must be block or warn");
+  const timeoutMs = boundedInteger(value.timeoutMs, "hook timeoutMs", 100, 120_000);
+  const maxOutputChars = boundedInteger(value.maxOutputChars, "hook maxOutputChars", 100, 20_000);
+  if (!Array.isArray(value.hooks) || value.hooks.length > 64) throw new Error("hooks must contain at most 64 entries");
+  const hooks = value.hooks.map((hook, index) => {
+    if (!hook || typeof hook !== "object" || Array.isArray(hook)) throw new Error(`hook ${index + 1} must be an object`);
+    const name = typeof hook.name === "string" ? hook.name.trim() : "";
+    const tool = typeof hook.tool === "string" ? hook.tool.trim() : "";
+    if (!name || name.length > 80 || !tool || tool.length > 128) throw new Error(`hook ${index + 1} name or tool is invalid`);
+    if (!["PreToolUse", "PostToolUse"].includes(hook.event)) throw new Error(`hook ${index + 1} event is invalid`);
+    if (!Array.isArray(hook.command) || hook.command.length < 1 || hook.command.length > 32
+      || hook.command.some((part) => typeof part !== "string" || !part || part.length > 1000 || /[\r\n\0]/.test(part))) {
+      throw new Error(`hook ${index + 1} command must be a non-empty string array`);
+    }
+    if (hook.failurePolicy !== undefined && !["block", "warn"].includes(hook.failurePolicy)) {
+      throw new Error(`hook ${index + 1} failurePolicy is invalid`);
+    }
+    return {
+      name,
+      event: hook.event,
+      tool,
+      command: [...hook.command],
+      ...(hook.timeoutMs === undefined ? {} : { timeoutMs: boundedInteger(hook.timeoutMs, `hook ${index + 1} timeoutMs`, 100, 120_000) }),
+      ...(hook.failurePolicy === undefined ? {} : { failurePolicy: hook.failurePolicy }),
+    };
+  });
+  return {
+    schemaVersion: 1,
+    enabled: value.enabled,
+    failurePolicy: value.failurePolicy,
+    timeoutMs,
+    maxOutputChars,
+    allowProjectHooks: value.allowProjectHooks,
+    hooks,
+  };
+}
+
+export async function loadHookConfig(path, projectPath) {
+  let config;
+  let error;
+  try {
+    config = parseHookConfig(JSON.parse(await readFile(path, "utf8")));
+  } catch (caught) {
+    config = { ...DEFAULT_HOOK_CONFIG, hooks: [] };
+    error = caught?.code === "ENOENT" ? "hook config file is missing" : caught instanceof Error ? caught.message : String(caught);
+  }
+  if (config.allowProjectHooks && projectPath) {
+    try {
+      const project = parseHookConfig(JSON.parse(await readFile(projectPath, "utf8")));
+      config = { ...config, hooks: [...config.hooks, ...project.hooks] };
+    } catch (caught) {
+      if (caught?.code !== "ENOENT") error = `project hooks ignored: ${caught instanceof Error ? caught.message : String(caught)}`;
+    }
+  }
+  return { config, error };
+}
+
+export function parseNotificationConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1) {
+    throw new Error("notification config must be a schemaVersion 1 JSON object");
+  }
+  for (const key of ["enabled", "allowLocal", "bell", "onApproval", "onComplete", "onFailure"]) {
+    if (typeof value[key] !== "boolean") throw new Error(`notification ${key} must be boolean`);
+  }
+  if (!["osc9", "osc777", "both"].includes(value.protocol)) throw new Error("notification protocol is invalid");
+  return {
+    schemaVersion: 1,
+    enabled: value.enabled,
+    allowLocal: value.allowLocal,
+    bell: value.bell,
+    protocol: value.protocol,
+    onApproval: value.onApproval,
+    onComplete: value.onComplete,
+    onFailure: value.onFailure,
+    minDurationMs: boundedInteger(value.minDurationMs, "notification minDurationMs", 0, 3_600_000),
+  };
+}
+
+export async function loadNotificationConfig(path) {
+  try {
+    return { config: parseNotificationConfig(JSON.parse(await readFile(path, "utf8"))) };
+  } catch (error) {
+    return {
+      config: { ...DEFAULT_NOTIFICATION_CONFIG },
+      error: error?.code === "ENOENT" ? "notification config file is missing" : error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function writeNotificationConfig(path, value) {
+  const config = parseNotificationConfig(value);
+  const temporary = `${path}.new.${process.pid}`;
+  await mkdir(resolve(path, ".."), { recursive: true, mode: 0o750 });
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o640 });
+  await chmod(temporary, 0o640);
+  await rename(temporary, path);
+  return config;
+}
+
+export function parseLspConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1) {
+    throw new Error("LSP config must be a schemaVersion 1 JSON object");
+  }
+  if (typeof value.enabled !== "boolean") throw new Error("LSP enabled must be boolean");
+  const servers = Array.isArray(value.servers) ? value.servers : [];
+  if (servers.length > 32) throw new Error("LSP servers must contain at most 32 entries");
+  const normalizedServers = servers.map((server, index) => {
+    if (!server || typeof server !== "object" || Array.isArray(server)) throw new Error(`LSP server ${index + 1} must be an object`);
+    const id = typeof server.id === "string" ? server.id.trim() : "";
+    const languageId = typeof server.languageId === "string" ? server.languageId.trim() : "";
+    if (!id || id.length > 80 || !languageId || languageId.length > 80) throw new Error(`LSP server ${index + 1} id or languageId is invalid`);
+    if (!Array.isArray(server.extensions) || server.extensions.length < 1 || server.extensions.length > 32
+      || server.extensions.some((extension) => typeof extension !== "string" || !/^\.[a-z0-9+_-]{1,12}$/i.test(extension))) {
+      throw new Error(`LSP server ${index + 1} extensions are invalid`);
+    }
+    if (!Array.isArray(server.command) || server.command.length < 1 || server.command.length > 32
+      || server.command.some((part) => typeof part !== "string" || !part || part.length > 1000 || /[\r\n\0]/.test(part))) {
+      throw new Error(`LSP server ${index + 1} command is invalid`);
+    }
+    return {
+      id,
+      languageId,
+      extensions: [...new Set(server.extensions.map((extension) => extension.toLowerCase()))],
+      command: [...server.command],
+      ...(server.initializationOptions === undefined ? {} : { initializationOptions: server.initializationOptions }),
+    };
+  });
+  return {
+    schemaVersion: 1,
+    enabled: value.enabled,
+    maxProcesses: boundedInteger(value.maxProcesses, "LSP maxProcesses", 1, 4),
+    maxMemoryMiB: boundedInteger(value.maxMemoryMiB, "LSP maxMemoryMiB", 32, 2048),
+    idleTimeoutMs: boundedInteger(value.idleTimeoutMs, "LSP idleTimeoutMs", 5000, 3_600_000),
+    requestTimeoutMs: boundedInteger(value.requestTimeoutMs, "LSP requestTimeoutMs", 500, 120_000),
+    diagnosticsWaitMs: boundedInteger(value.diagnosticsWaitMs, "LSP diagnosticsWaitMs", 0, 10_000),
+    servers: normalizedServers,
+  };
+}
+
+export async function loadLspConfig(path) {
+  try {
+    return { config: parseLspConfig(JSON.parse(await readFile(path, "utf8"))) };
+  } catch (error) {
+    return {
+      config: parseLspConfig({ ...DEFAULT_LSP_CONFIG, servers: DEFAULT_LSP_CONFIG.servers.map((server) => ({ ...server, extensions: [...server.extensions], command: [...server.command] })) }),
+      error: error?.code === "ENOENT" ? "LSP config file is missing" : error instanceof Error ? error.message : String(error),
     };
   }
 }

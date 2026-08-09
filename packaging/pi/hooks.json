@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "failurePolicy": "block",
+  "timeoutMs": 5000,
+  "maxOutputChars": 4000,
+  "allowProjectHooks": false,
+  "hooks": []
+}

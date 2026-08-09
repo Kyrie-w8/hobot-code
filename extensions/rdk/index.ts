@@ -32,7 +32,11 @@ import {
   fingerprintWorkspace,
   initializeProject,
   isMcpTool,
+  loadGoalConfig,
+  loadHookConfig,
+  loadLspConfig,
   loadMemoryConfig,
+  loadNotificationConfig,
   loadPolicy,
   loadQualityConfig,
   parsePolicy,
@@ -40,8 +44,12 @@ import {
   redactSensitiveText,
   resolveToolAction,
   setPolicyRule,
+  writeNotificationConfig,
   writePolicy,
 } from "./control-plane.mjs";
+import { GoalStore, type GoalRecord } from "./goal-store.ts";
+import { runHooks, type HookConfig } from "./hook-runner.ts";
+import { LspManager, type LspConfig } from "./lsp-manager.ts";
 import {
   MemoryStore,
   type MemoryContext,
@@ -49,6 +57,7 @@ import {
   type MemoryRecord,
   type MemoryScope,
 } from "./memory-store.ts";
+import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
@@ -156,6 +165,13 @@ interface MemoryConfig {
   maxSearchResults: number;
   maxContentChars: number;
   defaultExpiresDays: number | null;
+}
+
+interface GoalConfig {
+  schemaVersion: 1;
+  enabled: boolean;
+  defaultTurnBudget: number;
+  defaultTokenBudget: number | null;
 }
 
 type QualityGateStatus = "disabled" | "missing" | "running" | "passed" | "failed" | "stale";
@@ -601,7 +617,7 @@ function streamDrobotics(
           Accept: "application/json",
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
-          "User-Agent": "hobot-code/0.10",
+          "User-Agent": "hobot-code/0.11",
           ...configuredHeaders,
         },
         body: JSON.stringify(body),
@@ -739,6 +755,31 @@ const memorySaveSchema = Type.Object({
   expiresDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
 });
 
+const goalProgressSchema = Type.Object({
+  note: Type.String({ minLength: 1, maxLength: 4000 }),
+});
+
+const goalStatusSchema = Type.Object({});
+
+const goalCompleteSchema = Type.Object({
+  outcome: Type.String({ minLength: 1, maxLength: 4000 }),
+});
+
+const lspToolSchema = Type.Object({
+  action: Type.Union([
+    Type.Literal("status"),
+    Type.Literal("stop"),
+    Type.Literal("hover"),
+    Type.Literal("definition"),
+    Type.Literal("references"),
+    Type.Literal("symbols"),
+    Type.Literal("diagnostics"),
+  ]),
+  path: Type.Optional(Type.String({ maxLength: 4096 })),
+  line: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000_000 })),
+  column: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+});
+
 const criticalVirtualRoots = ["/proc", "/sys", "/dev"];
 const destructiveCommandPatterns = [
   /(^|\s)rm\s+[^\n]*(?:-rf|-fr|--recursive)/i,
@@ -764,12 +805,51 @@ function memoryDatabasePath(): string {
   return resolve(process.env.HOBOT_CODE_MEMORY_DB || "/var/lib/hobot-code/memory/memory.db");
 }
 
+function goalConfigPath(): string {
+  return resolve(process.env.HOBOT_CODE_GOAL_CONFIG || "/etc/hobot-code/agent/goals.json");
+}
+
+function goalDatabasePath(): string {
+  return resolve(process.env.HOBOT_CODE_GOAL_DB || "/var/lib/hobot-code/goals/goals.db");
+}
+
+function hookConfigPath(): string {
+  return resolve(process.env.HOBOT_CODE_HOOK_CONFIG || "/etc/hobot-code/agent/hooks.json");
+}
+
+function hookAuditPath(): string {
+  return resolve(process.env.HOBOT_CODE_HOOK_AUDIT || "/var/lib/hobot-code/audit/hooks.jsonl");
+}
+
+function notificationConfigPath(): string {
+  return resolve(process.env.HOBOT_CODE_NOTIFICATION_CONFIG || "/etc/hobot-code/agent/notifications.json");
+}
+
+function lspConfigPath(): string {
+  return resolve(process.env.HOBOT_CODE_LSP_CONFIG || "/etc/hobot-code/agent/lsp.json");
+}
+
 function formatMemoryRecords(records: MemoryRecord[]): string {
   if (records.length === 0) return "No matching memories.";
   return records.map((record) => {
     const expiry = record.expiresAt ? ` expires=${record.expiresAt}` : "";
     return `[${record.id}] ${record.scope}/${record.kind}${expiry}\n${redactSensitiveText(record.content, 1600)}`;
   }).join("\n\n");
+}
+
+function formatGoal(goal: GoalRecord | undefined): string {
+  if (!goal) return "No persistent goal exists for this project.";
+  return [
+    `[${goal.id}] ${goal.status}`,
+    goal.objective,
+    `Turns: ${goal.turnsUsed}/${goal.turnBudget}`,
+    `Tokens: ${goal.tokensUsed}/${goal.tokenBudget ?? "unlimited"}`,
+    `Elapsed: ${Math.round(goal.elapsedMs / 1000)} s`,
+    `Continuations: ${goal.continuationCount}`,
+    goal.verificationStatus ? `Verification: ${goal.verificationStatus}` : undefined,
+    goal.lastNote ? `Latest progress: ${goal.lastNote}` : undefined,
+    goal.outcome ? `Outcome: ${goal.outcome}` : undefined,
+  ].filter(Boolean).join("\n");
 }
 
 function outputTail(value: string, maxLength = 4000): string {
@@ -844,6 +924,39 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let memoryRuntimeError: string | undefined;
   let memoryStore: MemoryStore | undefined;
   let currentMemoryContext: MemoryContext | undefined;
+  let goalConfig: GoalConfig = { schemaVersion: 1, enabled: true, defaultTurnBudget: 50, defaultTokenBudget: null };
+  let goalConfigError: string | undefined;
+  let goalRuntimeError: string | undefined;
+  let goalStore: GoalStore | undefined;
+  let currentGoal: GoalRecord | undefined;
+  let goalTurnStartedAt = 0;
+  let hookConfig: HookConfig = {
+    schemaVersion: 1,
+    enabled: true,
+    failurePolicy: "block",
+    timeoutMs: 5000,
+    maxOutputChars: 4000,
+    allowProjectHooks: false,
+    hooks: [],
+  };
+  let hookConfigError: string | undefined;
+  let notificationConfig: NotificationConfig = {
+    schemaVersion: 1,
+    enabled: true,
+    allowLocal: false,
+    bell: true,
+    protocol: "osc9",
+    onApproval: true,
+    onComplete: true,
+    onFailure: true,
+    minDurationMs: 5000,
+  };
+  let notificationConfigError: string | undefined;
+  let lspConfig: LspConfig | undefined;
+  let lspConfigError: string | undefined;
+  let lspManager: LspManager | undefined;
+  let agentStartedAt = 0;
+  let agentHadFailure = false;
   const qualityGateBlockedCalls = new Set<string>();
 
   function memoryContext(
@@ -883,6 +996,31 @@ export default function rdkExtension(pi: ExtensionAPI) {
     memoryStore?.close();
     memoryStore = undefined;
     currentMemoryContext = undefined;
+  }
+
+  function setGoalStatus(ctx: { ui: { setStatus: (key: string, value: string | undefined) => void } }): void {
+    if (!goalConfig.enabled) {
+      ctx.ui.setStatus("hobot-goal", "goal: off");
+      return;
+    }
+    if (!currentGoal) {
+      ctx.ui.setStatus("hobot-goal", undefined);
+      return;
+    }
+    ctx.ui.setStatus(
+      "hobot-goal",
+      `goal: ${currentGoal.status} ${currentGoal.turnsUsed}/${currentGoal.turnBudget}`,
+    );
+  }
+
+  function requireGoalStore(): GoalStore {
+    if (!goalConfig.enabled) throw new Error("Persistent goals are disabled in goals.json");
+    if (!goalStore) throw new Error("Persistent goal storage is unavailable");
+    return goalStore;
+  }
+
+  function notifyRemote(title: string, message: string): void {
+    emitTerminalNotification(notificationConfig, title, message);
   }
 
   function toolAction(toolName: string): PermissionAction {
@@ -1194,6 +1332,111 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "goal_status",
+    label: "Persistent goal status",
+    description: "Inspect the user-created persistent goal, budget, elapsed work, continuation count, and verification state for this project.",
+    promptSnippet: "Inspect the current user-created persistent goal and remaining budget",
+    promptGuidelines: [
+      "Use goal_status before making claims about persistent goal completion or remaining budget.",
+      "Context compaction, a successful tool call, or a partial result never completes a persistent goal.",
+    ],
+    parameters: goalStatusSchema,
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      currentGoal = requireGoalStore().current(resolve(ctx.cwd));
+      setGoalStatus(ctx);
+      return {
+        content: [{ type: "text", text: formatGoal(currentGoal) }],
+        details: { goal: currentGoal },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "goal_progress",
+    label: "Record goal progress",
+    description: "Record a concise progress checkpoint on the current user-created persistent goal.",
+    promptSnippet: "Record durable progress on the active persistent goal",
+    promptGuidelines: [
+      "Use goal_progress only for a meaningful verified milestone, blocker, or decision, not for routine narration.",
+    ],
+    parameters: goalProgressSchema,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      currentGoal = requireGoalStore().progress(resolve(ctx.cwd), params.note, "agent");
+      setGoalStatus(ctx);
+      return {
+        content: [{ type: "text", text: formatGoal(currentGoal) }],
+        details: { goal: currentGoal },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "goal_complete",
+    label: "Complete persistent goal",
+    description: "Mark the current persistent goal complete with an outcome. Configured quality gates must be currently passed.",
+    promptSnippet: "Complete the persistent goal only after final verification",
+    promptGuidelines: [
+      "Call goal_complete only when the full objective is satisfied. If quality gates are configured, run quality_gate after the final mutation first.",
+    ],
+    parameters: goalCompleteSchema,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const verificationStatus = await evaluateQualityStatus(ctx.cwd);
+      if (qualityGateState.commands.length > 0 && verificationStatus !== "passed") {
+        throw new Error(`Persistent goal cannot complete because quality gates are ${qualityStatusText(verificationStatus)}`);
+      }
+      currentGoal = requireGoalStore().complete({
+        project: resolve(ctx.cwd),
+        outcome: params.outcome,
+        actor: "agent",
+        verificationStatus,
+        verificationFingerprint: qualityGateState.lastRun?.workspaceFingerprint,
+      });
+      setGoalStatus(ctx);
+      return {
+        content: [{ type: "text", text: formatGoal(currentGoal) }],
+        details: { goal: currentGoal },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "lsp",
+    label: "Resource-aware language server",
+    description: "Query configured language servers for diagnostics, hover, definitions, references, and document symbols under strict process, memory, request, and idle limits.",
+    promptSnippet: "Use a project language server for structured code diagnostics and navigation when installed",
+    promptGuidelines: [
+      "Use lsp for structured diagnostics or navigation when its status reports a matching installed server; fall back to read and search when unavailable.",
+      "LSP results are advisory and do not replace project tests or Hobot Code quality gates.",
+    ],
+    parameters: lspToolSchema,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!lspManager) throw new Error("LSP manager is unavailable");
+      if (params.action === "status") {
+        const status = lspManager.status();
+        return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }], details: status };
+      }
+      if (params.action === "stop") {
+        await lspManager.stopAll();
+        const status = lspManager.status();
+        return { content: [{ type: "text", text: "All Hobot Code language servers stopped." }], details: status };
+      }
+      if (!params.path) throw new Error(`lsp ${params.action} requires path`);
+      const result = await lspManager.query({
+        action: params.action,
+        path: params.path,
+        root: ctx.cwd,
+        line: params.line,
+        column: params.column,
+      });
+      const text = JSON.stringify(result, null, 2);
+      return {
+        content: [{ type: "text", text: text.length > 20_000 ? `${text.slice(0, 20_000)}\n...truncated` : text }],
+        details: { result },
+      };
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     const loadedPolicy = await loadPolicy(permissionPolicyPath());
     permissionPolicy = loadedPolicy.policy as PermissionPolicy;
@@ -1206,6 +1449,33 @@ export default function rdkExtension(pi: ExtensionAPI) {
     memoryConfig = loadedMemory.config as MemoryConfig;
     memoryConfigError = loadedMemory.error;
     memoryRuntimeError = undefined;
+    const [loadedGoal, loadedHooks, loadedNotifications, loadedLsp] = await Promise.all([
+      loadGoalConfig(goalConfigPath()),
+      loadHookConfig(hookConfigPath(), resolve(ctx.cwd, ".hobot", "hooks.json")),
+      loadNotificationConfig(notificationConfigPath()),
+      loadLspConfig(lspConfigPath()),
+    ]);
+    goalConfig = loadedGoal.config as GoalConfig;
+    goalConfigError = loadedGoal.error;
+    goalRuntimeError = undefined;
+    hookConfig = loadedHooks.config as HookConfig;
+    hookConfigError = loadedHooks.error;
+    notificationConfig = loadedNotifications.config as NotificationConfig;
+    notificationConfigError = loadedNotifications.error;
+    lspConfig = loadedLsp.config as LspConfig;
+    lspConfigError = loadedLsp.error;
+    lspManager = new LspManager(lspConfig);
+
+    if (goalConfig.enabled) {
+      try {
+        goalStore = new GoalStore(goalDatabasePath());
+        const session = ctx.sessionManager.getSessionFile() || `ephemeral:${process.pid}`;
+        currentGoal = goalStore.restore(resolve(ctx.cwd), session);
+      } catch (error) {
+        goalRuntimeError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    setGoalStatus(ctx);
 
     try {
       const snapshot = await getBoardSnapshot(false);
@@ -1236,12 +1506,23 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (memoryRuntimeError) {
       ctx.ui.notify(`Persistent memory is unavailable: ${memoryRuntimeError}`, "warning");
     }
+    for (const warning of [
+      goalConfigError ? `Goal config fallback is active: ${goalConfigError}` : undefined,
+      goalRuntimeError ? `Persistent goals are unavailable: ${goalRuntimeError}` : undefined,
+      hookConfigError ? `Hook config fallback is active: ${hookConfigError}` : undefined,
+      notificationConfigError ? `Notification config fallback is active: ${notificationConfigError}` : undefined,
+      lspConfigError ? `LSP config fallback is active: ${lspConfigError}` : undefined,
+    ].filter(Boolean)) {
+      ctx.ui.notify(warning!, "warning");
+    }
   });
 
   pi.on("session_tree", async (_event, ctx) => {
     await restoreQualityState(ctx);
     setQualityStatus(ctx, await evaluateQualityStatus(ctx.cwd));
     setMemoryStatus(ctx);
+    currentGoal = goalStore?.current(resolve(ctx.cwd));
+    setGoalStatus(ctx);
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -1275,17 +1556,71 @@ export default function rdkExtension(pi: ExtensionAPI) {
       "Use memory_search when older context may matter. Use memory_save only for durable, user-relevant information; never save secrets, transient state, raw logs, or guesses.",
       recalled.length > 0 ? "Recalled entries:\n" + formatMemoryRecords(recalled) : "No relevant entries were recalled for this turn.",
     ].join("\n");
+    currentGoal = goalStore?.current(resolve(ctx.cwd));
+    setGoalStatus(ctx);
+    const goalInstructions = currentGoal
+      ? [
+          "## Hobot Code persistent goal",
+          formatGoal(currentGoal),
+          "This goal was explicitly created by the user. Preserve it across compaction and sessions. Record meaningful milestones with goal_progress.",
+          currentGoal.status === "paused"
+            ? "The goal is paused. Do not continue autonomous work or claim completion until the user resumes or extends it."
+            : "Stay within the remaining turn and token budget. Use goal_complete only after the complete objective and current verification requirements are satisfied.",
+        ].join("\n")
+      : "## Hobot Code persistent goal\nNo user-created persistent goal is active for this project. Only the user may create one with /goal create.";
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${expertPrompt}\n\n${qualityInstructions}\n\n${memoryInstructions}`,
+      systemPrompt: `${event.systemPrompt}\n\n${expertPrompt}\n\n${qualityInstructions}\n\n${memoryInstructions}\n\n${goalInstructions}`,
     };
   });
 
   pi.on("session_shutdown", async () => {
     closeMemory();
+    goalStore?.close();
+    goalStore = undefined;
+    currentGoal = undefined;
+    await lspManager?.stopAll();
+    lspManager = undefined;
+  });
+
+  pi.on("agent_start", async () => {
+    agentStartedAt = Date.now();
+    agentHadFailure = false;
+  });
+
+  pi.on("turn_start", async () => {
+    goalTurnStartedAt = Date.now();
+  });
+
+  pi.on("turn_end", async (event, ctx) => {
+    if (!goalStore || !currentGoal) return;
+    const usage = "usage" in event.message ? event.message.usage : undefined;
+    const tokens = usage?.totalTokens ?? 0;
+    const previousStatus = currentGoal.status;
+    currentGoal = goalStore.consumeTurn(
+      resolve(ctx.cwd),
+      tokens,
+      goalTurnStartedAt ? Date.now() - goalTurnStartedAt : 0,
+    );
+    setGoalStatus(ctx);
+    if (previousStatus === "active" && currentGoal?.status === "paused") {
+      ctx.ui.notify("Persistent goal budget is exhausted and the goal is now paused. Use /goal extend to continue.", "warning");
+      notifyRemote("Hobot Code", "Persistent goal paused because its budget is exhausted");
+    }
+  });
+
+  pi.on("agent_settled", async () => {
+    const duration = agentStartedAt ? Date.now() - agentStartedAt : 0;
+    if (duration < notificationConfig.minDurationMs) return;
+    if (agentHadFailure && notificationConfig.onFailure) {
+      notifyRemote("Hobot Code", "Agent finished with an error");
+    } else if (notificationConfig.onComplete) {
+      notifyRemote("Hobot Code", currentGoal?.status === "completed" ? "Persistent goal completed" : "Agent turn completed");
+    }
   });
 
   pi.on("message_end", async (event, ctx) => {
     if (event.message.role !== "assistant") return undefined;
+    if (event.message.stopReason === "error") agentHadFailure = true;
     const toolCalls = event.message.content.filter((block) => block.type === "toolCall");
     const hasMutation = toolCalls.some((block) => mutatingToolNames.has(block.name) || toolIsMcp(block.name));
     if (hasMutation) {
@@ -1296,15 +1631,23 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
     }
 
-    if (qualityGateState.commands.length === 0) return undefined;
     const responseText = event.message.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n");
     if (!completionAssertionPattern.test(responseText)) return undefined;
-    const status = await evaluateQualityStatus(ctx.cwd);
-    setQualityStatus(ctx, status);
-    if (status === "passed") return undefined;
+    const warnings: string[] = [];
+    if (currentGoal && ["active", "paused"].includes(currentGoal.status)) {
+      warnings.push(`[Hobot Code persistent goal: completion is not accepted because ${currentGoal.id} is still ${currentGoal.status}. Use goal_complete after satisfying the full objective.]`);
+    }
+    if (qualityGateState.commands.length > 0) {
+      const status = await evaluateQualityStatus(ctx.cwd);
+      setQualityStatus(ctx, status);
+      if (status !== "passed") {
+        warnings.push(`[Hobot Code quality gate: completion is not accepted because the gate is ${qualityStatusText(status)}. Run /gate run or call quality_gate after the final change.]`);
+      }
+    }
+    if (warnings.length === 0) return undefined;
     return {
       message: {
         ...event.message,
@@ -1312,7 +1655,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ...event.message.content,
           {
             type: "text",
-            text: `\n\n[Hobot Code quality gate: completion is not accepted because the gate is ${qualityStatusText(status)}. Run /gate run or call quality_gate after the final change.]`,
+            text: `\n\n${warnings.join("\n")}`,
           },
         ],
       },
@@ -1358,12 +1701,30 @@ export default function rdkExtension(pi: ExtensionAPI) {
           reason: `${event.toolName} requires interactive approval: ${approvalReasons.join("; ")}`,
         };
       }
+      if (notificationConfig.onApproval) {
+        notifyRemote("Hobot Code approval", `${event.toolName} is waiting for confirmation`);
+      }
       const detail = [
         describeToolCall(event.toolName, event.input, qualityGateState.commands),
         `Reason: ${approvalReasons.join("; ")}`,
       ].join("\n");
       const approved = await ctx.ui.confirm(`Allow ${event.toolName}?`, detail);
       if (!approved) return { block: true, reason: `${event.toolName} was cancelled by the user` };
+    }
+
+    const hookResult = await runHooks({
+      config: hookConfig,
+      event: "PreToolUse",
+      toolName: event.toolName,
+      toolCallId: event.toolCallId,
+      cwd: ctx.cwd,
+      input: event.input,
+      auditPath: hookAuditPath(),
+      signal: ctx.signal,
+    });
+    for (const warning of hookResult.warnings) ctx.ui.notify(`PreToolUse hook warning: ${warning}`, "warning");
+    if (hookResult.blocked) {
+      return { block: true, reason: `PreToolUse hook blocked ${event.toolName}: ${hookResult.reason}` };
     }
 
     if (mutatingToolNames.has(event.toolName) || toolIsMcp(event.toolName)) {
@@ -1373,6 +1734,34 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
     }
     return undefined;
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.isError) agentHadFailure = true;
+    const hookResult = await runHooks({
+      config: hookConfig,
+      event: "PostToolUse",
+      toolName: event.toolName,
+      toolCallId: event.toolCallId,
+      cwd: ctx.cwd,
+      input: event.input,
+      result: { content: event.content, details: event.details, isError: event.isError },
+      auditPath: hookAuditPath(),
+      signal: ctx.signal,
+    });
+    for (const warning of hookResult.warnings) ctx.ui.notify(`PostToolUse hook warning: ${warning}`, "warning");
+    if (!hookResult.appendText && !hookResult.forceError && !hookResult.blocked) return undefined;
+    const reason = hookResult.blocked ? `PostToolUse hook failed: ${hookResult.reason}` : undefined;
+    if (hookResult.forceError || hookResult.blocked) agentHadFailure = true;
+    return {
+      content: [
+        ...event.content,
+        ...[hookResult.appendText, reason]
+          .filter(Boolean)
+          .map((text) => ({ type: "text" as const, text: `\n[Hobot Code hook]\n${text}` })),
+      ],
+      isError: event.isError || hookResult.forceError || hookResult.blocked,
+    };
   });
 
   pi.registerCommand("init", {
@@ -1534,6 +1923,196 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("goal", {
+    description: "Create and manage a persistent, budgeted project goal",
+    handler: async (args, ctx) => {
+      const input = String(args ?? "").trim();
+      const space = input.indexOf(" ");
+      const operation = (space < 0 ? input : input.slice(0, space)) || "status";
+      let remainder = space < 0 ? "" : input.slice(space + 1).trim();
+      const project = resolve(ctx.cwd);
+      try {
+        if (operation === "create") {
+          let turnBudget = goalConfig.defaultTurnBudget;
+          let tokenBudget = goalConfig.defaultTokenBudget ?? undefined;
+          while (remainder.startsWith("--")) {
+            const match = remainder.match(/^--(turns|tokens)\s+(\d+)\s*/);
+            if (!match) throw new Error("Usage: /goal create [--turns N] [--tokens N] <objective>");
+            if (match[1] === "turns") turnBudget = Number(match[2]);
+            else tokenBudget = Number(match[2]);
+            remainder = remainder.slice(match[0].length);
+          }
+          if (!remainder) throw new Error("Usage: /goal create [--turns N] [--tokens N] <objective>");
+          currentGoal = requireGoalStore().create({
+            project,
+            objective: remainder,
+            turnBudget,
+            tokenBudget,
+            session: ctx.sessionManager.getSessionFile(),
+          });
+        } else if (operation === "progress") {
+          if (!remainder) throw new Error("Usage: /goal progress <note>");
+          currentGoal = requireGoalStore().progress(project, remainder, "user");
+        } else if (operation === "pause") {
+          currentGoal = requireGoalStore().pause(project, "user");
+        } else if (operation === "resume") {
+          currentGoal = requireGoalStore().resume(project);
+        } else if (operation === "extend") {
+          const [turnsText, tokensText, extra] = remainder.split(/\s+/);
+          if (!turnsText || extra) throw new Error("Usage: /goal extend <extra-turns> [extra-tokens]");
+          currentGoal = requireGoalStore().extend(
+            project,
+            Number(turnsText),
+            tokensText === undefined ? undefined : Number(tokensText),
+          );
+        } else if (operation === "complete") {
+          if (!remainder) throw new Error("Usage: /goal complete <outcome>");
+          const verificationStatus = await evaluateQualityStatus(ctx.cwd);
+          currentGoal = requireGoalStore().complete({
+            project,
+            outcome: remainder,
+            actor: "user",
+            verificationStatus,
+            verificationFingerprint: qualityGateState.lastRun?.workspaceFingerprint,
+          });
+        } else if (operation === "cancel") {
+          if (!remainder) throw new Error("Usage: /goal cancel <reason>");
+          currentGoal = requireGoalStore().cancel(project, remainder);
+        } else if (operation === "history") {
+          const goals = requireGoalStore().history(project);
+          ctx.ui.notify(goals.length ? goals.map(formatGoal).join("\n\n") : "No goal history for this project.", "info");
+          return;
+        } else if (operation === "reload") {
+          const loaded = await loadGoalConfig(goalConfigPath());
+          goalConfig = loaded.config as GoalConfig;
+          goalConfigError = loaded.error;
+          goalRuntimeError = undefined;
+          if (!goalConfig.enabled) {
+            goalStore?.close();
+            goalStore = undefined;
+            currentGoal = undefined;
+          } else {
+            try {
+              if (!goalStore) goalStore = new GoalStore(goalDatabasePath());
+              const session = ctx.sessionManager.getSessionFile() || `ephemeral:${process.pid}`;
+              currentGoal = goalStore.restore(project, session);
+            } catch (error) {
+              goalRuntimeError = error instanceof Error ? error.message : String(error);
+              currentGoal = undefined;
+            }
+          }
+        } else if (operation === "status") {
+          currentGoal = goalStore?.current(project);
+        } else {
+          throw new Error("Usage: /goal [status|create|progress|pause|resume|extend|complete|cancel|history|reload]");
+        }
+        setGoalStatus(ctx);
+        ctx.ui.notify([
+          goalConfigError ? `Config warning: ${goalConfigError}` : undefined,
+          goalRuntimeError ? `Runtime error: ${goalRuntimeError}` : undefined,
+          formatGoal(currentGoal),
+        ].filter(Boolean).join("\n"), goalRuntimeError ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("hooks", {
+    description: "Inspect or reload PreToolUse and PostToolUse hooks",
+    handler: async (args, ctx) => {
+      const operation = String(args ?? "").trim() || "status";
+      try {
+        if (operation === "reload") {
+          const loaded = await loadHookConfig(hookConfigPath(), resolve(ctx.cwd, ".hobot", "hooks.json"));
+          hookConfig = loaded.config as HookConfig;
+          hookConfigError = loaded.error;
+        } else if (operation !== "status") {
+          throw new Error("Usage: /hooks [status|reload]");
+        }
+        ctx.ui.notify([
+          `Config: ${hookConfigPath()}`,
+          `Project hooks: ${hookConfig.allowProjectHooks ? "allowed" : "disabled"}`,
+          `Failure policy: ${hookConfig.failurePolicy}`,
+          `Timeout: ${hookConfig.timeoutMs} ms`,
+          `Audit: ${hookAuditPath()}`,
+          hookConfigError ? `Warning: ${hookConfigError}` : undefined,
+          "Hooks:",
+          hookConfig.hooks.length
+            ? hookConfig.hooks.map((hook) => `${hook.event} ${hook.tool} -> ${hook.name}`).join("\n")
+            : "(none)",
+        ].filter(Boolean).join("\n"), hookConfigError ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("notifications", {
+    description: "Inspect, test, enable, or disable SSH terminal notifications",
+    handler: async (args, ctx) => {
+      const operation = String(args ?? "").trim() || "status";
+      try {
+        if (operation === "on" || operation === "off") {
+          notificationConfig = await writeNotificationConfig(notificationConfigPath(), {
+            ...notificationConfig,
+            enabled: operation === "on",
+          }) as NotificationConfig;
+          notificationConfigError = undefined;
+        } else if (operation === "reload") {
+          const loaded = await loadNotificationConfig(notificationConfigPath());
+          notificationConfig = loaded.config as NotificationConfig;
+          notificationConfigError = loaded.error;
+        } else if (operation === "test") {
+          const emitted = emitTerminalNotification(notificationConfig, "Hobot Code", "Notification test");
+          ctx.ui.notify(emitted ? "Terminal notification emitted." : "Notification was suppressed by configuration or terminal state.", emitted ? "info" : "warning");
+          return;
+        } else if (operation !== "status") {
+          throw new Error("Usage: /notifications [status|test|on|off|reload]");
+        }
+        ctx.ui.notify([
+          `Config: ${notificationConfigPath()}`,
+          `Enabled: ${notificationConfig.enabled}`,
+          `SSH detected: ${Boolean(process.env.SSH_CONNECTION)}`,
+          `Protocol: ${notificationConfig.protocol}`,
+          `Bell: ${notificationConfig.bell}`,
+          `Approval/completion/failure: ${notificationConfig.onApproval}/${notificationConfig.onComplete}/${notificationConfig.onFailure}`,
+          `Minimum duration: ${notificationConfig.minDurationMs} ms`,
+          notificationConfigError ? `Warning: ${notificationConfigError}` : undefined,
+        ].filter(Boolean).join("\n"), notificationConfigError ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("lsp", {
+    description: "Inspect, reload, or stop resource-aware language servers",
+    handler: async (args, ctx) => {
+      const operation = String(args ?? "").trim() || "status";
+      try {
+        if (operation === "reload") {
+          await lspManager?.stopAll();
+          const loaded = await loadLspConfig(lspConfigPath());
+          lspConfig = loaded.config as LspConfig;
+          lspConfigError = loaded.error;
+          lspManager = new LspManager(lspConfig);
+        } else if (operation === "stop") {
+          await lspManager?.stopAll();
+        } else if (operation !== "status") {
+          throw new Error("Usage: /lsp [status|reload|stop]");
+        }
+        ctx.ui.notify([
+          `Config: ${lspConfigPath()}`,
+          lspConfigError ? `Warning: ${lspConfigError}` : undefined,
+          JSON.stringify(lspManager?.status() ?? { enabled: false }, null, 2),
+        ].filter(Boolean).join("\n"), lspConfigError ? "warning" : "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("memory", {
     description: "Inspect and manage persistent memory",
     handler: async (args, ctx) => {
@@ -1657,7 +2236,27 @@ export default function rdkExtension(pi: ExtensionAPI) {
     description: "Show live D-Robotics board and Hobot Code runtime status",
     handler: async (_args, ctx) => {
       const snapshot = await getBoardSnapshot(true);
-      ctx.ui.notify(JSON.stringify(snapshot, null, 2), "info");
+      currentGoal = goalStore?.current(resolve(ctx.cwd));
+      const runtime = {
+        board: snapshot,
+        hobotCode: {
+          memory: memoryStore && currentMemoryContext ? memoryStore.stats(currentMemoryContext) : { enabled: false },
+          goal: currentGoal,
+          hooks: {
+            enabled: hookConfig.enabled,
+            count: hookConfig.hooks.length,
+            failurePolicy: hookConfig.failurePolicy,
+            auditPath: hookAuditPath(),
+          },
+          notifications: {
+            enabled: notificationConfig.enabled,
+            sshDetected: Boolean(process.env.SSH_CONNECTION),
+            protocol: notificationConfig.protocol,
+          },
+          lsp: lspManager?.status(),
+        },
+      };
+      ctx.ui.notify(JSON.stringify(runtime, null, 2), "info");
     },
   });
 

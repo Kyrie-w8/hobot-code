@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "failurePolicy": "block",
+  "timeoutMs": 3000,
+  "maxOutputChars": 2000,
+  "allowProjectHooks": false,
+  "hooks": [
+    {
+      "name": "fixture-pre-guard",
+      "event": "PreToolUse",
+      "tool": "bash",
+      "command": ["/usr/bin/python3", "/tmp/hobot-p1-probe/tests/fixtures/p1-hook.py"]
+    },
+    {
+      "name": "fixture-post-read",
+      "event": "PostToolUse",
+      "tool": "read",
+      "command": ["/usr/bin/python3", "/tmp/hobot-p1-probe/tests/fixtures/p1-hook.py"]
+    }
+  ]
+}

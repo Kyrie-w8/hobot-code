@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "defaultTurnBudget": 50,
+  "defaultTokenBudget": null
+}

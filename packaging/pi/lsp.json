@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "maxProcesses": 1,
+  "maxMemoryMiB": 256,
+  "idleTimeoutMs": 60000,
+  "requestTimeoutMs": 10000,
+  "diagnosticsWaitMs": 500,
+  "servers": [
+    {
+      "id": "clangd",
+      "extensions": [".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"],
+      "languageId": "cpp",
+      "command": ["clangd", "--background-index=false"]
+    },
+    {
+      "id": "pylsp",
+      "extensions": [".py"],
+      "languageId": "python",
+      "command": ["pylsp"]
+    },
+    {
+      "id": "typescript",
+      "extensions": [".ts", ".tsx", ".js", ".jsx"],
+      "languageId": "typescript",
+      "command": ["typescript-language-server", "--stdio"]
+    },
+    {
+      "id": "gopls",
+      "extensions": [".go"],
+      "languageId": "go",
+      "command": ["gopls"]
+    },
+    {
+      "id": "rust-analyzer",
+      "extensions": [".rs"],
+      "languageId": "rust",
+      "command": ["rust-analyzer"]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "allowLocal": false,
+  "bell": true,
+  "protocol": "osc9",
+  "onApproval": true,
+  "onComplete": true,
+  "onFailure": true,
+  "minDurationMs": 5000
+}

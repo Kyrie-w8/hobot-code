@@ -1,4 +1,4 @@
-# Hobot Code 0.10 配置
+# Hobot Code 0.11 配置
 
 ## 路径
 
@@ -10,9 +10,15 @@
 | `/etc/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
 | `/etc/hobot-code/agent/permissions.json` | allow/ask/deny 工具权限策略 |
 | `/etc/hobot-code/agent/memory.json` | 持久化记忆开关、检索与长度上限 |
+| `/etc/hobot-code/agent/goals.json` | 持久目标默认 turn/token 预算 |
+| `/etc/hobot-code/agent/hooks.json` | PreToolUse/PostToolUse Hook 和失败策略 |
+| `/etc/hobot-code/agent/notifications.json` | SSH OSC/bell 通知触发条件 |
+| `/etc/hobot-code/agent/lsp.json` | 语言服务器命令、文件匹配和资源上限 |
 | `/etc/hobot-code/agent/bin` | 固定版本的 fd 和 ripgrep |
 | `/var/lib/hobot-code/sessions` | Pi JSONL 会话 |
 | `/var/lib/hobot-code/memory/memory.db` | root-only SQLite/FTS5 持久化记忆与审计事件 |
+| `/var/lib/hobot-code/goals/goals.db` | root-only 持久目标状态机与事件 |
+| `/var/lib/hobot-code/audit/hooks.jsonl` | 脱敏 Hook 执行审计 |
 | `/usr/local/lib/hobot-code/extensions` | RDK 扩展 |
 | `/usr/local/lib/hobot-code/skills` | 板端 Skills |
 | `/usr/local/lib/hobot-code/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
@@ -167,3 +173,57 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 作用域为 `user`、`project`、`board`、`session`；类型为 `preference`、`decision`、`fact`、
 `fix`、`instruction`、`note`。重复内容会刷新时间而不是新建副本。写入、检索、删除、
 清空和过期操作都写审计事件，审计详情只保存内容哈希和作用域，不复制记忆正文。
+
+## 持久目标
+
+```json
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "defaultTurnBudget": 50,
+  "defaultTokenBudget": null
+}
+```
+
+`defaultTokenBudget=null` 表示新目标默认只限制 turn；用户可在 `/goal create` 中同时指定两种预算。
+每个工作区只允许一个 active/paused 目标。每次 Pi turn 累加 token 和执行时间；预算耗尽时
+状态变为 paused，只能由用户 `/goal extend` 增加预算。
+
+## Tool Hook
+
+```json
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "failurePolicy": "block",
+  "timeoutMs": 5000,
+  "maxOutputChars": 4000,
+  "allowProjectHooks": false,
+  "hooks": [
+    {
+      "name": "company-guard",
+      "event": "PreToolUse",
+      "tool": "bash",
+      "command": ["/usr/local/sbin/company-guard"],
+      "failurePolicy": "block"
+    }
+  ]
+}
+```
+
+Hook stdin 是 `{schemaVersion,event,toolName,toolCallId,cwd,input,result?}` JSON。成功时可不输出，或输出
+`{"block":true,"reason":"..."}`；PostToolUse 还可输出 `appendText` 和 `isError`。`failurePolicy=block`
+会阻止 Pre 调用或将 Post 结果标错；`warn` 只在 TUI 告警。Hook 不通过 Shell 解析命令数组。
+
+## SSH 通知
+
+`notifications.json` 支持 `osc9`、`osc777`、`both` 协议，可分别控制批准等待、完成和失败通知。
+`allowLocal=false` 表示只在检测到 `SSH_CONNECTION` 时发送；`minDurationMs` 避免短任务频繁弹出。
+RPC、print 和 JSON 模式不写 OSC 序列。
+
+## 资源感知 LSP
+
+`lsp.json` 用 `extensions` 匹配文件，`command` 是不经 Shell 解析的 argv 数组。`maxProcesses`、
+`maxMemoryMiB`、`idleTimeoutMs`、`requestTimeoutMs` 分别约束进程数、单进程 RSS、空闲回收和
+单请求时间。超过进程数时回收最久未使用实例；超过 RSS 时强制停止语言服务器。
+未安装命令时 `lsp status` 报告 `installed=false`，不会自动下载或常驻进程。

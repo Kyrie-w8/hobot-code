@@ -10,7 +10,11 @@ import {
   fingerprintWorkspace,
   initializeProject,
   memoryMatchQuery,
+  parseGoalConfig,
+  parseHookConfig,
+  parseLspConfig,
   parseMemoryConfig,
+  parseNotificationConfig,
   parsePolicy,
   parseQualityConfig,
   resolveToolAction,
@@ -119,4 +123,60 @@ test("memory rejects secrets and builds a bounded FTS query", () => {
     /sensitive data/,
   );
   assert.equal(memoryMatchQuery("S600 部署 S600"), '"S600" OR "部署"');
+});
+
+test("persistent goal and notification configs enforce budgets and bounded timing", () => {
+  assert.equal(parseGoalConfig({
+    schemaVersion: 1,
+    enabled: true,
+    defaultTurnBudget: 50,
+    defaultTokenBudget: null,
+  }).defaultTurnBudget, 50);
+  assert.throws(() => parseGoalConfig({
+    schemaVersion: 1,
+    enabled: true,
+    defaultTurnBudget: 0,
+    defaultTokenBudget: null,
+  }), /defaultTurnBudget/);
+  assert.equal(parseNotificationConfig({
+    schemaVersion: 1,
+    enabled: true,
+    allowLocal: false,
+    bell: true,
+    protocol: "osc9",
+    onApproval: true,
+    onComplete: true,
+    onFailure: true,
+    minDurationMs: 5000,
+  }).protocol, "osc9");
+});
+
+test("hook config uses structured commands and explicit failure policy", () => {
+  const config = parseHookConfig({
+    schemaVersion: 1,
+    enabled: true,
+    failurePolicy: "block",
+    timeoutMs: 1000,
+    maxOutputChars: 1000,
+    allowProjectHooks: false,
+    hooks: [{ name: "guard", event: "PreToolUse", tool: "bash", command: ["/usr/local/bin/guard"] }],
+  });
+  assert.deepEqual(config.hooks[0].command, ["/usr/local/bin/guard"]);
+  assert.throws(() => parseHookConfig({ ...config, hooks: [{ ...config.hooks[0], command: "guard" }] }), /string array/);
+});
+
+test("LSP config limits processes and rejects malformed extensions", () => {
+  const base = {
+    schemaVersion: 1,
+    enabled: true,
+    maxProcesses: 1,
+    maxMemoryMiB: 256,
+    idleTimeoutMs: 60000,
+    requestTimeoutMs: 10000,
+    diagnosticsWaitMs: 500,
+    servers: [{ id: "clangd", extensions: [".cpp"], languageId: "cpp", command: ["clangd"] }],
+  };
+  assert.equal(parseLspConfig(base).maxProcesses, 1);
+  assert.throws(() => parseLspConfig({ ...base, maxProcesses: 8 }), /maxProcesses/);
+  assert.throws(() => parseLspConfig({ ...base, servers: [{ ...base.servers[0], extensions: ["cpp"] }] }), /extensions/);
 });

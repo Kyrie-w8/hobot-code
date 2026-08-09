@@ -25,13 +25,13 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 的官方 ARM64 产物：
 
 ```bash
-make release VERSION=0.10.0
+make release VERSION=0.11.0
 ```
 
 输出：
 
 ```text
-dist/hobot-code-0.10.0-linux-arm64.tar.gz
+dist/hobot-code-0.11.0-linux-arm64.tar.gz
 ```
 
 在不能稳定访问 GitHub Release 的构建机上，可通过 `HOBOT_CODE_PI_CACHE_DIR` 复用 Pi
@@ -41,17 +41,17 @@ dist/hobot-code-0.10.0-linux-arm64.tar.gz
 ```bash
 HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
 HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
-make release VERSION=0.10.0
+make release VERSION=0.11.0
 ```
 
 ## 安装
 
 ```bash
-scp dist/hobot-code-0.10.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
+scp dist/hobot-code-0.11.0-linux-arm64.tar.gz root@RDK_IP:/tmp/
 ssh root@RDK_IP
 cd /tmp
-tar -xzf hobot-code-0.10.0-linux-arm64.tar.gz
-cd hobot-code-0.10.0-linux-arm64
+tar -xzf hobot-code-0.11.0-linux-arm64.tar.gz
+cd hobot-code-0.11.0-linux-arm64
 ./install.sh
 ```
 
@@ -111,6 +111,10 @@ hobot
 /init           生成项目 AGENTS.md 和质量门配置
 /gate           查看、配置或运行质量门
 /memory         查看和管理持久化记忆
+/goal           创建和管理持久目标、预算与验证状态
+/hooks          查看或重载 PreToolUse/PostToolUse Hook
+/notifications  测试或开关 SSH 终端通知
+/lsp            查看、重载或停止受限语言服务器
 /quit           退出；Hobot Code 另外提供 /q 和 /exit
 ```
 
@@ -188,6 +192,39 @@ Hobot Code 使用板端 SQLite + FTS5 保存经用户同意的长期上下文，
 执行 `/memory add` 视为明确写入。密钥、Bearer Token、私钥、常见 secret 赋值和疑似银行卡号
 会被存储层拒绝。数据库位于 `/var/lib/hobot-code/memory/memory.db`，文件权限为 `0600`。
 
+## P1 长期工作能力
+
+持久目标只能由用户显式创建，每个项目同时最多一个 active/paused 目标。它记录 turn/token
+预算、实际消耗、执行耗时、跨会话继续次数、进展和验证指纹；上下文压缩不会完成目标，
+预算耗尽会自动暂停：
+
+```text
+/goal create --turns 50 --tokens 500000 <objective>
+/goal status
+/goal progress <verified milestone or blocker>
+/goal pause
+/goal resume
+/goal extend <extra-turns> [extra-tokens]
+/goal complete <outcome>
+/goal cancel <reason>
+/goal history
+```
+
+模型通过 `goal_status`、`goal_progress`、`goal_complete` 工具参与目标管理。项目配置了质量门时，
+模型只能在最终修改后取得当前 `passed` 指纹才能完成目标；用户的 `/goal complete` 是明确人工裁决。
+
+Hook 从 `/etc/hobot-code/agent/hooks.json` 读取。`PreToolUse` 可在工具执行前阻断，`PostToolUse`
+可追加结果或标记失败。Hook 命令使用 argv 数组，不经 Shell 解析；结构化 JSON 从 stdin 输入，
+stdout 可返回 `block`、`reason`、`appendText`、`isError`。每次运行都有超时、输出上限和脱敏审计。
+项目 `.hobot/hooks.json` 默认不执行，必须由全局配置显式开启。
+
+SSH TUI 在等待批准、长任务完成或失败时发送 OSC 9 和/或 bell，可用 `/notifications test`
+验证当前终端，也可用 `/notifications off` 关闭。RPC/JSON 模式不会插入终端控制序列。
+
+`lsp` 工具提供 `status`、`diagnostics`、`hover`、`definition`、`references`、`symbols`、`stop`。
+语言服务器只在实际请求且命令存在时启动，默认最多 1 个进程、256 MiB RSS、60 秒空闲时间；
+超限会自动结束，不影响主 Agent。基础包不捆绑 clangd、pylsp、gopls 等大型语言服务器。
+
 ## RDK 适配
 
 `/rdk` 显示简要板卡状态，`/doctor` 显示完整诊断。模型需要实时硬件信息时会调用
@@ -209,7 +246,8 @@ Hobot Code 使用板端 SQLite + FTS5 保存经用户同意的长期上下文，
 完整专家角色位于 `prompts/rdk-expert.md`。它不会替代 Pi 的编码工具规则，而是追加完整
 的地瓜平台工程约束；每次模型调用都会动态填充板卡、RDK OS、文档线、主机名和架构。
 
-会话保存在 `/var/lib/hobot-code/sessions`，持久化记忆保存在 `/var/lib/hobot-code/memory`。全局配置位于 `/etc/hobot-code/agent`，
+会话保存在 `/var/lib/hobot-code/sessions`，持久化记忆保存在 `/var/lib/hobot-code/memory`，
+持久目标保存在 `/var/lib/hobot-code/goals`，Hook 审计保存在 `/var/lib/hobot-code/audit`。全局配置位于 `/etc/hobot-code/agent`，
 板端扩展和 Skills 位于 `/usr/local/lib/hobot-code`。
 
 ## 回滚
