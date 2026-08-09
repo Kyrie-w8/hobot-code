@@ -32,6 +32,7 @@ import {
   fingerprintWorkspace,
   initializeProject,
   isMcpTool,
+  knowledgeQueryTerms,
   loadGoalConfig,
   loadHookConfig,
   loadLspConfig,
@@ -59,11 +60,14 @@ import {
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 import { registerSideAgent } from "./side-agent.ts";
+import { iterateAnthropicSse, readBoundedBody } from "./anthropic-sse.mjs";
+import { destructiveShellReasons, inspectResolvedPath } from "./runtime-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
 const DEFAULT_MODEL = "kimi-k3";
+const HOBOT_CODE_VERSION = process.env.HOBOT_CODE_VERSION || "development";
 const DEFAULT_EXPERT_PROMPT_PATH = "/usr/local/lib/hobot-code/prompts/rdk-expert.md";
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 
@@ -81,6 +85,7 @@ interface BoardSnapshot {
   cpuCores: number;
   memoryTotalMiB: number;
   memoryFreeMiB: number;
+  memoryAvailableMiB: number;
   loadAverage: number[];
   uptimeSeconds: number;
   os: Record<string, string>;
@@ -128,7 +133,7 @@ interface PermissionRule {
 }
 
 interface PermissionPolicy {
-  schemaVersion: 1;
+  schemaVersion: 2;
   default: PermissionAction;
   rules: PermissionRule[];
 }
@@ -268,10 +273,11 @@ async function readThermals(): Promise<Array<{ name: string; celsius: number }>>
 }
 
 async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot> {
-  const [board, versionFile, osRelease, devEntries, thermalZones, somStatus, modelExec, rdkosInfo] = await Promise.all([
+  const [board, versionFile, osRelease, memoryInfo, devEntries, thermalZones, somStatus, modelExec, rdkosInfo] = await Promise.all([
     readText(["/sys/firmware/devicetree/base/model", "/proc/device-tree/model"]),
     readText(["/etc/version"]),
     readText(["/etc/os-release"]),
+    readText(["/proc/meminfo"]),
     listMatching("/dev", /^(bpu|hobot|ion|dnn)/i),
     readThermals(),
     commandExists(["/usr/bin/hrut_somstatus", "/usr/local/bin/hrut_somstatus"]),
@@ -282,6 +288,7 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
   const os = parseOsRelease(osRelease);
   const boardId = detectBoardId(board);
   const rdkOsVersion = versionFile || os.VERSION_ID?.replace(/^V/i, "") || "unknown";
+  const availableKiB = Number(memoryInfo?.match(/^MemAvailable:\s+(\d+)\s+kB$/m)?.[1]);
 
   let processes: string | undefined;
   if (includeProcesses) {
@@ -308,6 +315,9 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
     cpuCores: cpus().length,
     memoryTotalMiB: Math.round(totalmem() / 1024 / 1024),
     memoryFreeMiB: Math.round(freemem() / 1024 / 1024),
+    memoryAvailableMiB: Number.isFinite(availableKiB)
+      ? Math.round(availableKiB / 1024)
+      : Math.round(freemem() / 1024 / 1024),
     loadAverage: loadavg().map((value) => Math.round(value * 100) / 100),
     uptimeSeconds: Math.round(uptime()),
     os,
@@ -323,7 +333,9 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
 }
 
 function compactBoardSummary(snapshot: BoardSnapshot): string {
-  const temperature = snapshot.thermalZones[0]?.celsius;
+  const temperature = snapshot.thermalZones.length > 0
+    ? Math.max(...snapshot.thermalZones.map((zone) => zone.celsius))
+    : undefined;
   return [
     `${snapshot.board} | RDK OS ${snapshot.rdkOsVersion}`,
     `${snapshot.cpuCores} CPU`,
@@ -340,9 +352,7 @@ function wildcardMatches(value: string, pattern: string): boolean {
 }
 
 function queryTerms(query: string): string[] {
-  const normalized = query.toLowerCase().trim();
-  const terms = normalized.match(/[\p{L}\p{N}][\p{L}\p{N}_.+-]*/gu) ?? [];
-  return [...new Set([normalized, ...terms].filter((term) => term.length > 1))];
+  return knowledgeQueryTerms(query);
 }
 
 function occurrences(haystack: string, needle: string): number {
@@ -557,13 +567,18 @@ function mapStopReason(reason: string | undefined): StopReason {
       return "length";
     case "tool_use":
       return "toolUse";
+    case "pause_turn":
+      return "deferred";
+    case "refusal":
+      return "error";
     default:
-      return "stop";
+      return "error";
   }
 }
 
 function thinkingBudget(level: SimpleStreamOptions["reasoning"], maxTokens: number): number | undefined {
   if (!level || level === "off") return undefined;
+  if (maxTokens < 2048) return undefined;
   const requested: Record<string, number> = {
     minimal: 1024,
     low: 2048,
@@ -572,7 +587,241 @@ function thinkingBudget(level: SimpleStreamOptions["reasoning"], maxTokens: numb
     xhigh: 6144,
     max: 6144,
   };
-  return Math.max(1024, Math.min(requested[level] ?? 4096, maxTokens - 1024));
+  return Math.max(1024, Math.min(requested[level] ?? 4096, maxTokens - 1024, Math.floor(maxTokens / 2)));
+}
+
+interface GatewayUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+interface GatewayResponse {
+  id?: string;
+  content?: Array<{
+    type: "thinking" | "reasoning" | "redacted_thinking" | "text" | "tool_use";
+    thinking?: string;
+    text?: string;
+    signature?: string;
+    data?: string;
+    id?: string;
+    name?: string;
+    input?: JsonRecord;
+  }>;
+  stop_reason?: string;
+  usage?: GatewayUsage;
+}
+
+type StreamingGatewayBlock = (ThinkingContent | TextContent | ToolCall) & {
+  providerIndex: number;
+  partialJson?: string;
+};
+
+function updateGatewayUsage(output: AssistantMessage, usage: GatewayUsage | undefined): void {
+  if (!usage) return;
+  if (usage.input_tokens !== undefined) output.usage.input = usage.input_tokens;
+  if (usage.output_tokens !== undefined) output.usage.output = usage.output_tokens;
+  if (usage.cache_read_input_tokens !== undefined) output.usage.cacheRead = usage.cache_read_input_tokens;
+  if (usage.cache_creation_input_tokens !== undefined) output.usage.cacheWrite = usage.cache_creation_input_tokens;
+  output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+}
+
+function consumeBufferedGatewayResponse(
+  result: GatewayResponse,
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream,
+): void {
+  if (result.id) output.responseId = result.id;
+  for (const block of result.content ?? []) {
+    const contentIndex = output.content.length;
+    if (block.type === "thinking" || block.type === "reasoning" || block.type === "redacted_thinking") {
+      const thinking = block.type === "redacted_thinking"
+        ? "[Reasoning redacted]"
+        : block.thinking ?? block.text ?? "";
+      output.content.push({
+        type: "thinking",
+        thinking,
+        thinkingSignature: block.signature ?? block.data ?? "",
+        ...(block.type === "redacted_thinking" ? { redacted: true } : {}),
+      });
+      stream.push({ type: "thinking_start", contentIndex, partial: output });
+      if (thinking) stream.push({ type: "thinking_delta", contentIndex, delta: thinking, partial: output });
+      stream.push({ type: "thinking_end", contentIndex, content: thinking, partial: output });
+    } else if (block.type === "text") {
+      const text = block.text ?? "";
+      output.content.push({ type: "text", text });
+      stream.push({ type: "text_start", contentIndex, partial: output });
+      if (text) stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
+      stream.push({ type: "text_end", contentIndex, content: text, partial: output });
+    } else if (block.type === "tool_use" && block.id && block.name) {
+      const toolCall: ToolCall = {
+        type: "toolCall",
+        id: block.id,
+        name: block.name,
+        arguments: block.input ?? {},
+      };
+      output.content.push(toolCall);
+      stream.push({ type: "toolcall_start", contentIndex, partial: output });
+      stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+    }
+  }
+  updateGatewayUsage(output, result.usage);
+  output.stopReason = mapStopReason(result.stop_reason);
+  if (output.stopReason === "error") {
+    throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${result.stop_reason}`);
+  }
+}
+
+async function consumeStreamingGatewayResponse(
+  response: Response,
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const blocks = output.content as StreamingGatewayBlock[];
+  const activeProviderIndexes = new Set<number>();
+  const seenProviderIndexes = new Set<number>();
+  let sawMessageStop = false;
+  for await (const rawEvent of iterateAnthropicSse(response.body, { signal })) {
+    const event = rawEvent as JsonRecord;
+    const eventType = String(event.type ?? "");
+    if (eventType === "error") {
+      const error = event.error as JsonRecord | undefined;
+      throw new Error(`Model gateway stream error: ${String(error?.message ?? "unknown error")}`);
+    }
+    if (eventType === "message_start") {
+      const message = event.message as JsonRecord | undefined;
+      if (typeof message?.id === "string") output.responseId = message.id;
+      updateGatewayUsage(output, message?.usage as GatewayUsage | undefined);
+      continue;
+    }
+    if (eventType === "content_block_start") {
+      const providerIndex = Number(event.index);
+      if (!Number.isInteger(providerIndex) || providerIndex < 0) {
+        throw new Error("Model gateway returned an invalid content block index");
+      }
+      if (seenProviderIndexes.has(providerIndex)) {
+        throw new Error(`Model gateway reused content block index ${providerIndex}`);
+      }
+      const contentBlock = event.content_block as JsonRecord | undefined;
+      const blockType = String(contentBlock?.type ?? "");
+      let block: StreamingGatewayBlock | undefined;
+      if (blockType === "text") {
+        block = { type: "text", text: String(contentBlock?.text ?? ""), providerIndex };
+      } else if (blockType === "thinking" || blockType === "reasoning") {
+        block = {
+          type: "thinking",
+          thinking: String(contentBlock?.thinking ?? contentBlock?.text ?? ""),
+          thinkingSignature: String(contentBlock?.signature ?? ""),
+          providerIndex,
+        };
+      } else if (blockType === "redacted_thinking") {
+        block = {
+          type: "thinking",
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: String(contentBlock?.data ?? ""),
+          redacted: true,
+          providerIndex,
+        };
+      } else if (blockType === "tool_use" && typeof contentBlock?.id === "string" && typeof contentBlock?.name === "string") {
+        block = {
+          type: "toolCall",
+          id: contentBlock.id,
+          name: contentBlock.name,
+          arguments: (contentBlock.input as JsonRecord | undefined) ?? {},
+          partialJson: "",
+          providerIndex,
+        };
+      }
+      if (!block) continue;
+      seenProviderIndexes.add(providerIndex);
+      activeProviderIndexes.add(providerIndex);
+      blocks.push(block);
+      const contentIndex = blocks.length - 1;
+      if (block.type === "text") stream.push({ type: "text_start", contentIndex, partial: output });
+      else if (block.type === "thinking") stream.push({ type: "thinking_start", contentIndex, partial: output });
+      else stream.push({ type: "toolcall_start", contentIndex, partial: output });
+      continue;
+    }
+    if (eventType === "content_block_delta") {
+      const providerIndex = Number(event.index);
+      const contentIndex = blocks.findIndex((block) => block.providerIndex === providerIndex);
+      const block = blocks[contentIndex];
+      const delta = event.delta as JsonRecord | undefined;
+      if (!block || !delta) continue;
+      if (delta.type === "text_delta" && block.type === "text") {
+        const text = String(delta.text ?? "");
+        block.text += text;
+        if (text) stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
+      } else if ((delta.type === "thinking_delta" || delta.type === "reasoning_delta") && block.type === "thinking") {
+        const thinking = String(delta.thinking ?? delta.text ?? "");
+        block.thinking += thinking;
+        if (thinking) stream.push({ type: "thinking_delta", contentIndex, delta: thinking, partial: output });
+      } else if (delta.type === "signature_delta" && block.type === "thinking") {
+        block.thinkingSignature = `${block.thinkingSignature ?? ""}${String(delta.signature ?? "")}`;
+      } else if (delta.type === "input_json_delta" && block.type === "toolCall") {
+        const json = String(delta.partial_json ?? "");
+        block.partialJson = `${block.partialJson ?? ""}${json}`;
+        if (json) stream.push({ type: "toolcall_delta", contentIndex, delta: json, partial: output });
+      }
+      continue;
+    }
+    if (eventType === "content_block_stop") {
+      const providerIndex = Number(event.index);
+      const contentIndex = blocks.findIndex((block) => block.providerIndex === providerIndex);
+      const block = blocks[contentIndex];
+      if (!block) continue;
+      activeProviderIndexes.delete(providerIndex);
+      delete block.providerIndex;
+      if (block.type === "text") {
+        stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
+      } else if (block.type === "thinking") {
+        stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
+      } else {
+        if (block.partialJson) {
+          try {
+            const parsed = JSON.parse(block.partialJson) as unknown;
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("tool arguments must be a JSON object");
+            }
+            block.arguments = parsed as JsonRecord;
+          } catch {
+            throw new Error(`Model gateway returned invalid tool arguments for ${block.name}`);
+          }
+        }
+        delete block.partialJson;
+        stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+      }
+      continue;
+    }
+    if (eventType === "message_delta") {
+      const delta = event.delta as JsonRecord | undefined;
+      if (delta?.stop_reason !== undefined && delta.stop_reason !== null) {
+        const rawReason = String(delta.stop_reason);
+        output.rawStopReason = rawReason;
+        output.stopReason = mapStopReason(rawReason);
+      }
+      updateGatewayUsage(output, event.usage as GatewayUsage | undefined);
+      continue;
+    }
+    if (eventType === "message_stop") {
+      sawMessageStop = true;
+    }
+  }
+  for (const block of blocks) {
+    delete block.providerIndex;
+    delete block.partialJson;
+  }
+  if (signal?.aborted) throw new Error("Request was aborted");
+  if (!sawMessageStop) throw new Error("Model gateway stream ended before message_stop");
+  if (activeProviderIndexes.size > 0) {
+    throw new Error("Model gateway stream ended with incomplete content blocks");
+  }
+  if (output.stopReason === "pending") throw new Error("Model gateway stream ended without a stop reason");
+  if (output.stopReason === "error") {
+    throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${output.rawStopReason ?? "unknown"}`);
+  }
 }
 
 function streamDrobotics(
@@ -610,7 +859,7 @@ function streamDrobotics(
       const body: JsonRecord = {
         model: model.id,
         max_tokens: maxTokens,
-        stream: false,
+        stream: true,
         system: context.systemPrompt ? sanitizeText(context.systemPrompt) : undefined,
         messages: convertMessages(context.messages),
         tools: convertTools(context.tools),
@@ -623,85 +872,53 @@ function streamDrobotics(
       }
       configuredHeaders.Authorization ||= `Bearer ${options.apiKey}`;
 
-      const response = await fetch(`${(model.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "")}/v1/messages`, {
+      const endpoint = `${(model.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "")}/v1/messages`;
+      const request = (payload: JsonRecord, accept: string) => fetch(endpoint, {
         method: "POST",
         headers: {
-          Accept: "application/json",
+          Accept: accept,
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
-          "User-Agent": "hobot-code/0.12.1",
+          "User-Agent": `hobot-code/${HOBOT_CODE_VERSION}`,
           ...configuredHeaders,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
         signal: options.signal,
       });
-
+      let response = await request(body, "text/event-stream, application/json");
+      let streamingFailure: { status: number; detail: string } | undefined;
       if (!response.ok) {
-        const detail = (await response.text()).slice(0, 4096);
-        throw new Error(`D-Robotics model gateway HTTP ${response.status}: ${detail}`);
-      }
-
-      const result = (await response.json()) as {
-        content?: Array<{
-          type: "thinking" | "reasoning" | "text" | "tool_use";
-          thinking?: string;
-          text?: string;
-          signature?: string;
-          id?: string;
-          name?: string;
-          input?: JsonRecord;
-        }>;
-        stop_reason?: string;
-        usage?: {
-          input_tokens?: number;
-          output_tokens?: number;
-          cache_read_input_tokens?: number;
-          cache_creation_input_tokens?: number;
-        };
-      };
-
-      for (const block of result.content ?? []) {
-        const contentIndex = output.content.length;
-        if (block.type === "thinking" || block.type === "reasoning") {
-          const thinking = block.thinking ?? block.text ?? "";
-          output.content.push({
-            type: "thinking",
-            thinking,
-            thinkingSignature: block.signature ?? "",
-          });
-          stream.push({ type: "thinking_start", contentIndex, partial: output });
-          if (thinking) stream.push({ type: "thinking_delta", contentIndex, delta: thinking, partial: output });
-          stream.push({ type: "thinking_end", contentIndex, content: thinking, partial: output });
-        } else if (block.type === "text") {
-          const text = block.text ?? "";
-          output.content.push({ type: "text", text });
-          stream.push({ type: "text_start", contentIndex, partial: output });
-          if (text) stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
-          stream.push({ type: "text_end", contentIndex, content: text, partial: output });
-        } else if (block.type === "tool_use" && block.id && block.name) {
-          const toolCall: ToolCall = {
-            type: "toolCall",
-            id: block.id,
-            name: block.name,
-            arguments: block.input ?? {},
-          };
-          output.content.push(toolCall);
-          stream.push({ type: "toolcall_start", contentIndex, partial: output });
-          stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+        const firstStatus = response.status;
+        const firstDetail = (await readBoundedBody(response, 64 * 1024)).slice(0, 4096);
+        if ([400, 415, 422].includes(firstStatus)) {
+          streamingFailure = { status: firstStatus, detail: firstDetail };
+          response = await request({ ...body, stream: false }, "application/json");
+        } else {
+          throw new Error(`D-Robotics model gateway HTTP ${firstStatus}: ${firstDetail}`);
         }
       }
-
-      output.usage.input = result.usage?.input_tokens ?? 0;
-      output.usage.output = result.usage?.output_tokens ?? 0;
-      output.usage.cacheRead = result.usage?.cache_read_input_tokens ?? 0;
-      output.usage.cacheWrite = result.usage?.cache_creation_input_tokens ?? 0;
-      output.usage.totalTokens =
-        output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+      if (!response.ok) {
+        const detail = (await readBoundedBody(response, 64 * 1024)).slice(0, 4096);
+        throw new Error(`D-Robotics model gateway rejected streaming (${streamingFailure?.status}: ${streamingFailure?.detail}) and buffered fallback (${response.status}: ${detail})`);
+      }
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      if (contentType.includes("text/event-stream")) {
+        await consumeStreamingGatewayResponse(response, output, stream, options?.signal);
+      } else {
+        const text = await readBoundedBody(response, 8 * 1024 * 1024);
+        consumeBufferedGatewayResponse(JSON.parse(text) as GatewayResponse, output, stream);
+      }
       calculateCost(model, output.usage);
-      output.stopReason = mapStopReason(result.stop_reason);
-      stream.push({ type: "done", reason: output.stopReason, message: output });
+      if (!["stop", "length", "toolUse", "deferred"].includes(output.stopReason)) {
+        throw new Error(`Model gateway ended in an invalid state: ${output.stopReason}`);
+      }
+      stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse" | "deferred", message: output });
       stream.end();
     } catch (error) {
+      for (const block of output.content as StreamingGatewayBlock[]) {
+        delete block.providerIndex;
+        delete block.partialJson;
+      }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : String(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -792,15 +1009,6 @@ const lspToolSchema = Type.Object({
   column: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
 });
 
-const criticalVirtualRoots = ["/proc", "/sys", "/dev"];
-const destructiveCommandPatterns = [
-  /(^|\s)rm\s+[^\n]*(?:-rf|-fr|--recursive)/i,
-  /(^|\s)(?:mkfs|fdisk|parted)\b/i,
-  /(^|\s)dd\s+[^\n]*\bof=\/dev\//i,
-  /(^|\s)(?:reboot|poweroff|halt)\b/i,
-  /systemctl\s+(?:reboot|poweroff|halt)/i,
-  />\s*\/sys\//i,
-];
 const mutatingToolNames = new Set(["bash", "edit", "write"]);
 const completionAssertionPattern = /(?:已|已经|全部|现已)(?:完成|实现|修复|通过|部署)|(?:implementation|task|work|changes?)\s+(?:is|are)\s+(?:complete|done)|all\s+(?:checks|tests|gates)\s+pass/i;
 const qualityGateEntryType = "hobot-quality-gates";
@@ -920,6 +1128,15 @@ function gateReport(state: QualityGateState, status: QualityGateStatus): string 
 export default function rdkExtension(pi: ExtensionAPI) {
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+  const rootMode = process.getuid?.() === 0;
+  const configuredContextWindow = Number(process.env.HOBOT_CODE_MODEL_CONTEXT_WINDOW || 1_000_000);
+  const configuredMaxTokens = Number(process.env.HOBOT_CODE_MODEL_MAX_TOKENS || 8192);
+  const contextWindow = Number.isInteger(configuredContextWindow) && configuredContextWindow >= 8192
+    ? Math.min(configuredContextWindow, 4_000_000)
+    : 1_000_000;
+  const maxTokens = Number.isInteger(configuredMaxTokens) && configuredMaxTokens >= 2048
+    ? Math.min(configuredMaxTokens, 131_072)
+    : 8192;
   const sideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
   let disposeSideAgent = async (): Promise<void> => undefined;
   let currentSnapshot: BoardSnapshot | undefined;
@@ -971,12 +1188,13 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let lspManager: LspManager | undefined;
   let agentStartedAt = 0;
   let agentHadFailure = false;
+  let agentHadMutation = false;
   let lastPromptSnapshot: PromptSnapshot | undefined;
   const qualityGateBlockedCalls = new Set<string>();
 
   function memoryContext(
     ctx: { cwd: string; sessionManager: { getSessionFile: () => string | undefined } },
-    snapshot: BoardSnapshot,
+    snapshot: Pick<BoardSnapshot, "boardId" | "hostname">,
   ): MemoryContext {
     return {
       user: process.env.HOBOT_CODE_MEMORY_USER || "default",
@@ -1208,8 +1426,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
           max: "max",
         },
         input: ["text", "image"],
-        contextWindow: 1_000_000,
-        maxTokens: 8192,
+        contextWindow,
+        maxTokens,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ],
@@ -1441,7 +1659,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     memoryRuntimeError = undefined;
     const [loadedGoal, loadedHooks, loadedNotifications, loadedLsp] = await Promise.all([
       loadGoalConfig(goalConfigPath()),
-      loadHookConfig(hookConfigPath(), resolve(ctx.cwd, ".hobot", "hooks.json")),
+      loadHookConfig(hookConfigPath(), resolve(ctx.cwd, ".hobot", "hooks.json"), ctx.isProjectTrusted()),
       loadNotificationConfig(notificationConfigPath()),
       loadLspConfig(lspConfigPath()),
     ]);
@@ -1473,21 +1691,24 @@ export default function rdkExtension(pi: ExtensionAPI) {
       const snapshot = await getBoardSnapshot(false);
       currentSnapshot = snapshot;
       ctx.ui.setStatus("hobot-rdk", compactBoardSummary(snapshot));
-      if (memoryConfig.enabled) {
-        try {
-          memoryStore = new MemoryStore(memoryDatabasePath());
-          currentMemoryContext = memoryContext(ctx, snapshot);
-        } catch (error) {
-          memoryRuntimeError = error instanceof Error ? error.message : String(error);
-        }
-      }
     } catch {
       ctx.ui.setStatus("hobot-rdk", "RDK status unavailable");
+    }
+    if (memoryConfig.enabled) {
+      try {
+        memoryStore = new MemoryStore(memoryDatabasePath());
+        currentMemoryContext = memoryContext(ctx, currentSnapshot ?? { boardId: "unknown", hostname: hostname() });
+      } catch (error) {
+        memoryRuntimeError = error instanceof Error ? error.message : String(error);
+      }
     }
     setMemoryStatus(ctx);
 
     if (permissionPolicyError) {
       ctx.ui.notify(`Permission policy fallback is active: ${permissionPolicyError}`, "warning");
+    }
+    if (rootMode) {
+      ctx.ui.notify("Hobot Code is running as root. Shell and file mutations always require confirmation; use an unprivileged user for routine development.", "warning");
     }
     if (qualityConfigError) {
       ctx.ui.notify(`Quality gate config was ignored: ${qualityConfigError}`, "warning");
@@ -1576,18 +1797,30 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
-    await disposeSideAgent();
-    closeMemory();
-    goalStore?.close();
+    await Promise.allSettled([
+      disposeSideAgent(),
+      lspManager?.stopAll() ?? Promise.resolve(),
+    ]);
+    try {
+      closeMemory();
+    } catch {
+      memoryStore = undefined;
+      currentMemoryContext = undefined;
+    }
+    try {
+      goalStore?.close();
+    } catch {
+      // Continue releasing the remaining session resources.
+    }
     goalStore = undefined;
     currentGoal = undefined;
-    await lspManager?.stopAll();
     lspManager = undefined;
   });
 
   pi.on("agent_start", async () => {
     agentStartedAt = Date.now();
     agentHadFailure = false;
+    agentHadMutation = false;
   });
 
   pi.on("turn_start", async () => {
@@ -1641,9 +1874,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n");
-    if (!completionAssertionPattern.test(responseText)) return undefined;
+    const completionClaimed = completionAssertionPattern.test(responseText);
+    if (!completionClaimed && !agentHadMutation) return undefined;
     const warnings: string[] = [];
-    if (!sideAgentMode && currentGoal && ["active", "paused"].includes(currentGoal.status)) {
+    if (completionClaimed && !sideAgentMode && currentGoal && ["active", "paused"].includes(currentGoal.status)) {
       warnings.push(`[Hobot Code persistent goal: completion is not accepted because ${currentGoal.id} is still ${currentGoal.status}. Use goal_complete after satisfying the full objective.]`);
     }
     if (qualityGateState.commands.length > 0) {
@@ -1685,22 +1919,23 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     const approvalReasons: string[] = [];
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
+    if (rootMode && ["bash", "write", "edit"].includes(event.toolName)) {
+      approvalReasons.push("root sessions require confirmation for every mutation-capable tool");
+    }
 
     if (event.toolName === "write" || event.toolName === "edit") {
-      const path = resolve(ctx.cwd, String(event.input.path ?? ""));
-      if (criticalVirtualRoots.some((root) => path === root || path.startsWith(`${root}/`))) {
-        return { block: true, reason: `Direct writes under ${path} are blocked by the RDK safety policy` };
+      const inspected = await inspectResolvedPath(ctx.cwd, String(event.input.path ?? ""));
+      if (inspected.criticalRoot) {
+        return { block: true, reason: `Direct writes under ${inspected.criticalRoot} are blocked by the RDK safety policy` };
       }
-      if (!path.startsWith(`${resolve(ctx.cwd)}/`) && path !== resolve(ctx.cwd)) {
+      if (!inspected.withinWorkspace) {
         approvalReasons.push("the target is outside the current workspace");
       }
     }
 
     if (event.toolName === "bash") {
       const command = String(event.input.command ?? "");
-      if (destructiveCommandPatterns.some((pattern) => pattern.test(command))) {
-        approvalReasons.push("the command matches an RDK destructive-operation rule");
-      }
+      approvalReasons.push(...destructiveShellReasons(command));
     }
 
     if (approvalReasons.length > 0) {
@@ -1737,6 +1972,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
     if (mutatingToolNames.has(event.toolName) || toolIsMcp(event.toolName)) {
+      agentHadMutation = true;
       if (qualityGateState.lastRun) {
         qualityGateState = { ...qualityGateState, invalidated: true };
         setQualityStatus(ctx, "stale");
@@ -2033,7 +2269,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
       const operation = String(args ?? "").trim() || "status";
       try {
         if (operation === "reload") {
-          const loaded = await loadHookConfig(hookConfigPath(), resolve(ctx.cwd, ".hobot", "hooks.json"));
+          const loaded = await loadHookConfig(hookConfigPath(), resolve(ctx.cwd, ".hobot", "hooks.json"), ctx.isProjectTrusted());
           hookConfig = loaded.config as HookConfig;
           hookConfigError = loaded.error;
         } else if (operation !== "status") {
@@ -2243,7 +2479,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("doctor", {
     description: "Show live D-Robotics board and Hobot Code runtime status",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       const snapshot = await getBoardSnapshot(true);
       currentGoal = goalStore?.current(resolve(ctx.cwd));
       const runtime = {
@@ -2263,9 +2499,37 @@ export default function rdkExtension(pi: ExtensionAPI) {
             protocol: notificationConfig.protocol,
           },
           lsp: lspManager?.status(),
+          legacySessions: resolve(resolveUserPaths().stateRoot, "legacy-sessions"),
         },
       };
-      ctx.ui.notify(JSON.stringify(runtime, null, 2), "info");
+      if (String(args ?? "").trim() === "json") {
+        ctx.ui.notify(JSON.stringify(runtime, null, 2), "info");
+        return;
+      }
+      const temperatures = snapshot.thermalZones.map((zone) => `${zone.name}=${zone.celsius}C`).join(", ") || "unavailable";
+      const warnings = [
+        rootMode ? "Running as root; mutation tools require confirmation." : undefined,
+        permissionPolicyError ? `Permission policy: ${permissionPolicyError}` : undefined,
+        memoryRuntimeError ? `Memory: ${memoryRuntimeError}` : undefined,
+        goalRuntimeError ? `Goal: ${goalRuntimeError}` : undefined,
+        hookConfigError ? `Hooks: ${hookConfigError}` : undefined,
+        lspConfigError ? `LSP: ${lspConfigError}` : undefined,
+      ].filter(Boolean);
+      ctx.ui.notify([
+        `${snapshot.board} | RDK OS ${snapshot.rdkOsVersion} | ${snapshot.architecture}`,
+        `CPU: ${snapshot.cpuCores} cores | load ${snapshot.loadAverage.join("/")}`,
+        `Memory: ${snapshot.memoryAvailableMiB}/${snapshot.memoryTotalMiB} MiB available`,
+        `Temperature: ${temperatures}`,
+        `BPU devices: ${snapshot.bpuDevices.join(", ") || "none detected"}`,
+        `RDK tools: ${Object.entries(snapshot.rdkUtilities).filter(([, present]) => present).map(([name]) => name).join(", ") || "none detected"}`,
+        `Memory records: ${memoryStore && currentMemoryContext ? memoryStore.stats(currentMemoryContext).total : "unavailable"}`,
+        `Persistent goal: ${currentGoal ? `${currentGoal.status} ${currentGoal.turnsUsed}/${currentGoal.turnBudget}` : "none"}`,
+        `Hooks: ${hookConfig.enabled ? `${hookConfig.hooks.length} enabled (${hookConfig.failurePolicy})` : "off"}`,
+        `LSP processes: ${((lspManager?.status().running as unknown[] | undefined) ?? []).length}`,
+        `Legacy sessions: ${resolve(resolveUserPaths().stateRoot, "legacy-sessions")}`,
+        warnings.length > 0 ? `Warnings:\n- ${warnings.join("\n- ")}` : "Warnings: none",
+        "Use /doctor json for the complete machine-readable report.",
+      ].join("\n"), warnings.length > 0 ? "warning" : "info");
     },
   });
 
@@ -2291,7 +2555,23 @@ export default function rdkExtension(pi: ExtensionAPI) {
         boardId: snapshot.boardId,
         rdkOsVersion: snapshot.rdkOsVersion,
       });
-      ctx.ui.notify(JSON.stringify(result, null, 2), "info");
+      const matches = result.results as JsonRecord[];
+      if (matches.length === 0) {
+        ctx.ui.notify(`No local RDK knowledge matched "${query}" for ${snapshot.boardId}/${snapshot.rdkOsVersion}. Try shorter hardware, API, or error keywords.`, "warning");
+        return;
+      }
+      const formatted = matches.map((match, index) => {
+        const sources = (match.sources as KnowledgeSource[] | undefined) ?? [];
+        return [
+          `${index + 1}. ${String(match.title)}${match.versionMatch ? "" : " [nearby version]"}`,
+          String(match.snippet ?? ""),
+          ...sources.slice(0, 2).map((source) => `Source: ${source.title} - ${source.url}`),
+        ].join("\n");
+      });
+      ctx.ui.notify([
+        `RDK knowledge ${String(result.knowledgeVersion)} | ${snapshot.boardId}/${snapshot.rdkOsVersion}`,
+        ...formatted,
+      ].join("\n\n"), matches.some((match) => !match.versionMatch) ? "warning" : "info");
     },
   });
 

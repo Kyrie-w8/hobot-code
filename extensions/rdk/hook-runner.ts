@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { redactSensitiveText } from "./control-plane.mjs";
+import { sanitizedChildEnv, terminateProcessGroup } from "./runtime-safety.mjs";
 
 export type HookEvent = "PreToolUse" | "PostToolUse";
 export type HookFailurePolicy = "block" | "warn";
@@ -74,7 +75,8 @@ async function runProcess(
   return await new Promise((resolve, reject) => {
     const child = spawn(command[0]!, command.slice(1), {
       cwd,
-      env: { ...process.env, HOBOT_CODE_HOOK: "1" },
+      env: sanitizedChildEnv(process.env, { HOBOT_CODE_HOOK: "1" }),
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -89,7 +91,7 @@ async function runProcess(
     child.stderr.on("data", (chunk: Buffer) => { stderr = append(stderr, chunk); });
     const stop = () => {
       killed = true;
-      child.kill("SIGKILL");
+      terminateProcessGroup(child, "SIGKILL");
     };
     const timer = setTimeout(stop, timeoutMs);
     const abort = () => stop();
@@ -114,6 +116,14 @@ async function runProcess(
 
 function audit(path: string, record: Record<string, unknown>): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    if (statSync(path).size >= 5 * 1024 * 1024) {
+      rmSync(`${path}.1`, { force: true });
+      renameSync(path, `${path}.1`);
+    }
+  } catch {
+    // A missing audit file is the normal first-run case.
+  }
   appendFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
 }
@@ -191,8 +201,9 @@ export async function runHooks(options: {
       durationMs: result.durationMs,
       policy,
       blocked: Boolean(response.block) || (failed && policy === "block"),
-      stdout: redactSensitiveText(result.stdout, options.config.maxOutputChars),
-      stderr: redactSensitiveText(result.stderr, options.config.maxOutputChars),
+      outputChars: result.stdout.length + result.stderr.length,
+      outputHash: sha256(`${result.stdout}\0${result.stderr}`),
+      ...(failed || response.block ? { reason } : {}),
     });
 
     if (response.appendText) {

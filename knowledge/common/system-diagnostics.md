@@ -20,3 +20,12 @@ X5 与 S100 都可能显示 Ubuntu 22.04，但其 BPU、驱动和多媒体栈并
 
 板卡版本可能包含 `Beta`、`RC` 或厂商后缀。匹配资料时保留完整字符串；若知识结果的
 `versionMatch` 为 `false`，只把它当邻近版本线索，不直接执行写系统、刷机或升级步骤。
+
+只读基线通常包括板型、`/etc/version`、`/etc/os-release`、`uname -a`、`df -hT`、`df -ih`、
+`/proc/meminfo`、`systemctl --failed` 和本次启动的 warning/error 日志。内存问题要区分
+`MemAvailable`、CMA/连续内存、进程 RSS 和媒体共享内存池；普通 free 很低可能只是页缓存，
+而 BPU/媒体分配失败也可能发生在总内存仍充足时。
+
+温度诊断记录所有 thermal zone 的类型和值，并与 CPU/BPU 负载、频率、供电告警对齐。
+服务故障按单元状态、本次启动日志、依赖设备/文件、最小前台启动的顺序定位；不要先反复重启
+或删除状态目录，以免覆盖首次故障证据。

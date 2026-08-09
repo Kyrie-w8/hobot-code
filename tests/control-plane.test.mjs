@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+
+import { destructiveShellReasons, inspectResolvedPath, sanitizedChildEnv } from "../extensions/rdk/runtime-safety.mjs";
 
 import {
   DEFAULT_POLICY,
   describeToolCall,
   fingerprintWorkspace,
   initializeProject,
+  knowledgeQueryTerms,
+  loadHookConfig,
+  loadPolicy,
   memoryMatchQuery,
   parseGoalConfig,
   parseHookConfig,
@@ -32,6 +37,9 @@ const snapshot = {
 
 test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   assert.equal(resolveToolAction(DEFAULT_POLICY, "read"), "allow");
+  assert.equal(resolveToolAction(DEFAULT_POLICY, "write"), "ask");
+  assert.equal(resolveToolAction(DEFAULT_POLICY, "edit"), "ask");
+  assert.equal(resolveToolAction(DEFAULT_POLICY, "bash"), "ask");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "system_snapshot"), "allow");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "quality_gate"), "ask");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "mcp__git__status", true), "ask");
@@ -40,6 +48,51 @@ test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   const denied = setPolicyRule(DEFAULT_POLICY, "mcp:*", "deny");
   assert.equal(resolveToolAction(denied, "mcp__git__status", true), "deny");
   assert.equal(resolveToolAction(denied, "read"), "allow");
+});
+
+test("child processes do not inherit credentials or runtime injection variables", () => {
+  const env = sanitizedChildEnv({
+    PATH: "/usr/bin",
+    LANG: "C.UTF-8",
+    ANTHROPIC_AUTH_TOKEN: "secret",
+    OPENAI_API_KEY: "secret",
+    NODE_OPTIONS: "--require=/tmp/inject.js",
+    LD_PRELOAD: "/tmp/inject.so",
+  });
+  assert.deepEqual(env, { PATH: "/usr/bin", LANG: "C.UTF-8" });
+});
+
+test("resolved path checks reject symlink escapes and destructive commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-path-test-"));
+  try {
+    await symlink("/etc", join(root, "system"));
+    const inspected = await inspectResolvedPath(root, "system/hosts");
+    assert.equal(inspected.withinWorkspace, false);
+    assert.equal(inspected.criticalRoot, "/etc");
+    await symlink("/etc/hobot-does-not-exist", join(root, "broken-system"));
+    const broken = await inspectResolvedPath(root, "broken-system");
+    assert.equal(broken.withinWorkspace, false);
+    assert.equal(broken.criticalRoot, "/etc");
+    assert.ok(destructiveShellReasons("busybox rm -rf ./cache").length > 0);
+    assert.ok(destructiveShellReasons("find . -type f -delete").length > 0);
+    assert.ok(destructiveShellReasons("tee /etc/systemd/system/demo.service").length > 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolved path checks fail closed on symbolic link cycles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-path-cycle-"));
+  try {
+    await symlink("cycle-b", join(root, "cycle-a"));
+    await symlink("cycle-a", join(root, "cycle-b"));
+    await assert.rejects(
+      () => inspectResolvedPath(root, "cycle-a/file.txt"),
+      (error) => error?.code === "ELOOP",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("invalid policies and quality configs fail closed", () => {
@@ -54,6 +107,37 @@ test("invalid policies and quality configs fail closed", () => {
   );
 });
 
+test("legacy and invalid permission policies cannot retain silent mutation access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-policy-test-"));
+  const path = join(root, "permissions.json");
+  try {
+    await writeFile(path, JSON.stringify({
+      schemaVersion: 1,
+      default: "allow",
+      rules: [{ tool: "*", action: "allow" }],
+    }));
+    const migrated = await loadPolicy(path);
+    assert.equal(migrated.migrated, true);
+    assert.equal(resolveToolAction(migrated.policy, "bash"), "ask");
+    assert.equal(resolveToolAction(migrated.policy, "write"), "ask");
+    assert.equal(JSON.parse(await readFile(path, "utf8")).schemaVersion, 2);
+
+    await writeFile(path, "not json");
+    const fallback = await loadPolicy(path);
+    assert.equal(resolveToolAction(fallback.policy, "bash"), "ask");
+    assert.ok(fallback.error);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("RDK knowledge queries segment natural Chinese text and board identifiers", () => {
+  const terms = knowledgeQueryTerms("在 S600 上怎么部署模型？");
+  assert.ok(terms.includes("s600"));
+  assert.ok(terms.includes("部署"));
+  assert.ok(terms.includes("模型"));
+});
+
 test("approval descriptions redact credentials", () => {
   const description = describeToolCall("bash", { command: "curl -H 'Authorization: Bearer secret-value' sk-private123" });
   assert.doesNotMatch(description, /secret-value|sk-private123/);
@@ -66,6 +150,7 @@ test("approval descriptions redact credentials", () => {
     }),
     /very-secret-material/,
   );
+  assert.doesNotMatch(describeToolCall("bash", { command: "curl https://user:password@example.com ghp_abcdefghijklmnopqrstuvwxyz1234" }), /password|ghp_/);
 });
 
 test("project initialization creates defaults and never overwrites AGENTS.md", async () => {
@@ -118,6 +203,8 @@ test("memory config and scope validation are bounded", () => {
 
 test("memory rejects secrets and builds a bounded FTS query", () => {
   assert.deepEqual(sensitiveMemoryReasons("ANTHROPIC_AUTH_TOKEN=secret-value"), ["secret assignment"]);
+  assert.deepEqual(sensitiveMemoryReasons("ghp_abcdefghijklmnopqrstuvwxyz1234"), ["GitHub token"]);
+  assert.deepEqual(sensitiveMemoryReasons("https://user:password@example.com/private"), ["URL credential"]);
   assert.throws(
     () => validateMemoryInput("user", "preference", "Use token sk-private123"),
     /sensitive data/,
@@ -163,6 +250,36 @@ test("hook config uses structured commands and explicit failure policy", () => {
   });
   assert.deepEqual(config.hooks[0].command, ["/usr/local/bin/guard"]);
   assert.throws(() => parseHookConfig({ ...config, hooks: [{ ...config.hooks[0], command: "guard" }] }), /string array/);
+});
+
+test("project hooks remain disabled until the current project is trusted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-hook-trust-"));
+  const globalPath = join(root, "hooks.json");
+  const projectPath = join(root, "project-hooks.json");
+  const base = {
+    schemaVersion: 1,
+    enabled: true,
+    failurePolicy: "block",
+    timeoutMs: 5000,
+    maxOutputChars: 4000,
+    allowProjectHooks: true,
+    hooks: [],
+  };
+  try {
+    await writeFile(globalPath, JSON.stringify(base));
+    await writeFile(projectPath, JSON.stringify({
+      ...base,
+      allowProjectHooks: false,
+      hooks: [{ name: "project", event: "PreToolUse", tool: "bash", command: ["/bin/true"] }],
+    }));
+    const untrusted = await loadHookConfig(globalPath, projectPath, false);
+    assert.equal(untrusted.config.hooks.length, 0);
+    assert.match(untrusted.error, /trusted/);
+    const trusted = await loadHookConfig(globalPath, projectPath, true);
+    assert.equal(trusted.config.hooks.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("LSP config limits processes and rejects malformed extensions", () => {

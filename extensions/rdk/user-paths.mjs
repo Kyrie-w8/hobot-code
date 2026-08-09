@@ -1,12 +1,17 @@
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+
+function absolutePath(name, value) {
+  if (!isAbsolute(value)) throw new Error(`${name} must be an absolute path: ${value}`);
+  return resolve(value);
+}
 
 export function resolveUserPaths(env = process.env, home = homedir()) {
-  const configHome = resolve(env.XDG_CONFIG_HOME || resolve(home, ".config"));
-  const stateHome = resolve(env.XDG_STATE_HOME || resolve(home, ".local", "state"));
-  const configRoot = resolve(env.HOBOT_CODE_CONFIG_DIR || resolve(configHome, "hobot-code"));
-  const agentDir = resolve(env.HOBOT_CODING_AGENT_DIR || resolve(configRoot, "agent"));
-  const stateRoot = resolve(env.HOBOT_CODE_STATE_DIR || resolve(stateHome, "hobot-code"));
+  const configHome = absolutePath("XDG_CONFIG_HOME", env.XDG_CONFIG_HOME || resolve(home, ".config"));
+  const stateHome = absolutePath("XDG_STATE_HOME", env.XDG_STATE_HOME || resolve(home, ".local", "state"));
+  const configRoot = absolutePath("HOBOT_CODE_CONFIG_DIR", env.HOBOT_CODE_CONFIG_DIR || resolve(configHome, "hobot-code"));
+  const agentDir = absolutePath("HOBOT_CODING_AGENT_DIR", env.HOBOT_CODING_AGENT_DIR || resolve(configRoot, "agent"));
+  const stateRoot = absolutePath("HOBOT_CODE_STATE_DIR", env.HOBOT_CODE_STATE_DIR || resolve(stateHome, "hobot-code"));
   return {
     configRoot,
     agentDir,

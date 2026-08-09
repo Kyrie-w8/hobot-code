@@ -37,6 +37,8 @@
 ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
 ANTHROPIC_AUTH_TOKEN=your-token
 ANTHROPIC_MODEL=kimi-k3
+HOBOT_CODE_MODEL_CONTEXT_WINDOW=1000000
+HOBOT_CODE_MODEL_MAX_TOKENS=8192
 ```
 
 文件权限必须是 `0600`。Hobot Code 不把 token 写入 `models.json`、会话或日志。默认设置选择
@@ -120,7 +122,7 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "default": "ask",
   "rules": [
     { "tool": "read", "action": "allow" },
@@ -132,7 +134,9 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 
 `/permissions set <pattern> <action>` 会把规则放到数组开头并原子写回配置。配置不存在或无效时
 使用内置的保守默认值并显示警告。deny 工具从 Pi 活跃工具集合中移除，工具调用阶段仍会再次
-检查，防止动态插件绕过。密钥、Bearer Token 和常见 secret 字段不会出现在确认详情中。
+检查，防止动态插件绕过。旧版 schema 1 配置会自动迁移；其中可能修改系统的 allow 规则会降级为
+ask。root 会话中的 Shell、写入和编辑始终逐次确认，非交互 root 会话拒绝这些操作。密钥、
+Bearer Token 和常见 secret 字段不会出现在确认详情中。
 
 ## 质量门
 

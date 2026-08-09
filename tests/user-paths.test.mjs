@@ -31,6 +31,11 @@ test("XDG and explicit path overrides remain supported", () => {
   assert.equal(paths.stateRoot, "/managed/state");
 });
 
+test("relative XDG and managed paths are rejected", () => {
+  assert.throws(() => resolveUserPaths({ XDG_CONFIG_HOME: "relative" }, "/home/rdk"), /absolute path/);
+  assert.throws(() => resolveUserPaths({ HOBOT_CODE_STATE_DIR: "state" }, "/home/rdk"), /absolute path/);
+});
+
 test("packaged settings and launcher do not default to system config or state", async () => {
   const settings = JSON.parse(await readFile(new URL("../packaging/pi/settings.json", import.meta.url), "utf8"));
   const launcher = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
@@ -70,6 +75,24 @@ test("launcher initializes an isolated user without system configuration", async
       join(home, ".local/state/hobot-code/memory/memory.db"),
     ]);
     assert.equal(JSON.parse(await readFile(join(paths[0], "settings.json"), "utf8")).defaultProvider, "drobotics");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("launcher rejects a relative managed state path", async () => {
+  const source = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
+  const root = await mkdtemp(join(tmpdir(), "hobot-relative-layout-"));
+  try {
+    const launcher = join(root, "launcher");
+    await writeFile(launcher, source);
+    await chmod(launcher, 0o755);
+    await assert.rejects(
+      () => execFileAsync(launcher, [], {
+        env: { HOME: root, HOBOT_CODE_CONFIG_DIR: "relative", PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      }),
+      /absolute path/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -21,7 +21,7 @@ Pi 上游版本和来源记录在 `pi-runtime/pi.lock`，许可证位于 `LICENS
 
 ## 构建 ARM64 包
 
-构建机需要 `curl`、`tar` 和 SHA256 工具。发行脚本会下载并校验 Pi、fd 和 ripgrep
+构建机需要 Node.js、`curl`、`tar` 和 SHA256 工具。发行脚本会下载并校验 Pi、fd 和 ripgrep
 的官方 ARM64 产物：
 
 ```bash
@@ -57,6 +57,8 @@ cd hobot-code-0.12.1-linux-arm64
 
 安装器会把旧 `/etc/hobot-code` 与 `/var/lib/hobot-code` 备份后迁移到安装用户目录，并把
 当前运行时备份到 `/usr/local/lib/hobot-code-backups/`。检测到运行中的 Hobot Code 时会拒绝升级。
+安装需要 root，但日常使用优先切换到普通开发用户。若必须以 root 运行，Shell、写入和编辑工具
+始终逐次确认，非交互模式下默认拒绝。
 
 ## 模型配置
 
@@ -73,9 +75,8 @@ ANTHROPIC_AUTH_TOKEN=your-token
 ANTHROPIC_MODEL=kimi-k3
 ```
 
-密钥只保存在当前用户可读的环境文件中。Kimi 网关当前只返回完整的 Anthropic 响应，
-Hobot Code Provider 会将 thinking、文本、工具调用和 usage 转换为 Pi 原生事件，所以界面和
-会话行为不需要特殊分支。
+密钥只保存在当前用户可读的环境文件中。Hobot Code Provider 优先使用 Anthropic SSE 实时
+显示 thinking、文本、工具参数和 usage；端点不支持流式时会回退到有大小限制的完整响应。
 
 运行时也保留 Pi 的其他模型接入方式：
 

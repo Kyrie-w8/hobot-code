@@ -1,4 +1,4 @@
-VERSION ?= 0.12.0
+VERSION ?= $(shell cat VERSION)
 
 .PHONY: check release pi-release pi-check clean
 
@@ -9,6 +9,7 @@ pi-check:
 	node scripts/validate-knowledge.mjs
 	node scripts/validate-expert-prompt.mjs
 	node scripts/validate-branding.mjs
+	node scripts/validate-version.mjs
 
 check: pi-check
 

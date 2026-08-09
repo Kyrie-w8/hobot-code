@@ -6,6 +6,10 @@
 - Present `/btw` as a full-height right-side 50% pane and cap board-wide side-agent concurrency (default 2, configurable up to 8).
 - Keep the side conversation, thinking stream, tool activity, and usage visible across follow-up turns until the user closes it.
 - Forward confirmation, selection, and input requests from the side process into the overlay while preserving close-time deletion and parent-session isolation.
+- Stream D-Robotics Anthropic responses as SSE with bounded buffered fallback, explicit stop-reason handling, visible thinking, and payload limits.
+- Harden tool execution with realpath-aware workspace boundaries, destructive-command detection, credential-free child environments, project-hook trust, and mandatory root mutation confirmation.
+- Make installation and rollback transactional with locking, process and disk preflight checks, staged self-tests, command backups, and failure restoration.
+- Improve resource lifecycle cleanup, relevant-only memory recall, Chinese knowledge search, accurate quality-gate mutation tracking, readable doctor/knowledge output, and version provenance checks.
 
 ## 0.12.0
 

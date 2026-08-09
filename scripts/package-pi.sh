@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.12.0}
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+version=${1:-$(cat "$root_dir/VERSION")}
 . "$root_dir/pi-runtime/pi.lock"
 . "$root_dir/pi-runtime/tools.lock"
 
@@ -55,7 +55,8 @@ rm -rf "$stage_dir"
 mkdir -p "$stage_dir/runtime" "$stage_dir/extensions" "$stage_dir/skills" "$stage_dir/knowledge" "$stage_dir/prompts" "$stage_dir/config" "$stage_dir/licenses" "$stage_dir/managed-bin"
 cp -R "$temp_dir/pi/." "$stage_dir/runtime/"
 mv "$stage_dir/runtime/pi" "$stage_dir/runtime/hobot"
-install -m 0644 "$root_dir/pi-runtime/package.json" "$stage_dir/runtime/package.json"
+node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); value.version=process.argv[3]; fs.writeFileSync(process.argv[2], `${JSON.stringify(value, null, 2)}\n`);' \
+  "$root_dir/pi-runtime/package.json" "$stage_dir/runtime/package.json" "$version"
 install -m 0644 "$root_dir/CHANGELOG.md" "$stage_dir/runtime/CHANGELOG.md"
 install -m 0644 "$root_dir/pi-runtime/pi.lock" "$stage_dir/PI_RUNTIME"
 install -m 0644 "$root_dir/pi-runtime/tools.lock" "$stage_dir/TOOLS_RUNTIME"

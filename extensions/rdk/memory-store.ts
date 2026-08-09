@@ -263,8 +263,8 @@ export class MemoryStore {
           ORDER BY bm25(memory_fts), m.updated_at DESC
           LIMIT ?
         `).all(match, ...filter.values, new Date().toISOString(), boundedLimit) as MemoryRow[];
-      } catch {
-        rows = [];
+      } catch (error) {
+        throw new Error(`memory full-text search failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -288,9 +288,9 @@ export class MemoryStore {
       rows.push(...fallback);
     }
 
-    const now = new Date().toISOString();
-    for (const row of rows) this.db.run("UPDATE memories SET last_used_at = ? WHERE public_id = ?", [now, row.public_id]);
     if (auditActor) {
+      const now = new Date().toISOString();
+      for (const row of rows) this.db.run("UPDATE memories SET last_used_at = ? WHERE public_id = ?", [now, row.public_id]);
       this.audit("search", undefined, auditActor, {
         queryHash: sha256(normalized),
         scopes: scopes ?? ["user", "project", "board", "session"],
@@ -301,28 +301,7 @@ export class MemoryStore {
   }
 
   recall(query: string, context: MemoryContext, limit: number): MemoryRecord[] {
-    const relevant = this.search(query, context, undefined, limit, null);
-    const filter = scopeFilter(context, ["user", "project", "board"]);
-    const pinned = this.db.query(`
-      SELECT m.public_id, m.scope, m.kind, m.content, m.created_at, m.updated_at, m.expires_at
-      FROM memories m
-      WHERE ${filter.sql}
-        AND m.kind IN ('preference', 'instruction')
-        AND (m.expires_at IS NULL OR m.expires_at > ?)
-      ORDER BY m.updated_at DESC
-      LIMIT 3
-    `).all(...filter.values, new Date().toISOString()) as MemoryRow[];
-    const merged = [...pinned.map(toRecord), ...relevant];
-    const records = merged
-      .filter((record, index) => merged.findIndex((item) => item.id === record.id) === index)
-      .slice(0, limit);
-    if (records.length > 0) {
-      this.audit("recall", undefined, "agent", {
-        queryHash: sha256(query),
-        resultCount: records.length,
-      });
-    }
-    return records;
+    return this.search(query, context, undefined, limit, null);
   }
 
   list(context: MemoryContext, scope: MemoryScope | undefined, limit = 50): MemoryRecord[] {

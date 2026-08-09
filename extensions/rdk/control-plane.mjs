@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
-import { access, chmod, lstat, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { access, chmod, lstat, mkdir, readFile, readlink, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 export const DEFAULT_POLICY = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   default: "ask",
   rules: Object.freeze([
     Object.freeze({ tool: "read", action: "allow" }),
-    Object.freeze({ tool: "write", action: "allow" }),
-    Object.freeze({ tool: "edit", action: "allow" }),
-    Object.freeze({ tool: "bash", action: "allow" }),
+    Object.freeze({ tool: "write", action: "ask" }),
+    Object.freeze({ tool: "edit", action: "ask" }),
+    Object.freeze({ tool: "bash", action: "ask" }),
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
     Object.freeze({ tool: "quality_gate", action: "ask" }),
@@ -83,7 +84,7 @@ export const DEFAULT_LSP_CONFIG = Object.freeze({
 });
 
 const permissionActions = new Set(["allow", "ask", "deny"]);
-const fingerprintExcludedDirectories = new Set([".git", ".cache", "build", "dist", "node_modules"]);
+const fingerprintExcludedDirectories = new Set([".git", ".cache", "node_modules"]);
 
 function cloneDefaultPolicy() {
   return {
@@ -97,7 +98,9 @@ export function parsePolicy(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("permission policy must be a JSON object");
   }
-  if (value.schemaVersion !== 1) throw new Error("permission policy schemaVersion must be 1");
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2) {
+    throw new Error("permission policy schemaVersion must be 1 or 2");
+  }
   if (!permissionActions.has(value.default)) {
     throw new Error("permission policy default must be allow, ask, or deny");
   }
@@ -116,15 +119,37 @@ export function parsePolicy(value) {
     if (!permissionActions.has(rule.action)) {
       throw new Error(`permission rule ${index + 1} action must be allow, ask, or deny`);
     }
-    return { tool, action: rule.action };
+    const matchesMutation = ["bash", "write", "edit"].some((name) => wildcardMatches(name, tool));
+    const action = value.schemaVersion === 1 && rule.action === "allow" && matchesMutation
+      ? "ask"
+      : rule.action;
+    return { tool, action };
   });
 
-  return { schemaVersion: 1, default: value.default, rules };
+  return {
+    schemaVersion: 2,
+    default: value.schemaVersion === 1 && value.default === "allow" ? "ask" : value.default,
+    rules,
+  };
 }
 
 export async function loadPolicy(path) {
   try {
-    return { policy: parsePolicy(JSON.parse(await readFile(path, "utf8"))) };
+    const raw = JSON.parse(await readFile(path, "utf8"));
+    const policy = parsePolicy(raw);
+    if (raw.schemaVersion === 1) {
+      try {
+        await writePolicy(path, policy);
+        return { policy, migrated: true };
+      } catch (error) {
+        return {
+          policy,
+          migrated: true,
+          error: `legacy permission policy is safe in memory but could not be persisted: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+    return { policy };
   } catch (error) {
     if (error?.code === "ENOENT") return { policy: cloneDefaultPolicy(), error: "permission policy file is missing" };
     return {
@@ -138,8 +163,8 @@ export async function writePolicy(path, policy) {
   const normalized = parsePolicy(policy);
   const temporary = `${path}.new.${process.pid}`;
   await mkdir(resolve(path, ".."), { recursive: true, mode: 0o750 });
-  await writeFile(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o640 });
-  await chmod(temporary, 0o640);
+  await writeFile(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
+  await chmod(temporary, 0o600);
   await rename(temporary, path);
   return normalized;
 }
@@ -184,6 +209,10 @@ export function redactSensitiveText(value, limit = 800) {
   const text = String(value ?? "")
     .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|$)/gi, "[REDACTED PRIVATE KEY]")
     .replace(/\b(?:sk|ak)-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "[REDACTED GITHUB TOKEN]")
+    .replace(/\bxox(?:a|b|p|r|s)-[A-Za-z0-9-]{10,}\b/g, "[REDACTED SLACK TOKEN]")
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED JWT]")
+    .replace(/(https?:\/\/)[^\s/:@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
     .replace(/((?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]")
     .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[REDACTED NUMBER]");
@@ -348,7 +377,7 @@ export function parseHookConfig(value) {
   };
 }
 
-export async function loadHookConfig(path, projectPath) {
+export async function loadHookConfig(path, projectPath, projectTrusted = true) {
   let config;
   let error;
   try {
@@ -357,7 +386,9 @@ export async function loadHookConfig(path, projectPath) {
     config = { ...DEFAULT_HOOK_CONFIG, hooks: [] };
     error = caught?.code === "ENOENT" ? "hook config file is missing" : caught instanceof Error ? caught.message : String(caught);
   }
-  if (config.allowProjectHooks && projectPath) {
+  if (config.allowProjectHooks && projectPath && !projectTrusted) {
+    error = "project hooks ignored until the current project is trusted";
+  } else if (config.allowProjectHooks && projectPath) {
     try {
       const project = parseHookConfig(JSON.parse(await readFile(projectPath, "utf8")));
       config = { ...config, hooks: [...config.hooks, ...project.hooks] };
@@ -404,8 +435,8 @@ export async function writeNotificationConfig(path, value) {
   const config = parseNotificationConfig(value);
   const temporary = `${path}.new.${process.pid}`;
   await mkdir(resolve(path, ".."), { recursive: true, mode: 0o750 });
-  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o640 });
-  await chmod(temporary, 0o640);
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await chmod(temporary, 0o600);
   await rename(temporary, path);
   return config;
 }
@@ -475,6 +506,10 @@ export function sensitiveMemoryReasons(value) {
     [/\bBearer\s+[^\s,;]{8,}/i, "bearer token"],
     [/\b(?:sk|ak)-[A-Za-z0-9_-]{8,}\b/i, "API token"],
     [/\bAKIA[0-9A-Z]{16}\b/, "AWS access key"],
+    [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, "GitHub token"],
+    [/\bxox(?:a|b|p|r|s)-[A-Za-z0-9-]{10,}\b/, "Slack token"],
+    [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/, "JWT"],
+    [/https?:\/\/[^\s/:@]+:[^\s/@]+@/i, "URL credential"],
     [/(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY)\s*[=:]\s*[^\s,;]{4,}/i, "secret assignment"],
     [/\b(?:\d[ -]*?){13,19}\b/, "payment-card-like number"],
   ];
@@ -500,6 +535,22 @@ export function memoryMatchQuery(value) {
     .slice(0, 16)
     .map((term) => `"${term.replaceAll('"', '""')}"`)
     .join(" OR ");
+}
+
+export function knowledgeQueryTerms(value) {
+  const normalized = String(value ?? "").normalize("NFKC").toLowerCase().trim();
+  if (!normalized) return [];
+  const terms = [normalized];
+  terms.push(...(normalized.match(/[a-z0-9][a-z0-9_.+-]*/g) ?? []));
+  for (const segment of normalized.match(/\p{Script=Han}+/gu) ?? []) {
+    if (segment.length > 1 && segment.length <= 8) terms.push(segment);
+    for (let width = 2; width <= Math.min(4, segment.length); width += 1) {
+      for (let index = 0; index + width <= segment.length; index += 1) {
+        terms.push(segment.slice(index, index + width));
+      }
+    }
+  }
+  return [...new Set(terms.filter((term) => term.length > 1))].slice(0, 48);
 }
 
 export function parseQualityConfig(value) {
@@ -625,6 +676,18 @@ export async function fingerprintWorkspace(cwd) {
   let files = 0;
   let hashedBytes = 0;
 
+  async function hashFile(path) {
+    await new Promise((resolveHash, rejectHash) => {
+      const source = createReadStream(path);
+      source.on("data", (chunk) => {
+        hash.update(chunk);
+        hashedBytes += chunk.length;
+      });
+      source.on("error", rejectHash);
+      source.on("end", resolveHash);
+    });
+  }
+
   async function visit(directory, relativeDirectory = "") {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
@@ -636,16 +699,13 @@ export async function fingerprintWorkspace(cwd) {
       hash.update(`${relativePath}\0${info.mode}\0${info.size}\0${info.mtimeMs}\0`);
       if (entry.isSymbolicLink()) {
         files += 1;
+        hash.update(await readlink(path));
       } else if (entry.isDirectory()) {
         await visit(path, relativePath);
       } else if (entry.isFile()) {
         files += 1;
         if (files > 20_000) throw new Error("workspace fingerprint exceeds 20000 files");
-        if (hashedBytes < 32 * 1024 * 1024 && info.size <= 4 * 1024 * 1024) {
-          const content = await readFile(path);
-          hash.update(content);
-          hashedBytes += content.length;
-        }
+        await hashFile(path);
       }
     }
   }

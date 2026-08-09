@@ -217,23 +217,28 @@ export class GoalStore {
     if (!current || current.status !== "active") return current;
     const boundedTokens = Math.max(0, Math.round(tokens || 0));
     const boundedDuration = Math.max(0, Math.round(durationMs || 0));
-    const nextTurns = current.turnsUsed + 1;
-    const nextTokens = current.tokensUsed + boundedTokens;
-    const exhausted = nextTurns >= current.turnBudget
-      || (current.tokenBudget !== undefined && nextTokens >= current.tokenBudget);
     const now = new Date().toISOString();
-    this.db.run(`
+    const result = this.db.run(`
       UPDATE goals
-      SET turns_used = ?, tokens_used = ?, elapsed_ms = elapsed_ms + ?,
-        status = ?, updated_at = ?
-      WHERE public_id = ?
-    `, [nextTurns, nextTokens, boundedDuration, exhausted ? "paused" : "active", now, current.id]);
-    this.audit(current.id, exhausted ? "budget_exhausted" : "turn", "system", {
-      turnsUsed: nextTurns,
-      tokensUsed: nextTokens,
+      SET turns_used = turns_used + 1,
+        tokens_used = tokens_used + ?,
+        elapsed_ms = elapsed_ms + ?,
+        status = CASE
+          WHEN turns_used + 1 >= turn_budget
+            OR (token_budget IS NOT NULL AND tokens_used + ? >= token_budget)
+          THEN 'paused'
+          ELSE 'active'
+        END,
+        updated_at = ?
+      WHERE public_id = ? AND status = 'active'
+    `, [boundedTokens, boundedDuration, boundedTokens, now, current.id]) as { changes?: number };
+    const updated = toRecord(this.row(current.id, project)!);
+    if ((result.changes ?? 0) > 0) this.audit(current.id, updated.status === "paused" ? "budget_exhausted" : "turn", "system", {
+      turnsUsed: updated.turnsUsed,
+      tokensUsed: updated.tokensUsed,
       durationMs: boundedDuration,
     });
-    return toRecord(this.row(current.id, project)!);
+    return updated;
   }
 
   progress(project: string, note: string, actor: "agent" | "user"): GoalRecord {

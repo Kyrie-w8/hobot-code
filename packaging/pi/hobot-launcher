@@ -6,10 +6,27 @@ if [ -z "${HOME:-}" ]; then
   exit 1
 fi
 
+require_absolute_path() {
+  path_name=$1
+  path_value=$2
+  case "$path_value" in
+    /*) ;;
+    *)
+      printf '%s must be an absolute path: %s\n' "$path_name" "$path_value" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_absolute_path HOME "$HOME"
+
 hobot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 hobot_state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 hobot_config_root=${HOBOT_CODE_CONFIG_DIR:-$hobot_config_home/hobot-code}
 hobot_default_config=/usr/local/lib/hobot-code/default-config
+require_absolute_path XDG_CONFIG_HOME "$hobot_config_home"
+require_absolute_path XDG_STATE_HOME "$hobot_state_home"
+require_absolute_path HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
 
 umask 077
 mkdir -p "$hobot_config_root" "$hobot_config_root/agent"
@@ -27,6 +44,9 @@ fi
 hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-$hobot_config_root/agent}
 hobot_state_dir=${HOBOT_CODE_STATE_DIR:-$hobot_state_home/hobot-code}
 hobot_session_dir=${HOBOT_CODING_AGENT_SESSION_DIR:-$hobot_state_dir/sessions}
+require_absolute_path HOBOT_CODING_AGENT_DIR "$hobot_agent_dir"
+require_absolute_path HOBOT_CODE_STATE_DIR "$hobot_state_dir"
+require_absolute_path HOBOT_CODING_AGENT_SESSION_DIR "$hobot_session_dir"
 
 mkdir -p "$hobot_agent_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"
 for hobot_config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
@@ -48,6 +68,10 @@ export HOBOT_CODE_HOOK_CONFIG="${HOBOT_CODE_HOOK_CONFIG:-$hobot_agent_dir/hooks.
 export HOBOT_CODE_HOOK_AUDIT="${HOBOT_CODE_HOOK_AUDIT:-$hobot_state_dir/audit/hooks.jsonl}"
 export HOBOT_CODE_NOTIFICATION_CONFIG="${HOBOT_CODE_NOTIFICATION_CONFIG:-$hobot_agent_dir/notifications.json}"
 export HOBOT_CODE_LSP_CONFIG="${HOBOT_CODE_LSP_CONFIG:-$hobot_agent_dir/lsp.json}"
+if [ -r /usr/local/lib/hobot-code/VERSION ]; then
+  HOBOT_CODE_VERSION=$(sed -n '1p' /usr/local/lib/hobot-code/VERSION)
+  export HOBOT_CODE_VERSION
+fi
 export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
 export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 

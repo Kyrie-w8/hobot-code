@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { extname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { inspectResolvedPath, sanitizedChildEnv, terminateProcessGroup } from "./runtime-safety.mjs";
+
 export interface LspServerConfig {
   id: string;
   extensions: string[];
@@ -63,6 +65,22 @@ function processMemoryMiB(pid: number): number | undefined {
   }
 }
 
+function processTreeMemoryMiB(pid: number, visited = new Set<number>()): number | undefined {
+  if (visited.has(pid) || visited.size >= 128) return 0;
+  visited.add(pid);
+  const own = processMemoryMiB(pid);
+  if (own === undefined) return undefined;
+  let total = own;
+  try {
+    const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
+      .trim().split(/\s+/).filter(Boolean).map(Number).filter(Number.isFinite);
+    for (const child of children) total += processTreeMemoryMiB(child, visited) ?? 0;
+  } catch {
+    // Kernels without the children file still retain the parent RSS limit.
+  }
+  return total;
+}
+
 class LspClient {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest>();
@@ -84,7 +102,8 @@ class LspClient {
   ) {
     this.child = spawn(server.command[0]!, server.command.slice(1), {
       cwd: root,
-      env: process.env,
+      env: sanitizedChildEnv(),
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.on("data", (chunk: Buffer) => this.consume(chunk));
@@ -98,10 +117,9 @@ class LspClient {
     this.memoryTimer = setInterval(() => {
       const pid = this.child.pid;
       if (!pid) return;
-      const memory = processMemoryMiB(pid);
+      const memory = processTreeMemoryMiB(pid);
       if (memory !== undefined && memory > this.config.maxMemoryMiB) {
         this.fail(`language server exceeded ${this.config.maxMemoryMiB} MiB (RSS ${memory} MiB)`);
-        this.child.kill("SIGKILL");
       }
     }, 2000);
     this.memoryTimer.unref?.();
@@ -218,6 +236,7 @@ class LspClient {
       pending.reject(new Error(reason));
     }
     this.pending.clear();
+    terminateProcessGroup(this.child, "SIGKILL");
     this.onStopped();
   }
 
@@ -264,7 +283,7 @@ class LspClient {
     return {
       server: this.server.id,
       pid,
-      memoryMiB: pid ? processMemoryMiB(pid) : undefined,
+      memoryMiB: pid ? processTreeMemoryMiB(pid) : undefined,
       openedDocuments: this.opened.size,
       idleMs: Date.now() - this.lastUsedAt,
       failure: this.failure,
@@ -279,7 +298,7 @@ class LspClient {
     } catch {
       // Shutdown remains best effort.
     }
-    this.child.kill("SIGTERM");
+    terminateProcessGroup(this.child, "SIGTERM");
     this.fail("stopped");
   }
 }
@@ -335,11 +354,12 @@ export class LspManager {
     column?: number;
   }): Promise<unknown> {
     if (!this.config.enabled) throw new Error("LSP support is disabled");
-    const root = resolve(options.root);
-    const path = resolve(root, options.path);
-    if (path !== root && !path.startsWith(`${root}/`)) {
+    const inspected = await inspectResolvedPath(options.root, options.path);
+    if (!inspected.withinWorkspace) {
       throw new Error("LSP path must stay within the current workspace");
     }
+    const root = inspected.workspaceRoot;
+    const path = inspected.target;
     const server = this.serverFor(path);
     const client = await this.clientFor(server, root);
     return await client.query(options.action, path, options.line, options.column);
