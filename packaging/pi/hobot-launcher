@@ -1,16 +1,54 @@
 #!/bin/sh
 set -eu
 
-if [ -r /etc/hobot-code/hobot.env ]; then
+if [ -z "${HOME:-}" ]; then
+  printf 'HOME must be set to run Hobot Code\n' >&2
+  exit 1
+fi
+
+hobot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+hobot_state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+hobot_config_root=${HOBOT_CODE_CONFIG_DIR:-$hobot_config_home/hobot-code}
+hobot_default_config=/usr/local/lib/hobot-code/default-config
+
+umask 077
+mkdir -p "$hobot_config_root" "$hobot_config_root/agent"
+if [ ! -e "$hobot_config_root/hobot.env" ]; then
+  cp "$hobot_default_config/hobot.env.example" "$hobot_config_root/hobot.env"
+  chmod 0600 "$hobot_config_root/hobot.env"
+fi
+
+if [ -r "$hobot_config_root/hobot.env" ]; then
   set -a
-  . /etc/hobot-code/hobot.env
+  . "$hobot_config_root/hobot.env"
   set +a
 fi
 
-hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-/etc/hobot-code/agent}
-hobot_session_dir=${HOBOT_CODING_AGENT_SESSION_DIR:-/var/lib/hobot-code/sessions}
+hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-$hobot_config_root/agent}
+hobot_state_dir=${HOBOT_CODE_STATE_DIR:-$hobot_state_home/hobot-code}
+hobot_session_dir=${HOBOT_CODING_AGENT_SESSION_DIR:-$hobot_state_dir/sessions}
+
+mkdir -p "$hobot_agent_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"
+for hobot_config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+  if [ ! -e "$hobot_agent_dir/$hobot_config_name" ]; then
+    cp "$hobot_default_config/$hobot_config_name" "$hobot_agent_dir/$hobot_config_name"
+    chmod 0600 "$hobot_agent_dir/$hobot_config_name"
+  fi
+done
+
 export HOBOT_CODING_AGENT_DIR="$hobot_agent_dir"
 export HOBOT_CODING_AGENT_SESSION_DIR="$hobot_session_dir"
+export HOBOT_CODE_STATE_DIR="$hobot_state_dir"
+export HOBOT_CODE_PERMISSION_POLICY="${HOBOT_CODE_PERMISSION_POLICY:-$hobot_agent_dir/permissions.json}"
+export HOBOT_CODE_MEMORY_CONFIG="${HOBOT_CODE_MEMORY_CONFIG:-$hobot_agent_dir/memory.json}"
+export HOBOT_CODE_MEMORY_DB="${HOBOT_CODE_MEMORY_DB:-$hobot_state_dir/memory/memory.db}"
+export HOBOT_CODE_GOAL_CONFIG="${HOBOT_CODE_GOAL_CONFIG:-$hobot_agent_dir/goals.json}"
+export HOBOT_CODE_GOAL_DB="${HOBOT_CODE_GOAL_DB:-$hobot_state_dir/goals/goals.db}"
+export HOBOT_CODE_HOOK_CONFIG="${HOBOT_CODE_HOOK_CONFIG:-$hobot_agent_dir/hooks.json}"
+export HOBOT_CODE_HOOK_AUDIT="${HOBOT_CODE_HOOK_AUDIT:-$hobot_state_dir/audit/hooks.jsonl}"
+export HOBOT_CODE_NOTIFICATION_CONFIG="${HOBOT_CODE_NOTIFICATION_CONFIG:-$hobot_agent_dir/notifications.json}"
+export HOBOT_CODE_LSP_CONFIG="${HOBOT_CODE_LSP_CONFIG:-$hobot_agent_dir/lsp.json}"
 export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
+export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 
 exec /usr/local/lib/hobot-code/hobot "$@"

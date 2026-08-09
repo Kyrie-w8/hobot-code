@@ -25,7 +25,6 @@
     }
   },
   "httpIdleTimeoutMs": 3000000,
-  "sessionDir": "/var/lib/hobot-code/sessions",
   "enabledModels": [
     "drobotics/kimi-k3"
   ],

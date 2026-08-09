@@ -27,5 +27,12 @@ fi
 cp -R "$backup_dir/runtime-installed" /usr/local/lib/hobot-code
 install -m 0755 "$backup_dir/hobot-command" /usr/local/bin/hobot
 
+if [ -d "$backup_dir/legacy-etc-hobot-code" ]; then
+  cp -a "$backup_dir/legacy-etc-hobot-code" /etc/hobot-code
+fi
+if [ -d "$backup_dir/legacy-var-hobot-code" ]; then
+  cp -a "$backup_dir/legacy-var-hobot-code" /var/lib/hobot-code
+fi
+
 printf 'Restored Hobot Code from %s\n' "$backup_dir"
 /usr/local/bin/hobot --version 2>/dev/null || true

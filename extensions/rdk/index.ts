@@ -58,6 +58,7 @@ import {
   type MemoryScope,
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
+import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
@@ -794,39 +795,39 @@ const completionAssertionPattern = /(?:已|已经|全部|现已)(?:完成|实现
 const qualityGateEntryType = "hobot-quality-gates";
 
 function permissionPolicyPath(): string {
-  return resolve(process.env.HOBOT_CODE_PERMISSION_POLICY || "/etc/hobot-code/agent/permissions.json");
+  return resolve(process.env.HOBOT_CODE_PERMISSION_POLICY || resolveUserPaths().permissionPolicy);
 }
 
 function memoryConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_MEMORY_CONFIG || "/etc/hobot-code/agent/memory.json");
+  return resolve(process.env.HOBOT_CODE_MEMORY_CONFIG || resolveUserPaths().memoryConfig);
 }
 
 function memoryDatabasePath(): string {
-  return resolve(process.env.HOBOT_CODE_MEMORY_DB || "/var/lib/hobot-code/memory/memory.db");
+  return resolve(process.env.HOBOT_CODE_MEMORY_DB || resolveUserPaths().memoryDatabase);
 }
 
 function goalConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_GOAL_CONFIG || "/etc/hobot-code/agent/goals.json");
+  return resolve(process.env.HOBOT_CODE_GOAL_CONFIG || resolveUserPaths().goalConfig);
 }
 
 function goalDatabasePath(): string {
-  return resolve(process.env.HOBOT_CODE_GOAL_DB || "/var/lib/hobot-code/goals/goals.db");
+  return resolve(process.env.HOBOT_CODE_GOAL_DB || resolveUserPaths().goalDatabase);
 }
 
 function hookConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_HOOK_CONFIG || "/etc/hobot-code/agent/hooks.json");
+  return resolve(process.env.HOBOT_CODE_HOOK_CONFIG || resolveUserPaths().hookConfig);
 }
 
 function hookAuditPath(): string {
-  return resolve(process.env.HOBOT_CODE_HOOK_AUDIT || "/var/lib/hobot-code/audit/hooks.jsonl");
+  return resolve(process.env.HOBOT_CODE_HOOK_AUDIT || resolveUserPaths().hookAudit);
 }
 
 function notificationConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_NOTIFICATION_CONFIG || "/etc/hobot-code/agent/notifications.json");
+  return resolve(process.env.HOBOT_CODE_NOTIFICATION_CONFIG || resolveUserPaths().notificationConfig);
 }
 
 function lspConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_LSP_CONFIG || "/etc/hobot-code/agent/lsp.json");
+  return resolve(process.env.HOBOT_CODE_LSP_CONFIG || resolveUserPaths().lspConfig);
 }
 
 function formatMemoryRecords(records: MemoryRecord[]): string {
