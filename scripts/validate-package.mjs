@@ -61,6 +61,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "config/notifications.json",
   "config/lsp.json",
   "config/hobot.env.example",
+  "config/tmux.conf",
   "licenses/hobot-code-MIT.txt",
   "licenses/pi-mono-MIT.txt",
   "licenses/fd-MIT.txt",

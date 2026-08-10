@@ -125,6 +125,7 @@ test("release layout covers installer inputs and linked documentation", async (t
     "config/notifications.json",
     "config/lsp.json",
     "config/hobot.env.example",
+    "config/tmux.conf",
     "licenses/hobot-code-MIT.txt",
     "licenses/pi-mono-MIT.txt",
     "licenses/fd-MIT.txt",

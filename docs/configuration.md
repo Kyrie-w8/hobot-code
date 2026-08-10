@@ -236,7 +236,7 @@ hobot persistent list
 hobot persistent stop [name]
 ```
 
-省略动作时等价于 `hobot persistent start main`。名称默认为 `main`，只允许 1 到 48 个字母、数字、下划线或连字符，且必须以字母或数字开头。实际 `tmux` 会话带有 `hobot-code-` 前缀，`list` 和 `stop` 只处理该前缀下的会话。若已经位于另一个 `tmux` 客户端中，启动器会使用客户端切换而不是创建嵌套会话。Hobot 参数必须放在 `--` 后，例如 `hobot persistent start review -- --resume`。
+省略动作时等价于 `hobot persistent start main`。名称默认为 `main`，只允许 1 到 48 个字母、数字、下划线或连字符，且必须以字母或数字开头。实际 `tmux` 会话带有 `hobot-code-` 前缀，并运行在当前 OS 用户的 `hobot-code` 专用 socket 上；`list` 和 `stop` 无法看到或操作普通 `tmux` 服务。随包配置只作用于该专用服务，启用鼠标、扩展按键、焦点事件和 `tmux-256color`。若已经位于其他 `tmux` 客户端中，需先分离，避免跨服务嵌套。Hobot 参数必须放在 `--` 后，例如 `hobot persistent start review -- --resume`。
 
 该模式需要系统安装 `tmux`。它保证 SSH 断开后进程继续运行，但不提供跨板卡重启或程序崩溃恢复；后者只能从已持久化的 Pi 会话重新开始。
 

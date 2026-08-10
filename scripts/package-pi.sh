@@ -214,6 +214,7 @@ for config_name in settings.json models.json permissions.json memory.json goals.
   install -m 0644 "$root_dir/packaging/pi/$config_name" "$stage_dir/config/$config_name"
 done
 install -m 0600 "$root_dir/packaging/pi/hobot.env.example" "$stage_dir/config/hobot.env.example"
+install -m 0644 "$root_dir/packaging/pi/tmux.conf" "$stage_dir/config/tmux.conf"
 install -m 0755 "$root_dir/packaging/pi/hobot-launcher" "$stage_dir/hobot-launcher"
 install -m 0755 "$root_dir/scripts/install-pi.sh" "$stage_dir/install.sh"
 install -m 0755 "$root_dir/scripts/rollback-pi.sh" "$stage_dir/rollback.sh"

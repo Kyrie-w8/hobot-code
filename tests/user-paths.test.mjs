@@ -55,6 +55,7 @@ async function createLauncherFixture(prefix) {
     await copyFile(new URL(`../packaging/pi/${name}`, import.meta.url), join(defaults, name));
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
+  await copyFile(new URL("../packaging/pi/tmux.conf", import.meta.url), join(runtime, "tmux.conf"));
   await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf '%s\\n' \"$HOBOT_CODING_AGENT_DIR\" \"$HOBOT_CODING_AGENT_SESSION_DIR\" \"$HOBOT_CODE_MEMORY_DB\"\nfor hobot_arg in \"$@\"; do printf 'arg=<%s>\\n' \"$hobot_arg\"; done\n");
   await chmod(join(runtime, "hobot"), 0o755);
   const source = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
@@ -70,6 +71,11 @@ async function installFakeTmux(root) {
   await mkdir(binDir, { recursive: true });
   await writeFile(tmux, `#!/bin/sh
 case "\$1" in
+  -L)
+    shift 2
+    [ "\$1" = -f ] && shift 2
+    exec "\$0" "\$@"
+    ;;
   has-session)
     [ "\${FAKE_TMUX_SESSION_EXISTS:-0}" = 1 ]
     ;;

@@ -534,7 +534,9 @@ interface SplitViewportTui extends ViewportTUI {
 
 function prependTuiInputListener(tui: SplitViewportTui, listener: TuiInputListener): () => void {
   const unsubscribe = tui.addInputListener(listener);
-  const listeners = tui.inputListeners;
+  const listeners = tui.inputListeners ?? Reflect.ownKeys(tui)
+    .map((key) => (tui as unknown as Record<PropertyKey, unknown>)[key])
+    .find((value): value is Set<TuiInputListener> => value instanceof Set && value.has(listener));
   if (!(listeners instanceof Set)) return unsubscribe;
 
   // Pi consumes fullscreen SGR mouse events, so the non-consuming focus

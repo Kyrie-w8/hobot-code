@@ -123,6 +123,10 @@ require_tmux() {
     printf 'Persistent Hobot Code sessions require tmux. Install it with: sudo apt-get install tmux\n' >&2
     exit 127
   fi
+  if [ ! -f "$hobot_tmux_config" ] || [ ! -r "$hobot_tmux_config" ]; then
+    printf 'Hobot Code tmux configuration is missing or unreadable: %s\n' "$hobot_tmux_config" >&2
+    exit 1
+  fi
 }
 
 persistent_session_name() {
@@ -145,9 +149,15 @@ append_shell_word() {
 attach_persistent_session() {
   target_session=$1
   if [ -n "${TMUX:-}" ]; then
-    exec tmux switch-client -t "=$target_session"
+    case "${TMUX%%,*}" in
+      */hobot-code) exec tmux -L hobot-code -f "$hobot_tmux_config" switch-client -t "=$target_session" ;;
+      *)
+        printf 'Cannot attach the isolated Hobot Code server from another tmux client. Detach first, then run the command again.\n' >&2
+        exit 1
+        ;;
+    esac
   fi
-  exec tmux attach-session -t "=$target_session"
+  exec tmux -L hobot-code -f "$hobot_tmux_config" attach-session -t "=$target_session"
 }
 
 handle_persistent_command() {
@@ -166,7 +176,7 @@ handle_persistent_command() {
         exit 2
       fi
       require_tmux
-      persistent_sessions=$(tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_windows}|#{session_created_string}' 2>/dev/null || :)
+      persistent_sessions=$(tmux -L hobot-code -f "$hobot_tmux_config" list-sessions -F '#{session_name}|#{session_attached}|#{session_windows}|#{t:session_created}' 2>/dev/null || :)
       persistent_sessions=$(printf '%s\n' "$persistent_sessions" | sed -n '/^hobot-code-/p')
       if [ -z "$persistent_sessions" ]; then
         printf 'No persistent Hobot Code sessions.\n'
@@ -183,12 +193,12 @@ handle_persistent_command() {
       fi
       require_tmux
       target_session=$(persistent_session_name "${1:-main}")
-      if ! tmux has-session -t "=$target_session" 2>/dev/null; then
+      if ! tmux -L hobot-code -f "$hobot_tmux_config" has-session -t "=$target_session" 2>/dev/null; then
         printf 'Persistent Hobot Code session does not exist: %s\n' "${1:-main}" >&2
         exit 1
       fi
       if [ "$persistent_action" = stop ]; then
-        tmux kill-session -t "=$target_session"
+        tmux -L hobot-code -f "$hobot_tmux_config" kill-session -t "=$target_session"
         printf 'Stopped persistent Hobot Code session: %s\n' "${1:-main}"
         exit 0
       fi
@@ -209,7 +219,7 @@ handle_persistent_command() {
         shift
       fi
       target_session=$(persistent_session_name "$logical_name")
-      if tmux has-session -t "=$target_session" 2>/dev/null; then
+      if tmux -L hobot-code -f "$hobot_tmux_config" has-session -t "=$target_session" 2>/dev/null; then
         if [ "$#" -gt 0 ]; then
           printf 'Persistent session %s already exists; new Hobot options were ignored.\n' "$logical_name" >&2
         fi
@@ -234,10 +244,17 @@ handle_persistent_command() {
       for persistent_arg in "$@"; do append_shell_word "$persistent_arg"; done
 
       if [ -n "${TMUX:-}" ]; then
-        tmux new-session -d -s "$target_session" -c "$PWD" "$persistent_command"
+        case "${TMUX%%,*}" in
+          */hobot-code) ;;
+          *)
+            printf 'Cannot start an isolated Hobot Code session from another tmux client. Detach first, then run the command again.\n' >&2
+            exit 1
+            ;;
+        esac
+        tmux -L hobot-code -f "$hobot_tmux_config" new-session -d -s "$target_session" -c "$PWD" "$persistent_command"
         attach_persistent_session "$target_session"
       fi
-      exec tmux new-session -s "$target_session" -c "$PWD" "$persistent_command"
+      exec tmux -L hobot-code -f "$hobot_tmux_config" new-session -s "$target_session" -c "$PWD" "$persistent_command"
       ;;
     *)
       printf 'Unknown persistent action: %s\n' "$persistent_action" >&2
@@ -251,6 +268,7 @@ hobot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 hobot_state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 hobot_config_root=${HOBOT_CODE_CONFIG_DIR:-$hobot_config_home/hobot-code}
 hobot_default_config=/usr/local/lib/hobot-code/default-config
+hobot_tmux_config=/usr/local/lib/hobot-code/tmux.conf
 require_absolute_path XDG_CONFIG_HOME "$hobot_config_home"
 require_absolute_path XDG_STATE_HOME "$hobot_state_home"
 require_absolute_path HOBOT_CODE_CONFIG_DIR "$hobot_config_root"

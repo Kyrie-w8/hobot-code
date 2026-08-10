@@ -5,10 +5,12 @@
 - Mount `/btw` as a true equal-width fullscreen workspace so the main editor remains active while the side agent runs.
 - Add explicit `Ctrl+Shift+Right` and `Ctrl+Shift+Left` focus navigation between the main and side agents.
 - Switch input focus by clicking either half while preserving Pi's text selection, links, dragging, and wheel handling.
+- Discover the fullscreen input-listener set by listener identity so click focus also works in minified standalone ARM64 builds.
 - Route mouse and trackpad scrolling to the side transcript under the pointer, with a native scrollbar and history-friendly follow behavior.
 - Keep a non-capturing overlay fallback for narrow terminals and regular TUI mode.
 - Make fullscreen TUI the default for new installations so split-pane focus and pointer-routed scrolling work without extra setup.
 - Add named `hobot persistent` sessions backed by tmux so Agent and tool processes survive SSH disconnects and can be listed, reattached, or stopped safely.
+- Isolate persistent sessions on a dedicated tmux server with packaged mouse, extended-key, focus-event, and 256-color settings, leaving ordinary tmux sessions untouched.
 
 ## 0.13.0
 

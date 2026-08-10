@@ -339,6 +339,8 @@ test("side agent keeps main input active and exposes pointer-routed scrolling", 
   assert.match(source, /registerShortcut\("ctrl\+shift\+right"/, "main-to-side focus switching must remain available");
   assert.match(source, /matchesKey\(data, "ctrl\+shift\+left"\)/, "side-to-main focus switching must remain available");
   assert.match(source, /prependTuiInputListener\(viewport/, "pointer focus must run before Pi consumes mouse input");
+  assert.match(source, /Reflect\.ownKeys\(tui\)/, "bundled runtimes may minify Pi's private listener field");
+  assert.match(source, /value instanceof Set && value\.has\(listener\)/, "listener discovery must identify its owning set by identity");
   assert.doesNotMatch(source, /onHandle:\s*\(handle\)\s*=>\s*handle\.focus\(\)/);
 });
 

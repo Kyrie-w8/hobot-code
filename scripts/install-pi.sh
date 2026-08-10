@@ -384,6 +384,7 @@ for config_name in settings.json models.json permissions.json memory.json goals.
   install -m 0644 "$package_dir/config/$config_name" "$new_runtime/default-config/$config_name"
 done
 install -m 0644 "$package_dir/config/hobot.env.example" "$new_runtime/default-config/hobot.env.example"
+install -m 0644 "$package_dir/config/tmux.conf" "$new_runtime/tmux.conf"
 "$new_runtime/hobot" --version >/dev/null
 
 if [ -d "$legacy_config" ]; then
