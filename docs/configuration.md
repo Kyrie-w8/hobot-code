@@ -162,6 +162,8 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 `/permissions set <pattern> <action>` 将规则放到数组开头并原子写回。配置缺失或无效时使用内置保守默认值并显示警告。`deny` 工具从活跃工具集合移除，调用时仍会复核；旧版 schema 1 中可能修改系统的 `allow` 规则会降级为 `ask`。
 
+`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、板卡诊断、知识检索、只读记忆、目标进度和 LSP，同时将 root 切换为 `policy` 模式。质量门执行、持久记忆写入、目标完成、MCP 和未知工具仍然确认。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
+
 root 会话默认使用 `rootMode: "confirm"`，因此 `bash`、`write`、`edit` 即使匹配 `allow` 也会确认。执行 `/permissions root policy` 后，root 对普通操作遵守显式的 `allow/ask/deny` 规则；执行 `/permissions root confirm` 可恢复默认行为。当前模式会显示在 `/permissions status` 中。
 
 硬安全边界高于用户规则：

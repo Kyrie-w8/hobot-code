@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.4
+
+- Forward OSC 52 clipboard writes through dedicated persistent tmux sessions so fullscreen drag selection and `/copy` reach the developer's local terminal.
+- Add `Ctrl+A` as a secondary persistent-session prefix when VS Code intercepts `Ctrl+B`.
+- Document drag-to-copy, `/copy`, and the terminal-native Shift-drag fallback.
+
+## 0.13.3
+
+- Include Pi's read-only `ls`, `find`, and `grep` tools in the developer permission preset.
+
+## 0.13.2
+
+- Add `/permissions preset developer` to enable routine Shell and workspace editing while retaining approval for MCP, persistent-state changes, unknown tools, destructive commands, and writes outside the workspace.
+- Show effective permissions for registered tools separately from ordered configured rules, making shadowed entries such as `bash: ask` unambiguous.
+- Cover wildcard precedence and the bounded developer preset with regression tests.
+
 ## 0.13.1
 
 - Mount `/btw` as a true equal-width fullscreen workspace so the main editor remains active while the side agent runs.

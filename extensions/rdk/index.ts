@@ -11,6 +11,7 @@ import {
   DEFAULT_MEMORY_CONFIG,
   MEMORY_KINDS,
   MEMORY_SCOPES,
+  applyPermissionPreset,
   describeToolCall,
   fingerprintWorkspace,
   initializeProject,
@@ -1639,11 +1640,24 @@ export default function rdkExtension(pi: ExtensionAPI) {
             parsePolicy({ ...permissionPolicy, rootMode: first }),
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
+        } else if (operation === "preset") {
+          if (first !== "developer" || second) {
+            throw new Error("Usage: /permissions preset developer");
+          }
+          permissionPolicy = await writePolicy(
+            permissionPolicyPath(),
+            applyPermissionPreset(first),
+          ) as PermissionPolicy;
+          permissionPolicyError = undefined;
         } else {
-          throw new Error("Usage: /permissions [status|reload|set <pattern> <action>|default <action>|root <confirm|policy>]");
+          throw new Error("Usage: /permissions [status|reload|preset developer|set <pattern> <action>|default <action>|root <confirm|policy>]");
         }
 
         const hidden = applyDeniedTools();
+        const effective = pi.getAllTools()
+          .map((tool) => `${tool.name}: ${toolAction(tool.name)}`)
+          .sort((left, right) => left.localeCompare(right))
+          .join("\n");
         const rules = permissionPolicy.rules
           .map((rule) => `${rule.tool}: ${rule.action}`)
           .join("\n");
@@ -1653,7 +1667,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
           `Default: ${permissionPolicy.default}`,
           permissionPolicyError ? `Fallback: ${permissionPolicyError}` : undefined,
           `Hidden tools: ${hidden.length > 0 ? hidden.join(", ") : "none"}`,
-          "Rules:",
+          "Effective tool permissions:",
+          effective || "(none)",
+          "Configured rules (first match wins; later rules may be shadowed):",
           rules || "(none)",
         ].filter(Boolean).join("\n"), permissionPolicyError ? "warning" : "info");
       } catch (error) {

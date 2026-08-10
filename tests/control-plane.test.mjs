@@ -8,6 +8,7 @@ import { destructiveShellReasons, inspectResolvedPath, sanitizedChildEnv } from 
 
 import {
   DEFAULT_POLICY,
+  applyPermissionPreset,
   describeToolCall,
   fingerprintWorkspace,
   initializeProject,
@@ -67,6 +68,31 @@ test("root policy mode honors explicit tool rules without weakening hard guards"
   assert.equal(requiresRootToolApproval(trusted, true, "write"), false);
   assert.equal(requiresRootToolApproval(trusted, true, "read"), false);
   assert.ok(destructiveShellReasons("rm -rf ./build").length > 0);
+});
+
+test("wildcard permission rules take precedence and developer preset stays bounded", () => {
+  const wildcard = setPolicyRule(
+    parsePolicy({ ...DEFAULT_POLICY, rootMode: "policy" }),
+    "*",
+    "allow",
+  );
+  assert.equal(resolveToolAction(wildcard, "bash"), "allow");
+  assert.equal(resolveToolAction(wildcard, "edit"), "allow");
+
+  const developer = applyPermissionPreset("developer");
+  assert.equal(developer.rootMode, "policy");
+  assert.equal(developer.default, "ask");
+  assert.equal(resolveToolAction(developer, "ls"), "allow");
+  assert.equal(resolveToolAction(developer, "find"), "allow");
+  assert.equal(resolveToolAction(developer, "grep"), "allow");
+  assert.equal(resolveToolAction(developer, "bash"), "allow");
+  assert.equal(resolveToolAction(developer, "write"), "allow");
+  assert.equal(resolveToolAction(developer, "edit"), "allow");
+  assert.equal(resolveToolAction(developer, "quality_gate"), "ask");
+  assert.equal(resolveToolAction(developer, "memory_save"), "ask");
+  assert.equal(resolveToolAction(developer, "mcp__unknown__tool", true), "ask");
+  assert.equal(resolveToolAction(developer, "future_plugin"), "ask");
+  assert.throws(() => applyPermissionPreset("unrestricted"), /developer/);
 });
 
 test("permission changes restore only tools hidden by the permission layer", () => {

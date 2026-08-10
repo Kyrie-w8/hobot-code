@@ -25,6 +25,31 @@ export const DEFAULT_POLICY = Object.freeze({
   ]),
 });
 
+export const DEVELOPER_POLICY = Object.freeze({
+  schemaVersion: 2,
+  rootMode: "policy",
+  default: "ask",
+  rules: Object.freeze([
+    Object.freeze({ tool: "read", action: "allow" }),
+    Object.freeze({ tool: "ls", action: "allow" }),
+    Object.freeze({ tool: "find", action: "allow" }),
+    Object.freeze({ tool: "grep", action: "allow" }),
+    Object.freeze({ tool: "write", action: "allow" }),
+    Object.freeze({ tool: "edit", action: "allow" }),
+    Object.freeze({ tool: "bash", action: "allow" }),
+    Object.freeze({ tool: "system_snapshot", action: "allow" }),
+    Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
+    Object.freeze({ tool: "memory_search", action: "allow" }),
+    Object.freeze({ tool: "goal_status", action: "allow" }),
+    Object.freeze({ tool: "goal_progress", action: "allow" }),
+    Object.freeze({ tool: "lsp", action: "allow" }),
+    Object.freeze({ tool: "quality_gate", action: "ask" }),
+    Object.freeze({ tool: "memory_save", action: "ask" }),
+    Object.freeze({ tool: "goal_complete", action: "ask" }),
+    Object.freeze({ tool: "mcp:*", action: "ask" }),
+  ]),
+});
+
 export const MEMORY_SCOPES = Object.freeze(["user", "project", "board", "session"]);
 export const MEMORY_KINDS = Object.freeze(["preference", "decision", "fact", "fix", "instruction", "note"]);
 
@@ -258,6 +283,14 @@ export function setPolicyRule(policy, tool, action) {
   return parsePolicy({
     ...policy,
     rules: [{ tool: pattern, action }, ...policy.rules.filter((rule) => rule.tool !== pattern)],
+  });
+}
+
+export function applyPermissionPreset(name) {
+  if (name !== "developer") throw new Error("permission preset must be developer");
+  return parsePolicy({
+    ...DEVELOPER_POLICY,
+    rules: DEVELOPER_POLICY.rules.map((rule) => ({ ...rule })),
   });
 }
 
