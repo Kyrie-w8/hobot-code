@@ -131,6 +131,7 @@ hobot persistent
 | `/memory`、`/goal` | 管理持久记忆与长期目标 |
 | `/hooks`、`/notifications`、`/lsp` | 管理工程扩展能力 |
 | `/btw <任务>` | 打开侧边 Agent |
+| `/detach` | 退出持久会话界面并保持 Agent 在后台运行 |
 | `/hotkeys` | 查看完整快捷键 |
 | `/quit`、`/q`、`/exit` | 退出 |
 
@@ -151,7 +152,7 @@ hobot persistent attach main               # 重连
 hobot persistent stop main                 # 终止会话及受其终端托管的进程
 ```
 
-主动离开但保持任务运行时，按 `Ctrl+B`，松开后按 `D`；若 VS Code 占用了 `Ctrl+B`，可改用 `Ctrl+A`，松开后再按 `D`。持久会话运行在按 OS 用户隔离的 `hobot-code` 专用 `tmux` 服务中，随包配置会启用备用前缀、鼠标、剪贴板转发、扩展按键和 256 色支持，不会读取或修改用户普通 `tmux` 服务的会话与设置。若当前已经位于其他 `tmux` 客户端中，需要先分离再运行 `hobot persistent`。它只能承受客户端断线：板卡重启、断电、内存不足杀进程或程序崩溃仍会终止实时任务；此后可使用 `hobot --resume` 恢复已落盘的对话，但不会自动重放中断的工具调用。
+主动离开但保持任务运行时，直接执行 `/detach`。也可使用 tmux 原生快捷键：按 `Ctrl+B`，松开后按 `D`。持久会话运行在按 OS 用户隔离的 `hobot-code` 专用 `tmux` 服务中，随包配置会启用鼠标、剪贴板转发、扩展按键和 256 色支持，不会读取或修改用户普通 `tmux` 服务的会话与设置。若当前已经位于其他 `tmux` 客户端中，需要先分离再运行 `hobot persistent`。它只能承受客户端断线：板卡重启、断电、内存不足杀进程或程序崩溃仍会终止实时任务；此后可使用 `hobot --resume` 恢复已落盘的对话，但不会自动重放中断的工具调用。
 
 脚本化调用沿用 Pi：
 

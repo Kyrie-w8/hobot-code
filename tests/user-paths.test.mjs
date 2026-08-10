@@ -280,7 +280,6 @@ test("launcher persistent management is scoped to Hobot Code sessions", async ()
 
 test("persistent tmux forwards application clipboard sequences", async () => {
   const config = await readFile(new URL("../packaging/pi/tmux.conf", import.meta.url), "utf8");
-  assert.match(config, /^set -g prefix2 C-a$/m);
   assert.match(config, /^set -g set-clipboard on$/m);
   assert.match(config, /terminal-features[^\n]*xterm\*:clipboard/);
 });

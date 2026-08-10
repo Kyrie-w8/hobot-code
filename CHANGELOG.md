@@ -1,9 +1,14 @@
 # Changelog
 
+## 0.13.5
+
+- Add `/detach` to leave the current persistent TUI while keeping its Agent and tools running.
+- Resolve and detach only the invoking terminal after validating the dedicated Hobot Code tmux socket, pane, session, and client TTY.
+- Remove the `Ctrl+A` fallback because terminals and editors commonly reserve it for selection or line navigation.
+
 ## 0.13.4
 
 - Forward OSC 52 clipboard writes through dedicated persistent tmux sessions so fullscreen drag selection and `/copy` reach the developer's local terminal.
-- Add `Ctrl+A` as a secondary persistent-session prefix when VS Code intercepts `Ctrl+B`.
 - Document drag-to-copy, `/copy`, and the terminal-native Shift-drag fallback.
 
 ## 0.13.3

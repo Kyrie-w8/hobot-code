@@ -46,6 +46,7 @@ import {
   type MemoryScope,
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
+import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
 import { destructiveShellReasons, inspectResolvedPath } from "./runtime-safety.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
@@ -2230,7 +2231,21 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
-  if (!sideAgentMode) disposeSideAgent = registerSideAgent(pi);
+  if (!sideAgentMode) {
+    disposeSideAgent = registerSideAgent(pi);
+    pi.registerCommand("detach", {
+      description: "Detach this persistent Hobot Code client and keep the Agent running",
+      handler: async (args, ctx) => {
+        try {
+          if (String(args ?? "").trim()) throw new Error("Usage: /detach");
+          ctx.ui.notify("Detaching this terminal; Hobot Code will keep running in the background.", "info");
+          await detachPersistentTmuxClient();
+        } catch (error) {
+          ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+        }
+      },
+    });
+  }
 
   for (const alias of ["exit", "q"]) {
     pi.registerCommand(alias, {
