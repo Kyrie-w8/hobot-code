@@ -10,21 +10,37 @@ import {
   buildSideAgentArgs,
   buildSideSessionSnapshot,
   createSideAgentEventState,
+  enqueueSideAgentUiRequest,
+  notifySideAgentListeners,
   parseSideAgentLimit,
   parseSideAgentEvent,
+  removeSideAgentUiRequest,
+  resolveSideAgentUiTimeout,
+  selectSideAgentParentEntries,
+  sideAgentCommandResponseMatches,
+  sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
+  sideAgentPhaseAfterEvent,
 } from "../extensions/rdk/side-agent-session.mjs";
 
-test("side session snapshot includes in-memory branch entries without retaining the parent id", () => {
+test("side session snapshot serializes the captured branch exactly", () => {
   const snapshot = buildSideSessionSnapshot({
     header: { type: "session", version: 3, id: "parent", timestamp: "old", cwd: "/old" },
     entries: [
+      { type: "model_change", id: "model-1", parentId: null, timestamp: "now", provider: "test", modelId: "model" },
       {
         type: "message",
         id: "user-1",
-        parentId: null,
+        parentId: "model-1",
         timestamp: "now",
-        message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 1 },
+        message: { role: "user", content: [{ type: "text", text: "settled request" }], timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        timestamp: "now",
+        message: { role: "assistant", content: [{ type: "text", text: "settled answer" }], stopReason: "stop" },
       },
     ],
     id: "side-1",
@@ -36,7 +52,105 @@ test("side session snapshot includes in-memory branch entries without retaining 
   assert.equal(lines[0].id, "side-1");
   assert.equal(lines[0].cwd, "/workspace");
   assert.equal(lines[0].parentSession, "/state/main.jsonl");
-  assert.equal(lines[1].message.content[0].text, "current request");
+  assert.deepEqual(lines.slice(1).map((entry) => entry.id), ["model-1", "user-1", "assistant-1"]);
+});
+
+test("side agent forks from the settled branch while the parent is running", () => {
+  const settledEntries = [{ id: "assistant-1", type: "message" }];
+  const currentEntries = [...settledEntries, { id: "user-2", type: "message" }];
+  assert.equal(selectSideAgentParentEntries({
+    currentEntries,
+    settledEntries,
+    parentRunActive: true,
+    runtimeIdle: false,
+  }), settledEntries);
+  assert.equal(selectSideAgentParentEntries({
+    currentEntries,
+    settledEntries,
+    parentRunActive: false,
+    runtimeIdle: false,
+  }), settledEntries);
+});
+
+test("side agent rejects an incomplete parent tool turn even when runtime state reports idle", () => {
+  const currentEntries = [
+    { id: "model-1", parentId: null, type: "model_change" },
+    { id: "user-1", parentId: "model-1", type: "message", message: { role: "user" } },
+    {
+      id: "assistant-1",
+      parentId: "user-1",
+      type: "message",
+      message: { role: "assistant", stopReason: "toolUse" },
+    },
+  ];
+  assert.deepEqual(selectSideAgentParentEntries({
+    currentEntries,
+    settledEntries: currentEntries,
+    parentRunActive: false,
+    runtimeIdle: true,
+  }), [currentEntries[0]]);
+});
+
+test("side agent keeps the full current branch while the parent is idle", () => {
+  const settledEntries = [{ id: "assistant-1", type: "message" }];
+  const currentEntries = [...settledEntries, { id: "custom-1", type: "custom_message" }];
+  assert.equal(selectSideAgentParentEntries({
+    currentEntries,
+    settledEntries,
+    parentRunActive: false,
+    runtimeIdle: true,
+  }), currentEntries);
+});
+
+test("side agent captures the leaf before a newly started user or custom turn", () => {
+  const settled = { id: "assistant-1", parentId: "user-1", type: "message", message: { role: "assistant" } };
+  assert.equal(sideAgentLeafBeforeRun([settled]), "assistant-1");
+  assert.equal(sideAgentLeafBeforeRun([
+    settled,
+    { id: "user-2", parentId: "assistant-1", type: "message", message: { role: "user" } },
+  ]), "assistant-1");
+  assert.equal(sideAgentLeafBeforeRun([
+    settled,
+    { id: "custom-1", parentId: "assistant-1", type: "custom_message" },
+  ]), "assistant-1");
+
+  assert.equal(sideAgentLeafBeforeRun([
+    settled,
+    { id: "user-2", parentId: "assistant-1", type: "message", message: { role: "user" } },
+    {
+      id: "assistant-2",
+      parentId: "user-2",
+      type: "message",
+      message: { role: "assistant", stopReason: "toolUse" },
+    },
+  ]), "assistant-1");
+
+  assert.equal(sideAgentLeafBeforeRun([
+    { id: "model-1", parentId: null, type: "model_change" },
+    { id: "user-1", parentId: "model-1", type: "message", message: { role: "user" } },
+    {
+      id: "assistant-1",
+      parentId: "user-1",
+      type: "message",
+      message: { role: "assistant", stopReason: "toolUse" },
+    },
+    { id: "tool-1", parentId: "assistant-1", type: "message", message: { role: "toolResult" } },
+    { id: "user-2", parentId: "tool-1", type: "message", message: { role: "user" } },
+  ]), "model-1");
+});
+
+test("side agent listener failures cannot block lifecycle listeners", () => {
+  const calls = [];
+  const broken = () => {
+    calls.push("broken");
+    throw new Error("render failed");
+  };
+  const healthy = () => calls.push("healthy");
+  const listeners = new Set([broken, healthy]);
+  notifySideAgentListeners(listeners);
+  assert.deepEqual(calls, ["broken", "healthy"]);
+  assert.equal(listeners.has(broken), false);
+  assert.equal(listeners.has(healthy), true);
 });
 
 test("multi-turn side agent invocation uses RPC and inherits model, thinking, tools, and project trust", () => {
@@ -132,6 +246,53 @@ test("side agent usage ignores invalid and negative counters", () => {
 test("side agent event parser ignores non-JSON output", () => {
   assert.equal(parseSideAgentEvent("not json"), undefined);
   assert.deepEqual(parseSideAgentEvent('{"type":"agent_end"}'), { type: "agent_end" });
+});
+
+test("side agent stays busy until the RPC agent_settled barrier", () => {
+  let phase = "running";
+  phase = sideAgentPhaseAfterEvent(phase, { type: "agent_end", willRetry: true });
+  assert.equal(phase, "running");
+  phase = sideAgentPhaseAfterEvent(phase, { type: "auto_retry_start" });
+  assert.equal(phase, "running");
+  phase = sideAgentPhaseAfterEvent(phase, { type: "agent_start" });
+  assert.equal(phase, "running");
+  phase = sideAgentPhaseAfterEvent(phase, { type: "agent_end", willRetry: false });
+  assert.equal(phase, "running");
+  phase = sideAgentPhaseAfterEvent(phase, { type: "agent_settled" });
+  assert.equal(phase, "idle");
+});
+
+test("side agent command failures only match the active RPC request", () => {
+  const event = { type: "response", id: "btw_2", command: "prompt", success: false };
+  assert.equal(sideAgentCommandResponseMatches(event, "btw_1", "prompt"), false);
+  assert.equal(sideAgentCommandResponseMatches(event, "btw_2", "abort"), false);
+  assert.equal(sideAgentCommandResponseMatches(event, "btw_2", "prompt"), true);
+});
+
+test("side agent UI requests remain FIFO and do not overwrite concurrent approvals", () => {
+  const first = { id: "approval-1", method: "confirm" };
+  const second = { id: "approval-2", method: "confirm" };
+  let queue = enqueueSideAgentUiRequest([], first);
+  queue = enqueueSideAgentUiRequest(queue, second);
+  queue = enqueueSideAgentUiRequest(queue, first);
+  assert.deepEqual(queue.map((request) => request.id), ["approval-1", "approval-2"]);
+  queue = removeSideAgentUiRequest(queue, "approval-1");
+  assert.equal(queue[0].id, "approval-2");
+});
+
+test("side agent UI timeout policy bounds missing and oversized dialogs", () => {
+  assert.deepEqual(resolveSideAgentUiTimeout(5_000, 120_000), {
+    timeout: 5_000,
+    rpcOwnsTimeout: true,
+  });
+  assert.deepEqual(resolveSideAgentUiTimeout(undefined, 120_000), {
+    timeout: 120_000,
+    rpcOwnsTimeout: false,
+  });
+  assert.deepEqual(resolveSideAgentUiTimeout(300_000, 120_000), {
+    timeout: 120_000,
+    rpcOwnsTimeout: false,
+  });
 });
 
 test("side agent per-user limit defaults to two and remains bounded", () => {

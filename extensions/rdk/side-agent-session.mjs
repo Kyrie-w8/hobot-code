@@ -2,6 +2,97 @@ const SESSION_VERSION = 3;
 const MAX_STREAM_TEXT_CHARS = 200_000;
 const MAX_TOOL_EVENTS = 100;
 
+export function selectSideAgentParentEntries({ currentEntries, settledEntries, parentRunActive, runtimeIdle }) {
+  if (!Array.isArray(currentEntries) || !Array.isArray(settledEntries)) {
+    throw new Error("side session branches must be arrays");
+  }
+  const leaf = currentEntries.at(-1);
+  const leafRole = leaf?.type === "message" ? leaf.message?.role : undefined;
+  const structurallyInFlight = leafRole === "user"
+    || leafRole === "toolResult"
+    || (leafRole === "assistant" && leaf.message?.stopReason === "toolUse");
+  if (structurallyInFlight) {
+    const safeLeafId = sideAgentLeafBeforeRun(currentEntries);
+    if (!safeLeafId) return [];
+    const safeLeafIndex = currentEntries.findIndex((entry) => entry?.id === safeLeafId);
+    return safeLeafIndex >= 0 ? currentEntries.slice(0, safeLeafIndex + 1) : [];
+  }
+  return parentRunActive || !runtimeIdle ? settledEntries : currentEntries;
+}
+
+export function sideAgentLeafBeforeRun(entries) {
+  if (!Array.isArray(entries)) throw new Error("side session branch must be an array");
+  const leaf = entries.at(-1);
+  if (!leaf || typeof leaf !== "object") return undefined;
+
+  const leafIsUnfinished = leaf.type === "custom_message"
+    || (leaf.type === "message" && (
+      leaf.message?.role === "user"
+      || (leaf.message?.role === "assistant" && leaf.message?.stopReason === "toolUse")
+      || leaf.message?.role === "toolResult"
+    ));
+  if (!leafIsUnfinished) return typeof leaf.id === "string" ? leaf.id : undefined;
+
+  let boundary;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || typeof entry !== "object") continue;
+    const isRunPrompt = entry.type === "custom_message"
+      || (entry.type === "message" && entry.message?.role === "user");
+    if (isRunPrompt) boundary = entry.parentId;
+
+    const isSettledAssistant = entry.type === "message"
+      && entry.message?.role === "assistant"
+      && entry.message?.stopReason !== "toolUse";
+    if (isSettledAssistant) break;
+  }
+  return typeof boundary === "string" ? boundary : undefined;
+}
+
+export function notifySideAgentListeners(listeners) {
+  for (const listener of [...listeners]) {
+    try {
+      listener();
+    } catch {
+      listeners.delete?.(listener);
+    }
+  }
+}
+
+export function resolveSideAgentUiTimeout(requestedTimeout, maximumTimeout) {
+  const requested = Number(requestedTimeout);
+  const maximum = Number(maximumTimeout);
+  if (!Number.isFinite(maximum) || maximum <= 0) throw new Error("side UI timeout maximum must be positive");
+  if (Number.isFinite(requested) && requested > 0 && requested <= maximum) {
+    return { timeout: requested, rpcOwnsTimeout: true };
+  }
+  return { timeout: maximum, rpcOwnsTimeout: false };
+}
+
+export function sideAgentPhaseAfterEvent(phase, event) {
+  if (event?.type === "agent_start") return "running";
+  if (event?.type === "agent_settled") return "idle";
+  return phase;
+}
+
+export function sideAgentCommandResponseMatches(event, id, command) {
+  return Boolean(
+    id
+    && event?.type === "response"
+    && event.id === id
+    && event.command === command,
+  );
+}
+
+export function enqueueSideAgentUiRequest(requests, request) {
+  if (requests.some((candidate) => candidate.id === request.id)) return requests;
+  return [...requests, request];
+}
+
+export function removeSideAgentUiRequest(requests, id) {
+  return requests.filter((request) => request.id !== id);
+}
+
 export function parseSideAgentLimit(value, fallback = 2) {
   const normalized = String(value ?? "").trim();
   const parsed = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;

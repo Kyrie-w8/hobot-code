@@ -52,6 +52,7 @@ import { resolveUserPaths } from "./user-paths.mjs";
 const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = "kimi-k3";
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
+const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1507,7 +1508,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
         describeToolCall(event.toolName, event.input, qualityGateState.commands),
         `Reason: ${approvalReasons.join("; ")}`,
       ].join("\n");
-      const approved = await ctx.ui.confirm(`Allow ${event.toolName}?`, detail);
+      const approved = await ctx.ui.confirm(
+        `Allow ${event.toolName}?`,
+        detail,
+        sideAgentMode ? { timeout: SIDE_AGENT_APPROVAL_TIMEOUT_MS } : undefined,
+      );
       if (!approved) return { block: true, reason: `${event.toolName} was cancelled by the user` };
     }
 

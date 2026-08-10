@@ -77,9 +77,9 @@ LSP 客户端仅在请求匹配语言且命令存在时启动。进程数、单�
 
 ## 侧边 Agent
 
-`/btw` 使用持续存活的独立 Pi RPC 子进程，不占用主 Agent 的事件循环、消息队列或会话树。创建时从 `SessionManager.getBranch()` 获取一次性快照，其中包含尚未写入 JSONL 的当前用户消息；子进程还获得父会话当轮的有效系统 Prompt、模型、thinking 等级、工具集合和项目信任状态。
+`/btw` 使用持续存活的独立 Pi RPC 子进程，不占用主 Agent 的事件循环、消息队列或会话树。主 Agent 空闲时，创建过程从 `SessionManager.getBranch()` 物化当前分支；主 Agent 运行时，则从本轮 `before_agent_start` 记录的稳定叶节点物化分支，并以 `agent_settled` 更新该边界。创建时还会校验分支结构，正在运行的 user、未闭合 assistant tool call 或 toolResult 后缀不会进入子进程。子进程还获得父会话当轮的有效系统 Prompt、模型、thinking 等级、工具集合和项目信任状态。
 
-子进程不会重新扫描 Skills。父 Prompt 中已经生效的 Skill 指引会随快照保留，但它不是一套独立的 Skill discovery 流程。每轮输入追加到同一个临时会话，因此侧边对话可以多轮继续；确认、选择和补充输入请求由右侧窗格转交。
+子进程不会重新扫描 Skills。父 Prompt 中已经生效的 Skill 指引会随快照保留，但它不是一套独立的 Skill discovery 流程。每轮输入追加到同一个临时会话，因此侧边对话可以多轮继续；只有 `agent_settled` 才开放下一轮输入。确认、选择和补充输入请求由右侧窗格按请求 ID 排队转交，审批最长等待两分钟。
 
 侧边 Agent 禁止调用持久记忆写入和持久目标变更工具。其消息不写回主会话，关闭后临时会话、Prompt 与运行记录会被删除；但它与主 Agent 共享工作区、OS 用户、进程命名空间、服务和设备视图，已经产生的文件或硬件副作用不会回滚。
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +19,8 @@ for (const name of sourceFiles) {
   const display = relative(root, path);
   let content;
   try {
+    const status = await lstat(path);
+    if (status.isDirectory()) continue;
     content = await readFile(path);
   } catch (error) {
     if (error?.code === "ENOENT") continue;

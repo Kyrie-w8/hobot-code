@@ -28,8 +28,16 @@ import {
   buildSideAgentArgs,
   buildSideSessionSnapshot,
   createSideAgentEventState,
+  enqueueSideAgentUiRequest,
+  notifySideAgentListeners,
   parseSideAgentEvent,
+  removeSideAgentUiRequest,
+  resolveSideAgentUiTimeout,
+  selectSideAgentParentEntries,
+  sideAgentCommandResponseMatches,
+  sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
+  sideAgentPhaseAfterEvent,
 } from "./side-agent-session.mjs";
 
 const MAX_QUESTION_CHARS = 32_000;
@@ -37,11 +45,16 @@ const MAX_STDERR_CHARS = 16_000;
 const MAX_JSON_LINE_CHARS = 2_000_000;
 const MAX_TRANSCRIPT_CHARS = 240_000;
 const MAX_TRANSCRIPT_MESSAGES = 120;
+const MAX_SIDE_UI_WAIT_MS = 120_000;
+const SIDE_AGENT_TERM_GRACE_MS = 5_000;
+const SIDE_AGENT_EXIT_TIMEOUT_MS = 8_000;
 const SIDE_AGENT_SYSTEM_NOTE = `
 
 ## Ephemeral side-agent mode
 
-You are an independent temporary agent created from an exact snapshot of the parent conversation.
+You are an independent temporary agent created from the parent's latest fully settled conversation snapshot.
+The parent's in-flight turn is intentionally excluded. Treat inherited messages as read-only background and work
+only on prompts entered in this side conversation; never continue an unfinished parent task on your own.
 Complete side tasks with the same engineering standards, tools, workspace, and board safety rules.
 This is a private multi-turn conversation and will not be merged into the parent session. Files, processes,
 services, and devices are shared with the parent and changes persist, so inspect live state before mutating it
@@ -81,6 +94,7 @@ interface SideUiRequest {
   options?: string[];
   placeholder?: string;
   timeout?: number;
+  rpcOwnsTimeout?: boolean;
 }
 
 interface SideAgentLease {
@@ -126,7 +140,6 @@ class SideAgentRun {
   phase: SidePhase = "starting";
   state: SideEventState = createSideAgentEventState() as SideEventState;
   transcript: TranscriptMessage[] = [];
-  pendingUiRequest: SideUiRequest | undefined;
   stderr = "";
   startedAt = Date.now();
   turnStartedAt = Date.now();
@@ -141,7 +154,11 @@ class SideAgentRun {
   private oversizedLine = false;
   private terminating = false;
   private requestId = 0;
-  private uiRequestTimer: ReturnType<typeof setTimeout> | undefined;
+  private pendingPromptId: string | undefined;
+  private pendingAbortId: string | undefined;
+  private uiRequests: SideUiRequest[] = [];
+  private uiRequestTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private cleanupPromise: Promise<void> | undefined;
   private readonly args: string[];
   private readonly cwd: string;
   private readonly parentSession: string | undefined;
@@ -175,13 +192,21 @@ class SideAgentRun {
     return this.phase === "idle" && !this.pendingUiRequest;
   }
 
+  get pendingUiRequest(): SideUiRequest | undefined {
+    return this.uiRequests[0];
+  }
+
+  get pendingUiRequestCount(): number {
+    return this.uiRequests.length;
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   private changed(): void {
-    for (const listener of this.listeners) listener();
+    notifySideAgentListeners(this.listeners);
   }
 
   private settleFinished(): void {
@@ -242,8 +267,9 @@ class SideAgentRun {
     }
   }
 
-  private sendCommand(type: string, fields: Record<string, unknown> = {}): boolean {
-    return this.sendRaw({ id: `btw_${++this.requestId}`, type, ...fields });
+  private sendCommand(type: string, fields: Record<string, unknown> = {}): string | undefined {
+    const id = `btw_${++this.requestId}`;
+    return this.sendRaw({ id, type, ...fields }) ? id : undefined;
   }
 
   start(): void {
@@ -282,14 +308,14 @@ class SideAgentRun {
         this.consumeLine(this.stdoutBuffer);
         this.stdoutBuffer = "";
         this.exitCode = code;
-        this.clearUiRequest();
+        this.clearUiRequests();
         if (this.terminating) this.phase = "closed";
         else {
           this.phase = "failed";
           this.addNotice(`Side-agent process exited unexpectedly with code ${code ?? "unknown"}.`);
         }
-        this.changed();
         this.settleFinished();
+        this.changed();
       });
       this.phase = "idle";
       this.changed();
@@ -309,15 +335,15 @@ class SideAgentRun {
     this.appendTranscript({ role: "user", text: trimmed });
     this.turnStartedAt = Date.now();
     this.phase = "running";
-    const sent = this.sendCommand("prompt", { message: trimmed });
+    this.pendingPromptId = this.sendCommand("prompt", { message: trimmed });
     this.changed();
-    return sent;
+    return Boolean(this.pendingPromptId);
   }
 
   abortTurn(): void {
     if (!this.isBusy || this.phase === "starting") return;
     this.phase = "aborting";
-    this.sendCommand("abort");
+    this.pendingAbortId = this.sendCommand("abort");
     this.changed();
   }
 
@@ -325,24 +351,41 @@ class SideAgentRun {
     const request = this.pendingUiRequest;
     if (!request) return;
     this.sendRaw({ type: "extension_ui_response", id: request.id, ...response });
-    this.clearUiRequest();
+    this.removeUiRequest(request.id);
     this.changed();
   }
 
   private setUiRequest(request: SideUiRequest): void {
-    this.clearUiRequest();
-    this.pendingUiRequest = request;
+    const next = enqueueSideAgentUiRequest(this.uiRequests, request) as SideUiRequest[];
+    if (next === this.uiRequests) return;
+    this.uiRequests = next;
     if (request.timeout && request.timeout > 0) {
-      this.uiRequestTimer = setTimeout(() => this.respondToUi({ cancelled: true }), request.timeout);
-      this.uiRequestTimer.unref?.();
+      // Avoid racing RPC-owned timeouts; only timeout-less dialogs need a cancellation response.
+      const timer = setTimeout(() => {
+        if (!this.uiRequests.some((candidate) => candidate.id === request.id)) return;
+        if (!request.rpcOwnsTimeout) {
+          this.sendRaw({ type: "extension_ui_response", id: request.id, cancelled: true });
+        }
+        this.removeUiRequest(request.id);
+        this.changed();
+      }, request.timeout + (request.rpcOwnsTimeout ? 50 : 0));
+      timer.unref?.();
+      this.uiRequestTimers.set(request.id, timer);
     }
     this.changed();
   }
 
-  private clearUiRequest(): void {
-    if (this.uiRequestTimer) clearTimeout(this.uiRequestTimer);
-    this.uiRequestTimer = undefined;
-    this.pendingUiRequest = undefined;
+  private removeUiRequest(id: string): void {
+    const timer = this.uiRequestTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.uiRequestTimers.delete(id);
+    this.uiRequests = removeSideAgentUiRequest(this.uiRequests, id) as SideUiRequest[];
+  }
+
+  private clearUiRequests(): void {
+    for (const timer of this.uiRequestTimers.values()) clearTimeout(timer);
+    this.uiRequestTimers.clear();
+    this.uiRequests = [];
   }
 
   private consumeStdout(chunk: string): void {
@@ -371,6 +414,7 @@ class SideAgentRun {
       if (event.method === "notify") {
         this.addNotice(String(event.message ?? ""));
       } else if (["confirm", "select", "input", "editor"].includes(String(event.method))) {
+        const timeoutPolicy = resolveSideAgentUiTimeout(event.timeout, MAX_SIDE_UI_WAIT_MS);
         this.setUiRequest({
           id: String(event.id),
           method: event.method,
@@ -378,17 +422,29 @@ class SideAgentRun {
           message: typeof event.message === "string" ? event.message : undefined,
           options: Array.isArray(event.options) ? event.options.map(String) : undefined,
           placeholder: typeof event.placeholder === "string" ? event.placeholder : event.prefill,
-          timeout: Number.isFinite(event.timeout) ? Number(event.timeout) : undefined,
+          ...timeoutPolicy,
         });
       }
       this.changed();
       return;
     }
 
-    if (event.type === "response" && event.success === false) {
-      this.state = { ...this.state, errorMessage: String(event.error ?? "RPC command failed") };
-      this.addNotice(String(event.error ?? "RPC command failed"));
-      if (event.command === "prompt" || event.command === "abort") this.phase = "idle";
+    if (event.type === "response") {
+      const promptResponse = sideAgentCommandResponseMatches(event, this.pendingPromptId, "prompt");
+      const abortResponse = sideAgentCommandResponseMatches(event, this.pendingAbortId, "abort");
+      if (promptResponse && event.success === false) {
+        this.pendingPromptId = undefined;
+        this.phase = "idle";
+      }
+      if (abortResponse) {
+        this.pendingAbortId = undefined;
+        if (event.success === false) this.phase = "running";
+      }
+      if (event.success === false) {
+        const message = String(event.error ?? "RPC command failed");
+        this.state = { ...this.state, errorMessage: message };
+        this.addNotice(message);
+      }
       this.changed();
       return;
     }
@@ -407,29 +463,57 @@ class SideAgentRun {
         thinkingText: "",
         finalThinking: "",
       };
-    } else if (event.type === "agent_start") {
-      this.phase = "running";
-    } else if (event.type === "agent_end" || event.type === "agent_settled") {
-      this.phase = "idle";
+    } else {
+      this.phase = sideAgentPhaseAfterEvent(this.phase, event) as SidePhase;
+      if (event.type === "agent_settled") {
+        this.pendingPromptId = undefined;
+        this.pendingAbortId = undefined;
+        this.clearUiRequests();
+      }
     }
     this.changed();
   }
 
-  async cleanup(): Promise<void> {
+  cleanup(): Promise<void> {
+    this.cleanupPromise ??= this.cleanupOnce();
+    return this.cleanupPromise;
+  }
+
+  private async cleanupOnce(): Promise<void> {
     this.terminating = true;
-    this.clearUiRequest();
+    this.clearUiRequests();
     const child = this.process;
-    if (child && child.exitCode === null) {
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    if (child && child.exitCode === null && child.signalCode === null) {
       this.sendCommand("abort");
       terminateSideAgent(child, "SIGTERM");
-      const timer = setTimeout(() => {
-        if (child.exitCode === null) terminateSideAgent(child, "SIGKILL");
-      }, 5000);
-      timer.unref?.();
-    } else {
-      this.settleFinished();
+      forceKillTimer = setTimeout(() => {
+        if (!this.finishedSettled && child.exitCode === null && child.signalCode === null) {
+          try {
+            terminateSideAgent(child, "SIGKILL");
+          } catch {
+            // The bounded wait below reports a process that cannot be terminated.
+          }
+        }
+      }, SIDE_AGENT_TERM_GRACE_MS);
+      forceKillTimer.unref?.();
     }
-    await this.finished;
+    if (!child) this.settleFinished();
+
+    let exitTimeout: ReturnType<typeof setTimeout> | undefined;
+    const exited = await Promise.race([
+      this.finished.then(() => true),
+      new Promise<false>((resolve) => {
+        exitTimeout = setTimeout(() => resolve(false), SIDE_AGENT_EXIT_TIMEOUT_MS);
+        exitTimeout.unref?.();
+      }),
+    ]);
+    if (forceKillTimer) clearTimeout(forceKillTimer);
+    if (exitTimeout) clearTimeout(exitTimeout);
+    if (!exited) {
+      void this.finished.then(() => rm(this.tempDir, { recursive: true, force: true })).catch(() => undefined);
+      throw new Error(`Side-agent process did not exit within ${SIDE_AGENT_EXIT_TIMEOUT_MS / 1000} seconds`);
+    }
     await rm(this.tempDir, { recursive: true, force: true });
   }
 }
@@ -537,12 +621,12 @@ class SideAgentOverlay implements Focusable {
 
     const request = this.run.pendingUiRequest;
     if (request?.method === "confirm") {
-      if (data.toLowerCase() === "y") {
+      if (data.toLowerCase() === "y" || matchesKey(data, "y") || matchesKey(data, "shift+y")) {
         this.run.respondToUi({ confirmed: true });
         this.input.setValue("");
         return;
       }
-      if (data.toLowerCase() === "n") {
+      if (data.toLowerCase() === "n" || matchesKey(data, "n") || matchesKey(data, "shift+n")) {
         this.run.respondToUi({ confirmed: false });
         this.input.setValue("");
         return;
@@ -647,7 +731,13 @@ class SideAgentOverlay implements Focusable {
       const clipped = truncateToWidth(value, innerWidth, innerWidth >= 3 ? "..." : "", true);
       return clipped + " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
     };
-    const phaseColor = this.run.phase === "idle"
+    const request = this.run.pendingUiRequest;
+    const displayPhase = request
+      ? `${request.method === "confirm" ? "approval" : "input"}${this.run.pendingUiRequestCount > 1 ? ` 1/${this.run.pendingUiRequestCount}` : ""}`
+      : this.run.phase;
+    const phaseColor = request
+      ? "warning"
+      : this.run.phase === "idle"
       ? "success"
       : this.run.phase === "failed"
         ? "error"
@@ -657,11 +747,11 @@ class SideAgentOverlay implements Focusable {
     const elapsedStart = this.run.isBusy ? this.run.turnStartedAt : this.run.startedAt;
     const elapsed = Math.max(0, Math.round((Date.now() - elapsedStart) / 1000));
     if (layout.compact) {
-      const status = th.fg(phaseColor as any, `BTW ${this.run.phase} ${elapsed}s`);
+      const status = th.fg(phaseColor as any, `BTW ${displayPhase} ${elapsed}s`);
       const clipped = truncateToWidth(status, panelWidth, "", true);
       return [clipped + " ".repeat(Math.max(0, panelWidth - visibleWidth(clipped)))];
     }
-    const title = ` BTW side agent | ${this.run.phase} | ${elapsed}s `;
+    const title = ` BTW side agent | ${displayPhase} | ${elapsed}s `;
     const titleText = truncateToWidth(title, innerWidth, innerWidth >= 3 ? "..." : "", true);
     const titleRule = "─".repeat(Math.max(0, innerWidth - visibleWidth(titleText)));
 
@@ -674,8 +764,8 @@ class SideAgentOverlay implements Focusable {
     for (const line of visible) result.push(border("│") + pad(line) + border("│"));
     while (result.length < maxContentLines + 1) result.push(border("│") + pad("") + border("│"));
 
-    let inputLabel = this.run.pendingUiRequest ? " Reply: " : " You: ";
-    if (innerWidth < 10) inputLabel = this.run.pendingUiRequest ? "?" : ">";
+    let inputLabel = request ? " Reply: " : " You: ";
+    if (innerWidth < 10) inputLabel = request ? "?" : ">";
     const inputWidth = Math.max(1, innerWidth - visibleWidth(inputLabel));
     const inputLine = this.input.render(inputWidth)[0] ?? "";
     result.push(border("├") + border("─".repeat(innerWidth)) + border("┤"));
@@ -687,9 +777,13 @@ class SideAgentOverlay implements Focusable {
       `out ${formatTokens(this.run.state.outputTokens)}`,
       this.run.state.cacheReadTokens ? `cache ${formatTokens(this.run.state.cacheReadTokens)}` : undefined,
     ].filter(Boolean).join(" | ");
-    const help = this.run.isBusy
-      ? "Enter after completion | Esc abort turn | Ctrl+D close and delete"
-      : "Enter send | Esc/Ctrl+D close and delete | PgUp/PgDn scroll";
+    const help = request
+      ? request.method === "confirm"
+        ? "Y allow | N deny | Esc cancel | Ctrl+D close and delete"
+        : "Enter reply | Esc cancel | Ctrl+D close and delete"
+      : this.run.isBusy
+        ? "Enter after completion | Esc abort turn | Ctrl+D close and delete"
+        : "Enter send | Esc/Ctrl+D close and delete | PgUp/PgDn scroll";
     result.push(border("│") + pad(th.fg("dim", ` ${usage} | ${help}`)) + border("│"));
     result.push(border(`╰${"─".repeat(innerWidth)}╯`));
     return result;
@@ -708,7 +802,12 @@ class SideAgentOverlay implements Focusable {
   }
 }
 
-async function createSideAgentRun(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<SideAgentRun> {
+async function createSideAgentRun(
+  pi: ExtensionAPI,
+  args: string,
+  ctx: ExtensionCommandContext,
+  parentEntries: unknown[],
+): Promise<SideAgentRun> {
   const question = args.trim();
   if (!question) throw new Error("Usage: /btw <task>");
   if (question.length > MAX_QUESTION_CHARS) throw new Error(`/btw task exceeds ${MAX_QUESTION_CHARS} characters`);
@@ -724,7 +823,7 @@ async function createSideAgentRun(pi: ExtensionAPI, args: string, ctx: Extension
     const parentSession = ctx.sessionManager.getSessionFile();
     const snapshot = buildSideSessionSnapshot({
       header: ctx.sessionManager.getHeader(),
-      entries: ctx.sessionManager.getBranch(),
+      entries: parentEntries,
       id,
       timestamp,
       cwd: ctx.cwd,
@@ -754,6 +853,38 @@ async function createSideAgentRun(pi: ExtensionAPI, args: string, ctx: Extension
 export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
   let active: SideAgentRun | undefined;
   let activeLease: SideAgentLease | undefined;
+  let parentRunActive = false;
+  let lastSettledLeafId: string | undefined;
+  let transitioning = false;
+  let disposed = false;
+
+  pi.on("session_start", async (_event, ctx) => {
+    parentRunActive = false;
+    lastSettledLeafId = ctx.sessionManager.getLeafId() ?? undefined;
+  });
+
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (!parentRunActive) {
+      // Pi emits this before the submitted user message is persisted.
+      lastSettledLeafId = ctx.sessionManager.getLeafId() ?? undefined;
+    }
+  });
+
+  pi.on("agent_start", async (_event, ctx) => {
+    if (!parentRunActive && !lastSettledLeafId) {
+      lastSettledLeafId = sideAgentLeafBeforeRun(ctx.sessionManager.getBranch());
+    }
+    parentRunActive = true;
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (!ctx.isIdle()) {
+      parentRunActive = true;
+      return;
+    }
+    lastSettledLeafId = ctx.sessionManager.getLeafId() ?? undefined;
+    parentRunActive = false;
+  });
 
   pi.registerCommand("btw", {
     description: "Open a private multi-turn agent with a snapshot of the current context",
@@ -762,47 +893,86 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
         ctx.ui.notify("/btw requires the interactive TUI", "error");
         return;
       }
-      if (active) {
+      if (active || transitioning || disposed) {
         ctx.ui.notify("A /btw side agent is already open. Close it before starting another.", "warning");
         return;
       }
 
+      transitioning = true;
+      let run: SideAgentRun | undefined;
+      let lease: SideAgentLease | undefined;
       try {
-        activeLease = await acquireSideAgentLease() as SideAgentLease;
-        active = await createSideAgentRun(pi, String(args ?? ""), ctx);
-        const run = active;
-        ctx.ui.setStatus("hobot-btw", `btw: open ${activeLease.activeCount}/${activeLease.limit}`);
+        const parentEntries = selectSideAgentParentEntries({
+          currentEntries: ctx.sessionManager.getBranch(),
+          settledEntries: lastSettledLeafId ? ctx.sessionManager.getBranch(lastSettledLeafId) : [],
+          parentRunActive,
+          runtimeIdle: ctx.isIdle(),
+        });
+        lease = await acquireSideAgentLease() as SideAgentLease;
+        activeLease = lease;
+        if (disposed) return;
+        run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries);
+        active = run;
+        if (disposed) return;
+        ctx.ui.setStatus("hobot-btw", `btw: open ${lease.activeCount}/${lease.limit}`);
         run.start();
         await ctx.ui.custom<"close">(
           (tui, theme, _keybindings, done) => new SideAgentOverlay(tui, theme, run, done),
           {
             overlay: true,
             overlayOptions: { anchor: "right-center", width: "50%", maxHeight: "100%", margin: 0 },
+            onHandle: (handle) => handle.focus(),
           },
         );
       } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-      } finally {
-        const run = active;
-        const lease = activeLease;
-        active = undefined;
-        activeLease = undefined;
-        ctx.ui.setStatus("hobot-btw", undefined);
-        if (run) {
-          await run.cleanup();
-          ctx.ui.notify("Side-agent conversation deleted. Workspace and device changes were retained.", "info");
+        if (!disposed) {
+          try {
+            ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+          } catch {
+            // The TUI may already be tearing down; resource cleanup still runs below.
+          }
         }
-        await lease?.release();
+      } finally {
+        if (active === run) active = undefined;
+        if (activeLease === lease) activeLease = undefined;
+        const [cleanupResult] = await Promise.allSettled([run?.cleanup() ?? Promise.resolve()]);
+        const [releaseResult] = await Promise.allSettled([lease?.release() ?? Promise.resolve()]);
+        transitioning = false;
+
+        if (!disposed) {
+          const notify = (message: string, level: "info" | "warning") => {
+            try {
+              ctx.ui.notify(message, level);
+            } catch {
+              // UI reporting must not interfere with resource lifecycle.
+            }
+          };
+          try {
+            ctx.ui.setStatus("hobot-btw", undefined);
+          } catch {
+            // The session may have closed while cleanup was in progress.
+          }
+          if (run && cleanupResult.status === "fulfilled") {
+            notify("Side-agent conversation deleted. Workspace and device changes were retained.", "info");
+          }
+          if (cleanupResult.status === "rejected") {
+            notify(`Side-agent cleanup failed: ${String(cleanupResult.reason)}`, "warning");
+          }
+          if (releaseResult.status === "rejected") {
+            notify(`Side-agent capacity release failed: ${String(releaseResult.reason)}`, "warning");
+          }
+        }
       }
     },
   });
 
   return async () => {
+    disposed = true;
     const run = active;
     const lease = activeLease;
     active = undefined;
     activeLease = undefined;
-    if (run) await run.cleanup();
-    await lease?.release();
+    await Promise.allSettled([run?.cleanup() ?? Promise.resolve()]);
+    await Promise.allSettled([lease?.release() ?? Promise.resolve()]);
   };
 }

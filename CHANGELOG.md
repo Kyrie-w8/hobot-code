@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.4
+
+- Fork `/btw` from the parent's latest fully settled turn so an in-flight main task cannot become the side task.
+- Use `agent_settled` as the multi-turn RPC barrier and correlate prompt and abort failures by request ID.
+- Queue concurrent side-agent dialogs, support enhanced-terminal Y/N keys, focus the pane explicitly, and bound approvals to two minutes.
+- Bound child shutdown, isolate render failures, and release side-agent capacity only after cleanup finishes.
+
 ## 0.12.3
 
 - Restore RDK expert-prompt rendering after the Provider split by using the shared well-formed Unicode sanitizer.
