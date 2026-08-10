@@ -204,6 +204,10 @@ else
   done
 fi
 
+# Pi resolves startup notices from the runtime directory. Keep that file in the
+# Hobot Code version space so upstream Pi releases are never treated as unread.
+install -m 0644 "$stage_dir/CHANGELOG.md" "$stage_dir/runtime/CHANGELOG.md"
+
 install -m 0644 "$root_dir/pi-runtime/pi.lock" "$stage_dir/PI_RUNTIME"
 install -m 0644 "$root_dir/pi-runtime/tools.lock" "$stage_dir/TOOLS_RUNTIME"
 for config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do

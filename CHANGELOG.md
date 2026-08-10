@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.5
+
+- Replace Pi's bundled release history with the Hobot Code changelog inside release packages, preventing unrelated upstream entries and dates from flooding the startup screen.
+- Collapse update notices by default on new installations while preserving `/changelog` for intentional review.
+- Validate that the user-facing and runtime changelogs are identical so release packaging cannot silently reintroduce upstream history.
+
 ## 0.12.4
 
 - Fork `/btw` from the parent's latest fully settled turn so an in-flight main task cannot become the side task.

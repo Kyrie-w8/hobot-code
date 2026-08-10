@@ -4,6 +4,7 @@
   "defaultThinkingLevel": "max",
   "hideThinkingBlock": false,
   "quietStartup": false,
+  "collapseChangelog": true,
   "defaultProjectTrust": "ask",
   "enableInstallTelemetry": false,
   "tuiMode": "regular",

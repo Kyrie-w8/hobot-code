@@ -80,9 +80,14 @@ test("release metadata is derived from the repository version and pinned inputs"
   await mkdir(join(stage, "runtime"));
   await writeFile(join(stage, "VERSION"), `${release.version}\n`);
   await writeFile(join(stage, "runtime/package.json"), `${JSON.stringify({ version: release.version })}\n`);
+  await copyFile(join(repository, "CHANGELOG.md"), join(stage, "CHANGELOG.md"));
+  await copyFile(join(repository, "CHANGELOG.md"), join(stage, "runtime/CHANGELOG.md"));
   await copyFile(join(repository, "pi-runtime/pi.lock"), join(stage, "PI_RUNTIME"));
   await copyFile(join(repository, "pi-runtime/tools.lock"), join(stage, "TOOLS_RUNTIME"));
   await validatePackageMetadata(stage);
+  await writeFile(join(stage, "runtime/CHANGELOG.md"), "# Changelog\n\n## 99.0.0\n\n- Upstream entry.\n");
+  await assert.rejects(() => validatePackageMetadata(stage), /must match the Hobot Code CHANGELOG/);
+  await copyFile(join(repository, "CHANGELOG.md"), join(stage, "runtime/CHANGELOG.md"));
   info.tools.fd = "0.0.0";
   await writeFile(join(stage, "BUILD_INFO.json"), `${JSON.stringify(info)}\n`);
   await assert.rejects(() => validatePackageMetadata(stage), /tool provenance does not match/);
@@ -324,6 +329,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(packager, /CONTRIBUTING\.md/);
   assert.match(packager, /SECURITY\.md/);
   assert.match(packager, /LICENSE/);
+  assert.match(packager, /stage_dir\/runtime\/CHANGELOG\.md/);
   assert.match(installer, /MANIFEST\.sha256/);
   assert.match(installer, /must not contain symbolic links/);
   assert.match(installer, /Install home must not traverse symbolic links/);

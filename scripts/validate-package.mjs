@@ -42,6 +42,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "docs/prime-agent-crush-review.md",
   "docs/user-directory-layout.md",
   "runtime/README.md",
+  "runtime/CHANGELOG.md",
   "runtime/docs/index.md",
   "runtime/hobot",
   "runtime/package.json",
@@ -224,9 +225,16 @@ export async function validateRequiredPackageLayout(rootDirectory) {
 
 export async function validatePackageMetadata(rootDirectory) {
   const root = resolve(rootDirectory);
-  const version = (await readFile(resolve(root, "VERSION"), "utf8")).trim();
-  const buildInfo = JSON.parse(await readFile(resolve(root, "BUILD_INFO.json"), "utf8"));
-  const runtimePackage = JSON.parse(await readFile(resolve(root, "runtime/package.json"), "utf8"));
+  const [versionContent, buildInfoContent, runtimePackageContent, changelog, runtimeChangelog] = await Promise.all([
+    readFile(resolve(root, "VERSION"), "utf8"),
+    readFile(resolve(root, "BUILD_INFO.json"), "utf8"),
+    readFile(resolve(root, "runtime/package.json"), "utf8"),
+    readFile(resolve(root, "CHANGELOG.md"), "utf8"),
+    readFile(resolve(root, "runtime/CHANGELOG.md"), "utf8"),
+  ]);
+  const version = versionContent.trim();
+  const buildInfo = JSON.parse(buildInfoContent);
+  const runtimePackage = JSON.parse(runtimePackageContent);
   const pi = parseDataLock(await readFile(resolve(root, "PI_RUNTIME"), "utf8"), "PI_RUNTIME", PI_LOCK_FIELDS);
   const tools = parseDataLock(
     await readFile(resolve(root, "TOOLS_RUNTIME"), "utf8"),
@@ -244,6 +252,13 @@ export async function validatePackageMetadata(rootDirectory) {
   }
   if (buildInfo.version !== version || runtimePackage.version !== version) {
     throw new Error(`release version mismatch: VERSION=${version}, build=${buildInfo.version}, runtime=${runtimePackage.version}`);
+  }
+  if (runtimeChangelog !== changelog) {
+    throw new Error("runtime/CHANGELOG.md must match the Hobot Code CHANGELOG.md");
+  }
+  const firstRelease = /^## ([^\s]+)$/mu.exec(runtimeChangelog)?.[1];
+  if (firstRelease !== version) {
+    throw new Error(`runtime changelog first release ${firstRelease ?? "missing"} does not match ${version}`);
   }
   if (
     buildInfo.pi?.version !== pi.PI_VERSION ||
