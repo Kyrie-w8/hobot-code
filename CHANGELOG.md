@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.8
+
+- Treat Shell redirects to `/dev/null` as routine output suppression instead of protected-device writes.
+- Continue requiring approval for real device nodes, protected system paths, and lookalike paths such as `/dev/null/child`.
+
 ## 0.12.7
 
 - Repair interrupted tool-call history at request time so sessions stopped during approval or execution can resume without invalid gateway payloads.

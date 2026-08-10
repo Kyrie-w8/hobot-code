@@ -128,6 +128,14 @@ test("resolved path checks reject symlink escapes and destructive commands", asy
     assert.ok(destructiveShellReasons("busybox rm -rf ./cache").length > 0);
     assert.ok(destructiveShellReasons("find . -type f -delete").length > 0);
     assert.ok(destructiveShellReasons("tee /etc/systemd/system/demo.service").length > 0);
+    const readOnlyStatus = 'cd /root/ssd/yolo_bench && tail -5 progress.log 2>/dev/null; echo ===; wc -l results.csv 2>/dev/null; ps aux | grep -E "run_bench|hrt_model" | grep -v grep | head -3';
+    assert.deepEqual(destructiveShellReasons(readOnlyStatus), []);
+    assert.deepEqual(destructiveShellReasons("tail progress.log >/dev/null"), []);
+    assert.deepEqual(destructiveShellReasons("tail progress.log 2>>'/dev/null'"), []);
+    assert.ok(destructiveShellReasons("tail progress.log | tee /dev/null /etc/output.log").length > 0);
+    assert.ok(destructiveShellReasons("echo x >/dev/sda").length > 0);
+    assert.ok(destructiveShellReasons("echo x >/dev/null/child").length > 0);
+    assert.ok(destructiveShellReasons("echo x >/dev/null-device").length > 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
