@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0
+
+- Expand the versioned RDK knowledge pack from 7 to 27 professional topics spanning X5, S100, S600, official resource routing, RDK Studio/XBurn, X5 SDK, S600 application cases, system lifecycle, AI toolchains, BPU runtime, Model Zoo, LLM/VLM/VLA, camera and multimedia, TROS, peripheral I/O, MCU/IPC/CAN, VDSP/GPU, drivers, storage, networking, bring-up, safety, and performance engineering.
+- Cite official D-Robotics documentation or D-Robotics GitHub repositories inside every knowledge document, with explicit review dates and board/RDK OS applicability.
+- Reject unlisted knowledge files, missing or non-official sources, uncited manifest links, stale review dates, and credential-like content during release validation; verify the complete manifest-driven knowledge set inside the ARM64 package.
+- Show more source provenance in `/knowledge` results and document the knowledge coverage and governance model.
+
 ## 0.12.9
 
 - Define the user-facing Agent identity as Hobot Code; underlying models and runtimes remain implementation details.

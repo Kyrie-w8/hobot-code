@@ -1,5 +1,7 @@
 # 板端操作安全边界
 
+> 资料核对日期：2026-08-10。本文是 Agent 的操作约束，不替代产品安全手册或系统烧录说明。
+
 Hobot Code 是控制面 Agent，不是硬实时控制器。模型输出不得直接进入电机、急停、CAN、GPIO、
 PWM 或安全闭环；实时控制必须由确定性程序、MCU 和独立安全机制承担。
 
@@ -19,3 +21,9 @@ Shell、文件修改和插件调用逐次确认，并禁止直接写 `/boot`、`
 
 任何升级先检查活动进程、剩余空间和 inode，分阶段校验新运行时后再原子切换；失败必须自动
 恢复旧命令和运行时。仅有“备份目录存在”不等于可回滚，仍需验证备份完整性和旧版本自检。
+
+## 官方来源
+
+- [RDK X5 硬件介绍与供电要求](https://developer.d-robotics.cc/rdk_x_doc/Quick_start/hardware_introduction/rdk_x5)
+- [RDK S100 硬件 FAQ](https://developer.d-robotics.cc/rdk_s_doc/en/Quick_start/hardware_introduction/rdk_s100/FAQ)
+- [RDK S600 系统烧录与分区备份](https://developer.d-robotics.cc/rdk_s_doc/en/Quick_start/install_os/rdk_s600/burn)

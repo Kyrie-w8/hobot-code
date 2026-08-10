@@ -408,7 +408,7 @@ async function searchKnowledge(options: KnowledgeSearchOptions): Promise<JsonRec
   const terms = queryTerms(options.query);
   if (terms.length === 0) throw new Error("Knowledge query must not be empty");
   const requestedTopic = options.topic?.toLowerCase().trim();
-  const limit = Math.max(1, Math.min(options.limit ?? 4, 8));
+  const limit = Math.max(1, Math.min(options.limit ?? 4, 12));
   const results: Array<JsonRecord & { score: number }> = [];
 
   for (const document of manifest.documents) {
@@ -474,7 +474,7 @@ const knowledgeSearchSchema = Type.Object({
     Type.String({ description: "Optional exact topic filter such as bpu, multimedia, tros, diagnostics, or safety" }),
   ),
   limit: Type.Optional(
-    Type.Integer({ minimum: 1, maximum: 8, description: "Maximum number of knowledge documents" }),
+    Type.Integer({ minimum: 1, maximum: 12, description: "Maximum number of knowledge documents" }),
   ),
 });
 
@@ -2161,7 +2161,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         return [
           `${index + 1}. ${String(match.title)}${match.versionMatch ? "" : " [nearby version]"}`,
           String(match.snippet ?? ""),
-          ...sources.slice(0, 2).map((source) => `Source: ${source.title} - ${source.url}`),
+          ...sources.slice(0, 3).map((source) => `Source: ${source.title} - ${source.url}`),
         ].join("\n");
       });
       ctx.ui.notify([

@@ -1,5 +1,7 @@
 # RDK 系统识别与诊断
 
+> 资料核对日期：2026-08-10。诊断结论必须同时标明“官方资料基线”和“当前实机证据”。
+
 先识别板型和系统软件，再选择命令、示例和工具链。`/sys/firmware/devicetree/base/model`
 是板型的实时证据，`/etc/version` 是 RDK OS 的首选版本来源。不要只依赖 Ubuntu 版本：
 X5 与 S100 都可能显示 Ubuntu 22.04，但其 BPU、驱动和多媒体栈并不相同。
@@ -29,3 +31,9 @@ X5 与 S100 都可能显示 Ubuntu 22.04，但其 BPU、驱动和多媒体栈并
 温度诊断记录所有 thermal zone 的类型和值，并与 CPU/BPU 负载、频率、供电告警对齐。
 服务故障按单元状态、本次启动日志、依赖设备/文件、最小前台启动的顺序定位；不要先反复重启
 或删除状态目录，以免覆盖首次故障证据。
+
+## 官方来源
+
+- [S 系列 `rdkos_info` 命令手册](https://developer.d-robotics.cc/rdk_s_doc/en/Appendix/rdk-command-manual/cmd_rdkos_info)
+- [RDK X 系列手册](https://developer.d-robotics.cc/rdk_x_doc/RDK)
+- [RDK S100/S600 Linux 开发指南](https://developer.d-robotics.cc/rdk_s_doc/en/linux_development)

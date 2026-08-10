@@ -51,13 +51,6 @@ export const REQUIRED_PACKAGE_PATHS = [
   "skills/system-info/SKILL.md",
   "skills/workspace-coding/SKILL.md",
   "knowledge/manifest.json",
-  "knowledge/boards/s100.md",
-  "knowledge/boards/s600.md",
-  "knowledge/boards/x5.md",
-  "knowledge/common/bpu-model-deployment.md",
-  "knowledge/common/operational-safety.md",
-  "knowledge/common/system-diagnostics.md",
-  "knowledge/common/tros-multimedia.md",
   "prompts/rdk-expert.md",
   "config/settings.json",
   "config/models.json",
@@ -99,6 +92,41 @@ async function walkFiles(directory) {
     else throw new Error(`validation tree contains an unsupported filesystem entry: ${path}`);
   }
   return files;
+}
+
+export async function validatePackagedKnowledgeLayout(rootDirectory) {
+  const root = resolve(rootDirectory);
+  const knowledgeRoot = resolve(root, "knowledge");
+  const manifest = JSON.parse(await readFile(resolve(knowledgeRoot, "manifest.json"), "utf8"));
+  if (!Array.isArray(manifest.documents) || manifest.documents.length === 0) {
+    throw new Error("packaged knowledge manifest has no documents");
+  }
+
+  const expected = new Set();
+  for (const document of manifest.documents) {
+    if (!document.file || expected.has(document.file)) {
+      throw new Error(`packaged knowledge manifest has duplicate or empty file: ${document.file}`);
+    }
+    expected.add(document.file);
+    const path = resolve(knowledgeRoot, document.file);
+    if (!path.startsWith(`${knowledgeRoot}${sep}`)) {
+      throw new Error(`packaged knowledge path escapes root: ${document.file}`);
+    }
+    let stats;
+    try {
+      stats = await lstat(path);
+    } catch (error) {
+      if (error?.code === "ENOENT") throw new Error(`release package is missing knowledge/${document.file}`);
+      throw error;
+    }
+    if (!stats.isFile()) throw new Error(`packaged knowledge entry is not a regular file: ${document.file}`);
+  }
+
+  const actual = (await walkFiles(knowledgeRoot))
+    .filter((path) => extname(path) === ".md")
+    .map((path) => relative(knowledgeRoot, path).split(sep).join("/"));
+  const unlisted = actual.filter((file) => !expected.has(file));
+  if (unlisted.length > 0) throw new Error(`packaged knowledge is missing manifest entries:\n${unlisted.join("\n")}`);
 }
 
 async function resolveImport(importer, specifier) {
@@ -221,6 +249,7 @@ export async function validateRequiredPackageLayout(rootDirectory) {
     const stats = await lstat(resolve(root, name));
     if ((stats.mode & 0o111) === 0) throw new Error(`release package entry is not executable: ${name}`);
   }
+  await validatePackagedKnowledgeLayout(root);
 }
 
 export async function validatePackageMetadata(rootDirectory) {

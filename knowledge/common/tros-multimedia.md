@@ -1,5 +1,7 @@
 # TogetheROS.Bot 与多媒体开发路由
 
+> 资料核对日期：2026-08-10。TROS、ROS 发行版与 RDK OS 强绑定，先识别实机再选择文档线。
+
 TogetheROS.Bot（TROS）用于在 RDK 上搭建机器人原型，但 ROS 发行版、包名和底层媒体
 接口随 RDK 系列与系统版本变化。先确认 `/etc/version`、ROS 环境和已安装软件包，再
 选择 X 系列或 S 系列文档；不要把 X5 示例中的库名直接搬到 S100/S600。
@@ -26,3 +28,11 @@ Camera/VIN/ISP 问题和 ROS 配置问题。
 
 持续验收至少统计时间戳单调性、丢帧、码率、延迟 P50/P95、CPU、内存和温度。浏览器偶尔
 显示一帧只说明链路曾经打通，不代表生产稳定。
+
+## 官方来源
+
+- [TogetheROS.Bot 用户手册](https://developer.d-robotics.cc/tros_doc/tros)
+- [TROS 版本说明](https://developer.d-robotics.cc/tros_doc/en/quick_start/changelog)
+- [RDK S TROS/ROS FAQ](https://developer.d-robotics.cc/rdk_s_doc/en/FAQ/tros_ros)
+- [RDK S 多媒体样例总览](https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/multimedia_development/multimedia_application/overview)
+- [RDK S Camsys 子系统](https://developer.d-robotics.cc/rdk_s_doc/Advanced_development/multimedia_development/multimedia_development/camsys)

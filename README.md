@@ -10,7 +10,7 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 
 - **原生终端体验**：流式 thinking、工具调用、会话恢复、分支、压缩和快捷键。
 - **RDK 实机上下文**：按需读取型号、RDK OS、温度、内存、BPU 设备和工具状态。
-- **版本化板卡知识**：按 X5 3.x、S100 4.x、S600 5.x 路由本地资料，并保留官方来源。
+- **版本化板卡知识**：按 X5 3.x、S100 4.x、S600 5.x 路由 27 个专业主题，并在每篇资料中保留官方来源与核对日期。
 - **开放模型接入**：内置 D-Robotics Kimi 网关适配，也兼容 Pi 的 Provider、`models.json` 和 `/login`。
 - **可组合扩展**：继续使用 Pi packages、extensions、MCP、Skills、Prompt templates 和 themes。
 - **工程保障**：工具权限、质量门、Hook、资源受限 LSP、持久记忆和持久目标。
@@ -25,6 +25,20 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 | RDK S600 | RDK OS 5.x | Linux ARM64 |
 
 启动时会根据 device tree 与 `/etc/version` 选择资料线路。文档描述能力边界，`system_snapshot` 提供当前实机证据；两者不一致时，以实机状态为准。
+
+## RDK 专业知识
+
+知识库不是塞进系统 Prompt 的静态长文本，而是由 `rdk_docs_search` 按板型、RDK OS 和问题检索。当前覆盖：
+
+| 领域 | 内容 |
+|---|---|
+| 板卡与系统 | X5、S100、S600 硬件边界，镜像、烧录、升级、恢复、系统构建与 bring-up |
+| AI 部署 | OpenExplorer/OE、PTQ/QAT、ONNX、BPU Runtime、HBM/HBMEM、Model Zoo、LLM/VLM/VLA 与验收 |
+| 视觉与多媒体 | Camera、Sensor、MIPI、VIN/ISP/PYM/GDC、编解码、显示和端到端 pipeline |
+| 机器人与实时域 | TROS/ROS 2、Humble/Jazzy、MCU、IPC/RPMSG、CAN 与安全控制边界 |
+| 系统工程 | 交叉编译、40-pin、GPIO/I2C/SPI/UART/PWM、VDSP/GPU、驱动、存储、网络和性能调试 |
+
+每篇资料在正文末尾就地列出 D-Robotics 官方文档或官方 GitHub 来源。发布校验会拒绝未登记文档、缺失核对日期、来源不足、正文未引用来源、非官方域名和疑似凭据；资料中的版本说明仍不能替代当前板端的实时检查。
 
 基础运行时自包含，使用内置能力时，板端无需另外安装 Node.js、Bun、Go、Python 或容器。第三方 Pi package 可能需要系统中的 `git`、`npm` 或自定义 `npmCommand`；用户配置的 Hook 与 LSP 也需要对应外部命令。
 
@@ -102,7 +116,7 @@ hobot
 | `/new`、`/resume`、`/tree`、`/fork` | 管理会话与分支 |
 | `/compact` | 手动压缩上下文 |
 | `/rdk`、`/doctor` | 查看板卡摘要或完整诊断 |
-| `/knowledge <问题>` | 检索当前板卡线路的知识 |
+| `/knowledge <问题>` | 检索当前板卡线路的专业知识与官方来源 |
 | `/system-prompt`、`/system-prompt full` | 查看系统 Prompt 分层或展开完整内容 |
 | `/permissions` | 查看或修改工具权限 |
 | `/init`、`/gate` | 初始化并运行项目质量门 |

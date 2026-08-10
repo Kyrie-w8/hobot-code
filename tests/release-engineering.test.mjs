@@ -15,6 +15,7 @@ import {
   REQUIRED_PACKAGE_PATHS,
   validateRelativeImports,
   validatePackageMetadata,
+  validatePackagedKnowledgeLayout,
   validateRequiredPackageLayout,
   validateSourceSyntax,
   verifyManifest,
@@ -152,8 +153,19 @@ test("release layout covers installer inputs and linked documentation", async (t
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, "fixture\n");
   }
+  await mkdir(join(root, "knowledge/common"), { recursive: true });
+  await writeFile(join(root, "knowledge/common/fixture.md"), "# Fixture\n\nPackaged knowledge fixture.\n");
+  await writeFile(join(root, "knowledge/manifest.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    knowledgeVersion: "2026.08.3",
+    updatedAt: "2026-08-10",
+    documents: [{ id: "fixture", file: "common/fixture.md" }],
+  })}\n`);
   for (const name of REQUIRED_EXECUTABLE_PATHS) await chmod(join(root, name), 0o755);
   await validateRequiredPackageLayout(root);
+  await rm(join(root, "knowledge/common/fixture.md"));
+  await assert.rejects(() => validatePackagedKnowledgeLayout(root), /missing knowledge\/common\/fixture\.md/);
+  await writeFile(join(root, "knowledge/common/fixture.md"), "# Fixture\n\nPackaged knowledge fixture.\n");
   await rm(join(root, "config/memory.json"));
   await assert.rejects(() => validateRequiredPackageLayout(root), /missing config\/memory\.json/);
   await writeFile(join(root, "config/memory.json"), "fixture\n");

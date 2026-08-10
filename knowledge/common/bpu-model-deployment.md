@@ -1,5 +1,7 @@
 # BPU 模型转换、部署与验证
 
+> 资料核对日期：2026-08-10。模型、工具链和 Runtime 的兼容性以目标芯片与当前官方版本说明为准。
+
 RDK 的 BPU 模型不是跨芯片通用产物。开始转换前同时锁定板卡、BPU 架构、RDK OS、
 板端推理库、转换工具链或 Docker 镜像、原始模型格式以及输入输出约定。X5 与 S100/S600
 不能因为都能运行 `hrt_model_exec` 就复用同一个转换结果。
@@ -33,3 +35,11 @@ X5 使用独立的 X 系列目标和运行时，RDK OS 3.5.0 起 Python 示例�
 定位精度问题按导出、预处理、量化、Runtime、后处理五层比较固定输入。性能报告同时给出
 warmup、样本数、BPU 时间、预处理、后处理、端到端 P50/P95、CPU/内存、核心调度、温度和
 降频状态；单个 FPS 数字不能证明完整 pipeline 达标。
+
+## 官方来源
+
+- [Model Zoo 用户手册](https://developer.d-robotics.cc/model_zoo_doc/model_zoo_intro)
+- [RDK Model Zoo（X 系列）](https://github.com/D-Robotics/rdk_model_zoo)
+- [RDK Model Zoo S（以仓库当前 README 的板卡范围为准）](https://github.com/D-Robotics/rdk_model_zoo_s)
+- [RDK S AI 模型与工具链 FAQ](https://developer.d-robotics.cc/rdk_s_doc/en/FAQ/toolchain)
+- [RDK S 算法工具链](https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/toolchain_development/overview)

@@ -119,7 +119,7 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md \
 hobot
 ```
 
-生产环境应使用安装包内的版本化知识目录。知识更新需要同步修改 `knowledge/manifest.json` 的 `knowledgeVersion` 和 `updatedAt`，再运行 `make check`。
+生产环境应使用安装包内的版本化知识目录。每篇知识文档必须在正文中写明与 manifest 一致的核对日期，并在“官方来源”章节引用至少两个 D-Robotics 官方文档或官方 GitHub 链接。知识更新需要同步修改 `knowledge/manifest.json` 的 `knowledgeVersion` 和 `updatedAt`，再运行 `make check`；校验器也会拒绝未登记文档、遗漏来源和疑似凭据。
 
 ## 构建覆盖
 
