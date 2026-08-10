@@ -1,24 +1,7 @@
-import {
-  type Api,
-  type AssistantMessage,
-  type AssistantMessageEventStream,
-  type Context,
-  type ImageContent,
-  type Message,
-  type Model,
-  type SimpleStreamOptions,
-  type StopReason,
-  type TextContent,
-  type ThinkingContent,
-  type Tool,
-  type ToolCall,
-  type ToolResultMessage,
-  Type,
-  calculateCost,
-  createAssistantMessageEventStream,
-} from "@earendil-works/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
+import { constants } from "node:fs";
 import { access, readFile, readdir } from "node:fs/promises";
 import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
 import { resolve } from "node:path";
@@ -42,12 +25,14 @@ import {
   loadQualityConfig,
   parsePolicy,
   parseQualityConfig,
+  reconcileToolVisibility,
   redactSensitiveText,
   resolveToolAction,
   setPolicyRule,
   writeNotificationConfig,
   writePolicy,
 } from "./control-plane.mjs";
+import { DEFAULT_DROBOTICS_BASE_URL, streamDrobotics } from "./drobotics-provider.ts";
 import { GoalStore, type GoalRecord } from "./goal-store.ts";
 import { runHooks, type HookConfig } from "./hook-runner.ts";
 import { LspManager, type LspConfig } from "./lsp-manager.ts";
@@ -60,15 +45,11 @@ import {
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 import { registerSideAgent } from "./side-agent.ts";
-import { iterateAnthropicSse, readBoundedBody } from "./anthropic-sse.mjs";
 import { destructiveShellReasons, inspectResolvedPath } from "./runtime-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_BASE_URL = "https://ai-api.d-robotics.cc";
 const DEFAULT_MODEL = "kimi-k3";
-const HOBOT_CODE_VERSION = process.env.HOBOT_CODE_VERSION || "development";
-const DEFAULT_EXPERT_PROMPT_PATH = "/usr/local/lib/hobot-code/prompts/rdk-expert.md";
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 
 type JsonRecord = Record<string, unknown>;
@@ -193,10 +174,6 @@ interface PromptSnapshot {
 
 type QualityGateStatus = "disabled" | "missing" | "running" | "passed" | "failed" | "stale";
 
-function sanitizeText(value: string): string {
-  return value.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
-}
-
 async function readText(paths: string[]): Promise<string | undefined> {
   for (const path of paths) {
     try {
@@ -246,7 +223,7 @@ async function listMatching(directory: string, pattern: RegExp): Promise<string[
 async function commandExists(paths: string[]): Promise<boolean> {
   for (const path of paths) {
     try {
-      await access(path);
+      await access(path, constants.X_OK);
       return true;
     } catch {
       // Keep looking.
@@ -367,23 +344,18 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 function knowledgeRoot(): string {
-  return resolve(
-    process.env.HOBOT_CODE_RDK_KNOWLEDGE_DIR
-      || "/usr/local/lib/hobot-code/knowledge",
-  );
+  return resolveUserPaths().rdkKnowledgeDir;
 }
 
 function expertPromptPath(): string {
-  return resolve(
-    process.env.HOBOT_CODE_RDK_EXPERT_PROMPT
-      || DEFAULT_EXPERT_PROMPT_PATH,
-  );
+  return resolveUserPaths().rdkExpertPrompt;
 }
 
 async function renderExpertPrompt(snapshot: BoardSnapshot): Promise<string> {
+  const promptPath = expertPromptPath();
   let prompt: string;
   try {
-    prompt = await readFile(expertPromptPath(), "utf8");
+    prompt = await readFile(promptPath, "utf8");
   } catch {
     prompt = `${EXPERT_PROMPT_MARKER}\n\nYou are a D-Robotics RDK embedded AI expert. Use rdk_docs_search for versioned platform knowledge and system_snapshot for live evidence. Do not make specialized claims while the complete expert prompt file is unavailable.`;
   }
@@ -483,452 +455,6 @@ async function searchKnowledge(options: KnowledgeSearchOptions): Promise<JsonRec
   };
 }
 
-function convertContentBlocks(content: Array<TextContent | ImageContent>): unknown {
-  const blocks = content.map((block) => {
-    if (block.type === "text") return { type: "text", text: sanitizeText(block.text) };
-    return {
-      type: "image",
-      source: { type: "base64", media_type: block.mimeType, data: block.data },
-    };
-  });
-  return blocks.length === 1 && blocks[0]?.type === "text" ? blocks[0].text : blocks;
-}
-
-function convertMessages(messages: Message[]): JsonRecord[] {
-  const converted: JsonRecord[] = [];
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (message.role === "user") {
-      const content =
-        typeof message.content === "string"
-          ? sanitizeText(message.content)
-          : convertContentBlocks(message.content as Array<TextContent | ImageContent>);
-      converted.push({ role: "user", content });
-      continue;
-    }
-
-    if (message.role === "assistant") {
-      const content: JsonRecord[] = [];
-      for (const block of message.content) {
-        if (block.type === "text" && block.text) {
-          content.push({ type: "text", text: sanitizeText(block.text) });
-        } else if (block.type === "thinking" && block.thinking) {
-          content.push({
-            type: "thinking",
-            thinking: sanitizeText(block.thinking),
-            signature: (block as ThinkingContent).thinkingSignature ?? "",
-          });
-        } else if (block.type === "toolCall") {
-          content.push({ type: "tool_use", id: block.id, name: block.name, input: block.arguments });
-        }
-      }
-      if (content.length > 0) converted.push({ role: "assistant", content });
-      continue;
-    }
-
-    if (message.role === "toolResult") {
-      const results: JsonRecord[] = [];
-      let current = message as ToolResultMessage;
-      while (true) {
-        results.push({
-          type: "tool_result",
-          tool_use_id: current.toolCallId,
-          content: convertContentBlocks(current.content),
-          is_error: current.isError,
-        });
-        const next = messages[index + 1];
-        if (!next || next.role !== "toolResult") break;
-        index += 1;
-        current = next as ToolResultMessage;
-      }
-      converted.push({ role: "user", content: results });
-    }
-  }
-
-  return converted;
-}
-
-function convertTools(tools: Tool[] | undefined): JsonRecord[] | undefined {
-  if (!tools?.length) return undefined;
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.parameters,
-  }));
-}
-
-function mapStopReason(reason: string | undefined): StopReason {
-  switch (reason) {
-    case "end_turn":
-    case "stop_sequence":
-      return "stop";
-    case "max_tokens":
-      return "length";
-    case "tool_use":
-      return "toolUse";
-    case "pause_turn":
-      return "deferred";
-    case "refusal":
-      return "error";
-    default:
-      return "error";
-  }
-}
-
-function thinkingBudget(level: SimpleStreamOptions["reasoning"], maxTokens: number): number | undefined {
-  if (!level || level === "off") return undefined;
-  if (maxTokens < 2048) return undefined;
-  const requested: Record<string, number> = {
-    minimal: 1024,
-    low: 2048,
-    medium: 4096,
-    high: 6144,
-    xhigh: 6144,
-    max: 6144,
-  };
-  return Math.max(1024, Math.min(requested[level] ?? 4096, maxTokens - 1024, Math.floor(maxTokens / 2)));
-}
-
-interface GatewayUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-}
-
-interface GatewayResponse {
-  id?: string;
-  content?: Array<{
-    type: "thinking" | "reasoning" | "redacted_thinking" | "text" | "tool_use";
-    thinking?: string;
-    text?: string;
-    signature?: string;
-    data?: string;
-    id?: string;
-    name?: string;
-    input?: JsonRecord;
-  }>;
-  stop_reason?: string;
-  usage?: GatewayUsage;
-}
-
-type StreamingGatewayBlock = (ThinkingContent | TextContent | ToolCall) & {
-  providerIndex: number;
-  partialJson?: string;
-};
-
-function updateGatewayUsage(output: AssistantMessage, usage: GatewayUsage | undefined): void {
-  if (!usage) return;
-  if (usage.input_tokens !== undefined) output.usage.input = usage.input_tokens;
-  if (usage.output_tokens !== undefined) output.usage.output = usage.output_tokens;
-  if (usage.cache_read_input_tokens !== undefined) output.usage.cacheRead = usage.cache_read_input_tokens;
-  if (usage.cache_creation_input_tokens !== undefined) output.usage.cacheWrite = usage.cache_creation_input_tokens;
-  output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-}
-
-function consumeBufferedGatewayResponse(
-  result: GatewayResponse,
-  output: AssistantMessage,
-  stream: AssistantMessageEventStream,
-): void {
-  if (result.id) output.responseId = result.id;
-  for (const block of result.content ?? []) {
-    const contentIndex = output.content.length;
-    if (block.type === "thinking" || block.type === "reasoning" || block.type === "redacted_thinking") {
-      const thinking = block.type === "redacted_thinking"
-        ? "[Reasoning redacted]"
-        : block.thinking ?? block.text ?? "";
-      output.content.push({
-        type: "thinking",
-        thinking,
-        thinkingSignature: block.signature ?? block.data ?? "",
-        ...(block.type === "redacted_thinking" ? { redacted: true } : {}),
-      });
-      stream.push({ type: "thinking_start", contentIndex, partial: output });
-      if (thinking) stream.push({ type: "thinking_delta", contentIndex, delta: thinking, partial: output });
-      stream.push({ type: "thinking_end", contentIndex, content: thinking, partial: output });
-    } else if (block.type === "text") {
-      const text = block.text ?? "";
-      output.content.push({ type: "text", text });
-      stream.push({ type: "text_start", contentIndex, partial: output });
-      if (text) stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
-      stream.push({ type: "text_end", contentIndex, content: text, partial: output });
-    } else if (block.type === "tool_use" && block.id && block.name) {
-      const toolCall: ToolCall = {
-        type: "toolCall",
-        id: block.id,
-        name: block.name,
-        arguments: block.input ?? {},
-      };
-      output.content.push(toolCall);
-      stream.push({ type: "toolcall_start", contentIndex, partial: output });
-      stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
-    }
-  }
-  updateGatewayUsage(output, result.usage);
-  output.stopReason = mapStopReason(result.stop_reason);
-  if (output.stopReason === "error") {
-    throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${result.stop_reason}`);
-  }
-}
-
-async function consumeStreamingGatewayResponse(
-  response: Response,
-  output: AssistantMessage,
-  stream: AssistantMessageEventStream,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  const blocks = output.content as StreamingGatewayBlock[];
-  const activeProviderIndexes = new Set<number>();
-  const seenProviderIndexes = new Set<number>();
-  let sawMessageStop = false;
-  for await (const rawEvent of iterateAnthropicSse(response.body, { signal })) {
-    const event = rawEvent as JsonRecord;
-    const eventType = String(event.type ?? "");
-    if (eventType === "error") {
-      const error = event.error as JsonRecord | undefined;
-      throw new Error(`Model gateway stream error: ${String(error?.message ?? "unknown error")}`);
-    }
-    if (eventType === "message_start") {
-      const message = event.message as JsonRecord | undefined;
-      if (typeof message?.id === "string") output.responseId = message.id;
-      updateGatewayUsage(output, message?.usage as GatewayUsage | undefined);
-      continue;
-    }
-    if (eventType === "content_block_start") {
-      const providerIndex = Number(event.index);
-      if (!Number.isInteger(providerIndex) || providerIndex < 0) {
-        throw new Error("Model gateway returned an invalid content block index");
-      }
-      if (seenProviderIndexes.has(providerIndex)) {
-        throw new Error(`Model gateway reused content block index ${providerIndex}`);
-      }
-      const contentBlock = event.content_block as JsonRecord | undefined;
-      const blockType = String(contentBlock?.type ?? "");
-      let block: StreamingGatewayBlock | undefined;
-      if (blockType === "text") {
-        block = { type: "text", text: String(contentBlock?.text ?? ""), providerIndex };
-      } else if (blockType === "thinking" || blockType === "reasoning") {
-        block = {
-          type: "thinking",
-          thinking: String(contentBlock?.thinking ?? contentBlock?.text ?? ""),
-          thinkingSignature: String(contentBlock?.signature ?? ""),
-          providerIndex,
-        };
-      } else if (blockType === "redacted_thinking") {
-        block = {
-          type: "thinking",
-          thinking: "[Reasoning redacted]",
-          thinkingSignature: String(contentBlock?.data ?? ""),
-          redacted: true,
-          providerIndex,
-        };
-      } else if (blockType === "tool_use" && typeof contentBlock?.id === "string" && typeof contentBlock?.name === "string") {
-        block = {
-          type: "toolCall",
-          id: contentBlock.id,
-          name: contentBlock.name,
-          arguments: (contentBlock.input as JsonRecord | undefined) ?? {},
-          partialJson: "",
-          providerIndex,
-        };
-      }
-      if (!block) continue;
-      seenProviderIndexes.add(providerIndex);
-      activeProviderIndexes.add(providerIndex);
-      blocks.push(block);
-      const contentIndex = blocks.length - 1;
-      if (block.type === "text") stream.push({ type: "text_start", contentIndex, partial: output });
-      else if (block.type === "thinking") stream.push({ type: "thinking_start", contentIndex, partial: output });
-      else stream.push({ type: "toolcall_start", contentIndex, partial: output });
-      continue;
-    }
-    if (eventType === "content_block_delta") {
-      const providerIndex = Number(event.index);
-      const contentIndex = blocks.findIndex((block) => block.providerIndex === providerIndex);
-      const block = blocks[contentIndex];
-      const delta = event.delta as JsonRecord | undefined;
-      if (!block || !delta) continue;
-      if (delta.type === "text_delta" && block.type === "text") {
-        const text = String(delta.text ?? "");
-        block.text += text;
-        if (text) stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
-      } else if ((delta.type === "thinking_delta" || delta.type === "reasoning_delta") && block.type === "thinking") {
-        const thinking = String(delta.thinking ?? delta.text ?? "");
-        block.thinking += thinking;
-        if (thinking) stream.push({ type: "thinking_delta", contentIndex, delta: thinking, partial: output });
-      } else if (delta.type === "signature_delta" && block.type === "thinking") {
-        block.thinkingSignature = `${block.thinkingSignature ?? ""}${String(delta.signature ?? "")}`;
-      } else if (delta.type === "input_json_delta" && block.type === "toolCall") {
-        const json = String(delta.partial_json ?? "");
-        block.partialJson = `${block.partialJson ?? ""}${json}`;
-        if (json) stream.push({ type: "toolcall_delta", contentIndex, delta: json, partial: output });
-      }
-      continue;
-    }
-    if (eventType === "content_block_stop") {
-      const providerIndex = Number(event.index);
-      const contentIndex = blocks.findIndex((block) => block.providerIndex === providerIndex);
-      const block = blocks[contentIndex];
-      if (!block) continue;
-      activeProviderIndexes.delete(providerIndex);
-      delete block.providerIndex;
-      if (block.type === "text") {
-        stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
-      } else if (block.type === "thinking") {
-        stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
-      } else {
-        if (block.partialJson) {
-          try {
-            const parsed = JSON.parse(block.partialJson) as unknown;
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-              throw new Error("tool arguments must be a JSON object");
-            }
-            block.arguments = parsed as JsonRecord;
-          } catch {
-            throw new Error(`Model gateway returned invalid tool arguments for ${block.name}`);
-          }
-        }
-        delete block.partialJson;
-        stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
-      }
-      continue;
-    }
-    if (eventType === "message_delta") {
-      const delta = event.delta as JsonRecord | undefined;
-      if (delta?.stop_reason !== undefined && delta.stop_reason !== null) {
-        const rawReason = String(delta.stop_reason);
-        output.rawStopReason = rawReason;
-        output.stopReason = mapStopReason(rawReason);
-      }
-      updateGatewayUsage(output, event.usage as GatewayUsage | undefined);
-      continue;
-    }
-    if (eventType === "message_stop") {
-      sawMessageStop = true;
-    }
-  }
-  for (const block of blocks) {
-    delete block.providerIndex;
-    delete block.partialJson;
-  }
-  if (signal?.aborted) throw new Error("Request was aborted");
-  if (!sawMessageStop) throw new Error("Model gateway stream ended before message_stop");
-  if (activeProviderIndexes.size > 0) {
-    throw new Error("Model gateway stream ended with incomplete content blocks");
-  }
-  if (output.stopReason === "pending") throw new Error("Model gateway stream ended without a stop reason");
-  if (output.stopReason === "error") {
-    throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${output.rawStopReason ?? "unknown"}`);
-  }
-}
-
-function streamDrobotics(
-  model: Model<Api>,
-  context: Context,
-  options?: SimpleStreamOptions,
-): AssistantMessageEventStream {
-  const stream = createAssistantMessageEventStream();
-
-  void (async () => {
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "pending",
-      timestamp: Date.now(),
-    };
-
-    try {
-      if (!options?.apiKey) throw new Error("ANTHROPIC_AUTH_TOKEN is not configured");
-      stream.push({ type: "start", partial: output });
-
-      const maxTokens = Math.min(options.maxTokens ?? model.maxTokens, model.maxTokens);
-      const budget = thinkingBudget(options.reasoning, maxTokens);
-      const body: JsonRecord = {
-        model: model.id,
-        max_tokens: maxTokens,
-        stream: true,
-        system: context.systemPrompt ? sanitizeText(context.systemPrompt) : undefined,
-        messages: convertMessages(context.messages),
-        tools: convertTools(context.tools),
-        ...(budget ? { thinking: { type: "enabled", budget_tokens: budget } } : {}),
-      };
-
-      const configuredHeaders: Record<string, string> = {};
-      for (const [name, value] of Object.entries(options.headers ?? {})) {
-        if (typeof value === "string") configuredHeaders[name] = value;
-      }
-      configuredHeaders.Authorization ||= `Bearer ${options.apiKey}`;
-
-      const endpoint = `${(model.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "")}/v1/messages`;
-      const request = (payload: JsonRecord, accept: string) => fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Accept: accept,
-          "Content-Type": "application/json",
-          "anthropic-version": "2023-06-01",
-          "User-Agent": `hobot-code/${HOBOT_CODE_VERSION}`,
-          ...configuredHeaders,
-        },
-        body: JSON.stringify(payload),
-        signal: options.signal,
-      });
-      let response = await request(body, "text/event-stream, application/json");
-      let streamingFailure: { status: number; detail: string } | undefined;
-      if (!response.ok) {
-        const firstStatus = response.status;
-        const firstDetail = (await readBoundedBody(response, 64 * 1024)).slice(0, 4096);
-        if ([400, 415, 422].includes(firstStatus)) {
-          streamingFailure = { status: firstStatus, detail: firstDetail };
-          response = await request({ ...body, stream: false }, "application/json");
-        } else {
-          throw new Error(`D-Robotics model gateway HTTP ${firstStatus}: ${firstDetail}`);
-        }
-      }
-      if (!response.ok) {
-        const detail = (await readBoundedBody(response, 64 * 1024)).slice(0, 4096);
-        throw new Error(`D-Robotics model gateway rejected streaming (${streamingFailure?.status}: ${streamingFailure?.detail}) and buffered fallback (${response.status}: ${detail})`);
-      }
-      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-      if (contentType.includes("text/event-stream")) {
-        await consumeStreamingGatewayResponse(response, output, stream, options?.signal);
-      } else {
-        const text = await readBoundedBody(response, 8 * 1024 * 1024);
-        consumeBufferedGatewayResponse(JSON.parse(text) as GatewayResponse, output, stream);
-      }
-      calculateCost(model, output.usage);
-      if (!["stop", "length", "toolUse", "deferred"].includes(output.stopReason)) {
-        throw new Error(`Model gateway ended in an invalid state: ${output.stopReason}`);
-      }
-      stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse" | "deferred", message: output });
-      stream.end();
-    } catch (error) {
-      for (const block of output.content as StreamingGatewayBlock[]) {
-        delete block.providerIndex;
-        delete block.partialJson;
-      }
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
-      stream.end();
-    }
-  })();
-
-  return stream;
-}
-
 const systemSnapshotSchema = Type.Object({
   includeProcesses: Type.Optional(
     Type.Boolean({ description: "Include the highest CPU processes in the snapshot" }),
@@ -1014,39 +540,39 @@ const completionAssertionPattern = /(?:已|已经|全部|现已)(?:完成|实现
 const qualityGateEntryType = "hobot-quality-gates";
 
 function permissionPolicyPath(): string {
-  return resolve(process.env.HOBOT_CODE_PERMISSION_POLICY || resolveUserPaths().permissionPolicy);
+  return resolveUserPaths().permissionPolicy;
 }
 
 function memoryConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_MEMORY_CONFIG || resolveUserPaths().memoryConfig);
+  return resolveUserPaths().memoryConfig;
 }
 
 function memoryDatabasePath(): string {
-  return resolve(process.env.HOBOT_CODE_MEMORY_DB || resolveUserPaths().memoryDatabase);
+  return resolveUserPaths().memoryDatabase;
 }
 
 function goalConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_GOAL_CONFIG || resolveUserPaths().goalConfig);
+  return resolveUserPaths().goalConfig;
 }
 
 function goalDatabasePath(): string {
-  return resolve(process.env.HOBOT_CODE_GOAL_DB || resolveUserPaths().goalDatabase);
+  return resolveUserPaths().goalDatabase;
 }
 
 function hookConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_HOOK_CONFIG || resolveUserPaths().hookConfig);
+  return resolveUserPaths().hookConfig;
 }
 
 function hookAuditPath(): string {
-  return resolve(process.env.HOBOT_CODE_HOOK_AUDIT || resolveUserPaths().hookAudit);
+  return resolveUserPaths().hookAudit;
 }
 
 function notificationConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_NOTIFICATION_CONFIG || resolveUserPaths().notificationConfig);
+  return resolveUserPaths().notificationConfig;
 }
 
 function lspConfigPath(): string {
-  return resolve(process.env.HOBOT_CODE_LSP_CONFIG || resolveUserPaths().lspConfig);
+  return resolveUserPaths().lspConfig;
 }
 
 function formatMemoryRecords(records: MemoryRecord[]): string {
@@ -1126,7 +652,9 @@ function gateReport(state: QualityGateState, status: QualityGateStatus): string 
 }
 
 export default function rdkExtension(pi: ExtensionAPI) {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL;
+  // Fail before registering tools when any runtime path override is relative.
+  resolveUserPaths();
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_DROBOTICS_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
   const rootMode = process.getuid?.() === 0;
   const configuredContextWindow = Number(process.env.HOBOT_CODE_MODEL_CONTEXT_WINDOW || 1_000_000);
@@ -1183,6 +711,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     minDurationMs: 5000,
   };
   let notificationConfigError: string | undefined;
+  let interactiveTui = false;
   let lspConfig: LspConfig | undefined;
   let lspConfigError: string | undefined;
   let lspManager: LspManager | undefined;
@@ -1191,6 +720,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let agentHadMutation = false;
   let lastPromptSnapshot: PromptSnapshot | undefined;
   const qualityGateBlockedCalls = new Set<string>();
+  let permissionHiddenTools = new Set<string>();
 
   function memoryContext(
     ctx: { cwd: string; sessionManager: { getSessionFile: () => string | undefined } },
@@ -1255,7 +785,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   }
 
   function notifyRemote(title: string, message: string): void {
-    emitTerminalNotification(notificationConfig, title, message);
+    emitTerminalNotification(notificationConfig, title, message, interactiveTui);
   }
 
   function toolAction(toolName: string): PermissionAction {
@@ -1269,13 +799,18 @@ export default function rdkExtension(pi: ExtensionAPI) {
   }
 
   function applyDeniedTools(): string[] {
-    const denied = pi.getAllTools()
-      .map((tool) => tool.name)
-      .filter((name) => toolAction(name) === "deny");
-    if (denied.length > 0) {
-      const deniedSet = new Set(denied);
-      pi.setActiveTools(pi.getActiveTools().filter((name) => !deniedSet.has(name)));
-    }
+    const allTools = pi.getAllTools().map((tool) => tool.name);
+    const denied = allTools
+      .filter((name) => toolAction(name) === "deny"
+        || (sideAgentMode && ["memory_save", "goal_progress", "goal_complete"].includes(name)));
+    const visibility = reconcileToolVisibility(
+      allTools,
+      pi.getActiveTools(),
+      permissionHiddenTools,
+      denied,
+    );
+    permissionHiddenTools = visibility.hiddenTools;
+    pi.setActiveTools(visibility.activeTools);
     return denied;
   }
 
@@ -1302,7 +837,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
   }
 
-  async function restoreQualityState(ctx: { cwd: string; sessionManager: { getBranch: () => unknown[] } }): Promise<void> {
+  async function restoreQualityState(ctx: {
+    cwd: string;
+    isProjectTrusted: () => boolean;
+    sessionManager: { getBranch: () => unknown[] };
+  }): Promise<void> {
     let restored: QualityGateState | undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
       const candidate = entry as { type?: string; customType?: string; data?: unknown };
@@ -1310,9 +849,19 @@ export default function rdkExtension(pi: ExtensionAPI) {
         restored = normalizeQualityState(candidate.data) ?? restored;
       }
     }
-    if (restored) {
+    if (restored && (restored.source === "session" || ctx.isProjectTrusted())) {
       qualityGateState = restored;
       qualityConfigError = undefined;
+      return;
+    }
+    if (!ctx.isProjectTrusted()) {
+      qualityGateState = {
+        schemaVersion: 1,
+        timeoutMs: 120_000,
+        commands: [],
+        source: "project",
+      };
+      qualityConfigError = "Project quality gates are disabled until this workspace is trusted";
       return;
     }
     const loaded = await loadQualityConfig(ctx.cwd);
@@ -1512,7 +1061,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
       const { store, context } = requireMemory();
       const scopes = params.scopes as MemoryScope[] | undefined;
       const limit = Math.min(params.limit ?? memoryConfig.maxSearchResults, memoryConfig.maxSearchResults);
-      const records = store.search(params.query, context, scopes, limit, "agent");
+      const records = store.search(params.query, context, scopes, limit, sideAgentMode ? null : "agent");
       return {
         content: [{ type: "text", text: formatMemoryRecords(records) }],
         details: { records },
@@ -1638,14 +1187,16 @@ export default function rdkExtension(pi: ExtensionAPI) {
         column: params.column,
       });
       const text = JSON.stringify(result, null, 2);
+      const truncated = text.length > 20_000;
       return {
-        content: [{ type: "text", text: text.length > 20_000 ? `${text.slice(0, 20_000)}\n...truncated` : text }],
-        details: { result },
+        content: [{ type: "text", text: truncated ? `${text.slice(0, 20_000)}\n...truncated` : text }],
+        details: truncated ? { truncated: true, originalChars: text.length } : { result },
       };
     },
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    interactiveTui = ctx.mode === "tui";
     const loadedPolicy = await loadPolicy(permissionPolicyPath());
     permissionPolicy = loadedPolicy.policy as PermissionPolicy;
     permissionPolicyError = loadedPolicy.error;
@@ -1676,7 +1227,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     if (goalConfig.enabled) {
       try {
-        goalStore = new GoalStore(goalDatabasePath());
+        goalStore = new GoalStore(goalDatabasePath(), { readOnly: sideAgentMode });
         const session = ctx.sessionManager.getSessionFile() || `ephemeral:${process.pid}`;
         currentGoal = sideAgentMode
           ? goalStore.current(resolve(ctx.cwd))
@@ -1696,7 +1247,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
     if (memoryConfig.enabled) {
       try {
-        memoryStore = new MemoryStore(memoryDatabasePath());
+        memoryStore = new MemoryStore(memoryDatabasePath(), {
+          maintenance: !sideAgentMode,
+          readOnly: sideAgentMode,
+        });
         currentMemoryContext = memoryContext(ctx, currentSnapshot ?? { boardId: "unknown", hostname: hostname() });
       } catch (error) {
         memoryRuntimeError = error instanceof Error ? error.message : String(error);
@@ -2039,12 +1593,6 @@ export default function rdkExtension(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
       const [operation = "status", first, second] = input.split(/\s+/);
-      const previouslyDenied = new Set(
-        pi.getAllTools()
-          .map((tool) => tool.name)
-          .filter((name) => toolAction(name) === "deny"),
-      );
-
       try {
         if (operation === "reload") {
           const loaded = await loadPolicy(permissionPolicyPath());
@@ -2068,13 +1616,6 @@ export default function rdkExtension(pi: ExtensionAPI) {
           throw new Error("Usage: /permissions [status|reload|set <pattern> <action>|default <action>]");
         }
 
-        if (operation !== "status") {
-          const active = new Set(pi.getActiveTools());
-          for (const name of previouslyDenied) {
-            if (toolAction(name) !== "deny") active.add(name);
-          }
-          pi.setActiveTools([...active]);
-        }
         const hidden = applyDeniedTools();
         const rules = permissionPolicy.rules
           .map((rule) => `${rule.tool}: ${rule.action}`)
@@ -2177,6 +1718,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
       let remainder = space < 0 ? "" : input.slice(space + 1).trim();
       const project = resolve(ctx.cwd);
       try {
+        if (sideAgentMode && ["create", "progress", "pause", "resume", "extend", "complete", "cancel"].includes(operation)) {
+          throw new Error("Side agents cannot modify persistent goals");
+        }
         if (operation === "create") {
           let turnBudget = goalConfig.defaultTurnBudget;
           let tokenBudget = goalConfig.defaultTokenBudget ?? undefined;
@@ -2238,9 +1782,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
             currentGoal = undefined;
           } else {
             try {
-              if (!goalStore) goalStore = new GoalStore(goalDatabasePath());
+              if (!goalStore) goalStore = new GoalStore(goalDatabasePath(), { readOnly: sideAgentMode });
               const session = ctx.sessionManager.getSessionFile() || `ephemeral:${process.pid}`;
-              currentGoal = goalStore.restore(project, session);
+              currentGoal = sideAgentMode
+                ? goalStore.current(project)
+                : goalStore.restore(project, session);
             } catch (error) {
               goalRuntimeError = error instanceof Error ? error.message : String(error);
               currentGoal = undefined;
@@ -2309,7 +1855,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
           notificationConfig = loaded.config as NotificationConfig;
           notificationConfigError = loaded.error;
         } else if (operation === "test") {
-          const emitted = emitTerminalNotification(notificationConfig, "Hobot Code", "Notification test");
+          const emitted = emitTerminalNotification(
+            notificationConfig,
+            "Hobot Code",
+            "Notification test",
+            ctx.mode === "tui",
+          );
           ctx.ui.notify(emitted ? "Terminal notification emitted." : "Notification was suppressed by configuration or terminal state.", emitted ? "info" : "warning");
           return;
         } else if (operation !== "status") {
@@ -2367,6 +1918,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
       const remainder = space < 0 ? "" : input.slice(space + 1).trim();
 
       try {
+        if (sideAgentMode && ["add", "forget", "clear", "prune"].includes(operation)) {
+          throw new Error("Side agents cannot modify persistent memory");
+        }
         if (operation === "reload") {
           closeMemory();
           const loaded = await loadMemoryConfig(memoryConfigPath());
@@ -2376,7 +1930,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
           if (memoryConfig.enabled) {
             const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
             currentSnapshot = snapshot;
-            memoryStore = new MemoryStore(memoryDatabasePath());
+            memoryStore = new MemoryStore(memoryDatabasePath(), {
+              maintenance: !sideAgentMode,
+              readOnly: sideAgentMode,
+            });
             currentMemoryContext = memoryContext(ctx, snapshot);
           }
           setMemoryStatus(ctx);
@@ -2401,7 +1958,13 @@ export default function rdkExtension(pi: ExtensionAPI) {
         } else if (operation === "search") {
           if (!remainder) throw new Error("Usage: /memory search <query>");
           const { store, context } = requireMemory();
-          const records = store.search(remainder, context, undefined, memoryConfig.maxSearchResults, "user");
+          const records = store.search(
+            remainder,
+            context,
+            undefined,
+            memoryConfig.maxSearchResults,
+            sideAgentMode ? null : "user",
+          );
           ctx.ui.notify(formatMemoryRecords(records), "info");
           return;
         } else if (operation === "list") {

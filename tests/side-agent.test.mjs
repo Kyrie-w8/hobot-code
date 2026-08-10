@@ -12,6 +12,7 @@ import {
   createSideAgentEventState,
   parseSideAgentLimit,
   parseSideAgentEvent,
+  sideAgentPanelLayout,
 } from "../extensions/rdk/side-agent-session.mjs";
 
 test("side session snapshot includes in-memory branch entries without retaining the parent id", () => {
@@ -113,17 +114,55 @@ test("side agent event reducer tracks streamed text, tool state, and usage", () 
   assert.equal(state.cacheReadTokens, 80);
 });
 
+test("side agent usage ignores invalid and negative counters", () => {
+  const state = applySideAgentEvent(createSideAgentEventState(), {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      usage: { input: "invalid", output: Number.POSITIVE_INFINITY, cacheRead: -1, cacheWrite: 2.4 },
+    },
+  });
+  assert.equal(state.inputTokens, 0);
+  assert.equal(state.outputTokens, 0);
+  assert.equal(state.cacheReadTokens, 0);
+  assert.equal(state.cacheWriteTokens, 2);
+});
+
 test("side agent event parser ignores non-JSON output", () => {
   assert.equal(parseSideAgentEvent("not json"), undefined);
   assert.deepEqual(parseSideAgentEvent('{"type":"agent_end"}'), { type: "agent_end" });
 });
 
-test("side agent board limit defaults to two and remains bounded", () => {
+test("side agent per-user limit defaults to two and remains bounded", () => {
   assert.equal(parseSideAgentLimit(undefined), 2);
   assert.equal(parseSideAgentLimit("3"), 3);
   assert.equal(parseSideAgentLimit("0"), 1);
   assert.equal(parseSideAgentLimit("99"), 8);
   assert.equal(parseSideAgentLimit("invalid"), 2);
+  assert.equal(parseSideAgentLimit("3agents"), 2);
+  assert.equal(parseSideAgentLimit(" 3 "), 3);
+});
+
+test("side agent panel layout stays within narrow terminal bounds", () => {
+  assert.deepEqual(sideAgentPanelLayout(80, 24), {
+    panelWidth: 80,
+    panelRows: 24,
+    compact: false,
+    innerWidth: 78,
+    contentRows: 19,
+  });
+  const narrow = sideAgentPanelLayout(20, 7);
+  assert.equal(narrow.innerWidth + 2, narrow.panelWidth);
+  assert.equal(narrow.contentRows + 5, narrow.panelRows);
+  assert.equal(narrow.compact, false);
+  assert.deepEqual(sideAgentPanelLayout(2, 4), {
+    panelWidth: 2,
+    panelRows: 4,
+    compact: true,
+    innerWidth: 2,
+    contentRows: 0,
+  });
 });
 
 test("side agent leases reject excess agents and release capacity", async (t) => {

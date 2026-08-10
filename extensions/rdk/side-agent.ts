@@ -29,6 +29,7 @@ import {
   buildSideSessionSnapshot,
   createSideAgentEventState,
   parseSideAgentEvent,
+  sideAgentPanelLayout,
 } from "./side-agent-session.mjs";
 
 const MAX_QUESTION_CHARS = 32_000;
@@ -118,6 +119,10 @@ function formatTokens(value: number): string {
 }
 
 class SideAgentRun {
+  readonly id: string;
+  readonly initialQuestion: string;
+  readonly tempDir: string;
+  readonly sessionPath: string;
   phase: SidePhase = "starting";
   state: SideEventState = createSideAgentEventState() as SideEventState;
   transcript: TranscriptMessage[] = [];
@@ -137,16 +142,26 @@ class SideAgentRun {
   private terminating = false;
   private requestId = 0;
   private uiRequestTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly args: string[];
+  private readonly cwd: string;
+  private readonly parentSession: string | undefined;
 
   constructor(
-    readonly id: string,
-    readonly initialQuestion: string,
-    readonly tempDir: string,
-    readonly sessionPath: string,
-    private readonly args: string[],
-    private readonly cwd: string,
-    private readonly parentSession: string | undefined,
+    id: string,
+    initialQuestion: string,
+    tempDir: string,
+    sessionPath: string,
+    args: string[],
+    cwd: string,
+    parentSession: string | undefined,
   ) {
+    this.id = id;
+    this.initialQuestion = initialQuestion;
+    this.tempDir = tempDir;
+    this.sessionPath = sessionPath;
+    this.args = args;
+    this.cwd = cwd;
+    this.parentSession = parentSession;
     this.finished = new Promise((resolve) => {
       this.finish = resolve;
     });
@@ -421,6 +436,10 @@ class SideAgentRun {
 
 class SideAgentOverlay implements Focusable {
   private readonly input = new Input();
+  private readonly tui: TUI;
+  private readonly theme: Theme;
+  private readonly run: SideAgentRun;
+  private readonly done: (result: "close") => void;
   private _focused = false;
   private scrollOffset = 0;
   private disposed = false;
@@ -438,11 +457,15 @@ class SideAgentOverlay implements Focusable {
   }
 
   constructor(
-    private readonly tui: TUI,
-    private readonly theme: Theme,
-    private readonly run: SideAgentRun,
-    private readonly done: (result: "close") => void,
+    tui: TUI,
+    theme: Theme,
+    run: SideAgentRun,
+    done: (result: "close") => void,
   ) {
+    this.tui = tui;
+    this.theme = theme;
+    this.run = run;
+    this.done = done;
     this.input.onSubmit = (value) => this.submit(value);
     this.unsubscribe = run.subscribe(() => {
       this.scrollOffset = Number.MAX_SAFE_INTEGER;
@@ -617,10 +640,11 @@ class SideAgentOverlay implements Focusable {
 
   render(width: number): string[] {
     const th = this.theme;
-    const innerWidth = Math.max(24, width - 2);
+    const layout = sideAgentPanelLayout(width, this.tui.terminal.rows);
+    const { innerWidth, panelWidth } = layout;
     const border = (value: string) => th.fg("border", value);
     const pad = (value: string) => {
-      const clipped = truncateToWidth(value, innerWidth, "...", true);
+      const clipped = truncateToWidth(value, innerWidth, innerWidth >= 3 ? "..." : "", true);
       return clipped + " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
     };
     const phaseColor = this.run.phase === "idle"
@@ -632,12 +656,17 @@ class SideAgentOverlay implements Focusable {
           : "accent";
     const elapsedStart = this.run.isBusy ? this.run.turnStartedAt : this.run.startedAt;
     const elapsed = Math.max(0, Math.round((Date.now() - elapsedStart) / 1000));
+    if (layout.compact) {
+      const status = th.fg(phaseColor as any, `BTW ${this.run.phase} ${elapsed}s`);
+      const clipped = truncateToWidth(status, panelWidth, "", true);
+      return [clipped + " ".repeat(Math.max(0, panelWidth - visibleWidth(clipped)))];
+    }
     const title = ` BTW side agent | ${this.run.phase} | ${elapsed}s `;
-    const titleText = truncateToWidth(title, innerWidth);
+    const titleText = truncateToWidth(title, innerWidth, innerWidth >= 3 ? "..." : "", true);
     const titleRule = "─".repeat(Math.max(0, innerWidth - visibleWidth(titleText)));
 
     const content = this.transcriptLines(innerWidth);
-    const maxContentLines = Math.max(3, this.tui.terminal.rows - 5);
+    const maxContentLines = layout.contentRows;
     const maxOffset = Math.max(0, content.length - maxContentLines);
     this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
     const visible = content.slice(this.scrollOffset, this.scrollOffset + maxContentLines);
@@ -645,8 +674,9 @@ class SideAgentOverlay implements Focusable {
     for (const line of visible) result.push(border("│") + pad(line) + border("│"));
     while (result.length < maxContentLines + 1) result.push(border("│") + pad("") + border("│"));
 
-    const inputLabel = this.run.pendingUiRequest ? " Reply: " : " You: ";
-    const inputWidth = Math.max(8, innerWidth - visibleWidth(inputLabel));
+    let inputLabel = this.run.pendingUiRequest ? " Reply: " : " You: ";
+    if (innerWidth < 10) inputLabel = this.run.pendingUiRequest ? "?" : ">";
+    const inputWidth = Math.max(1, innerWidth - visibleWidth(inputLabel));
     const inputLine = this.input.render(inputWidth)[0] ?? "";
     result.push(border("├") + border("─".repeat(innerWidth)) + border("┤"));
     result.push(border("│") + pad(`${th.fg("accent", inputLabel)}${inputLine}`) + border("│"));

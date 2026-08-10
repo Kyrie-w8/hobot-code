@@ -23,8 +23,10 @@ export function emitTerminalNotification(
   config: NotificationConfig,
   title: string,
   message: string,
+  interactiveTui = true,
 ): boolean {
   if (!config.enabled) return false;
+  if (!interactiveTui) return false;
   if (!process.env.SSH_CONNECTION && !config.allowLocal) return false;
   if (!process.stderr.isTTY) return false;
   const safeTitle = safeTerminalText(title, 80) || "Hobot Code";

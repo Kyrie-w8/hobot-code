@@ -2,25 +2,36 @@ import { lstat, readlink, realpath } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
 const SECRET_ENV_NAME = /(?:^|_)(?:API_?KEY|AUTH|CREDENTIALS?|COOKIE|PASS(?:WORD|WD)?|PRIVATE_?KEY|SECRET|SESSION_?TOKEN|TOKEN)(?:_|$)/i;
+const DYNAMIC_LOADER_ENV_NAME = /^(?:DYLD_|LD_)/;
 const INJECTION_ENV_NAMES = new Set([
   "BASH_ENV",
   "BUN_OPTIONS",
+  "CDPATH",
   "ENV",
   "GIT_ASKPASS",
   "LD_PRELOAD",
+  "NODE_PATH",
   "NODE_OPTIONS",
+  "PERL5LIB",
+  "PERLLIB",
+  "PYTHONHOME",
+  "PYTHONPATH",
+  "PYTHONSTARTUP",
+  "RUBYLIB",
   "PERL5OPT",
   "PROMPT_COMMAND",
   "RUBYOPT",
   "SSH_ASKPASS",
   "SSH_AUTH_SOCK",
+  "ZDOTDIR",
 ]);
 const CRITICAL_ROOTS = ["/boot", "/dev", "/etc", "/proc", "/sys", "/usr", "/var/lib"];
 
 export function sanitizedChildEnv(source = process.env, extra = {}) {
   const env = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value === undefined || SECRET_ENV_NAME.test(name) || INJECTION_ENV_NAMES.has(name)) continue;
+    if (value === undefined || SECRET_ENV_NAME.test(name) || DYNAMIC_LOADER_ENV_NAME.test(name)
+      || INJECTION_ENV_NAMES.has(name)) continue;
     env[name] = value;
   }
   return { ...env, ...extra };

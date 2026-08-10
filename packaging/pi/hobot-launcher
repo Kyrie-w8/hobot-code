@@ -20,6 +20,91 @@ require_absolute_path() {
 
 require_absolute_path HOME "$HOME"
 
+original_umask=$(umask)
+umask 077
+
+reject_symlink() {
+  link_name=$1
+  if [ -L "$link_name" ]; then
+    printf 'Refusing Hobot Code path through symbolic link: %s\n' "$link_name" >&2
+    exit 1
+  fi
+}
+
+require_private_file() {
+  private_path=$1
+  if [ ! -f "$private_path" ]; then
+    printf 'Hobot Code credential file must be a regular file: %s\n' "$private_path" >&2
+    exit 1
+  fi
+  if private_owner=$(stat -c %u "$private_path" 2>/dev/null); then
+    private_mode=$(stat -c %a "$private_path")
+  else
+    private_owner=$(stat -f %u "$private_path")
+    private_mode=$(stat -f %Lp "$private_path")
+  fi
+  current_uid=$(id -u)
+  if [ "$private_owner" != "$current_uid" ]; then
+    printf 'Hobot Code credential file is owned by uid %s, expected %s: %s\n' "$private_owner" "$current_uid" "$private_path" >&2
+    exit 1
+  fi
+  if [ ! -r "$private_path" ]; then
+    printf 'Hobot Code credential file is not readable by the current user: %s\n' "$private_path" >&2
+    exit 1
+  fi
+  case "$private_mode" in
+    ''|*[!0-7]*)
+      printf 'Cannot validate credential file permissions: %s\n' "$private_path" >&2
+      exit 1
+      ;;
+  esac
+  if [ $((0$private_mode & 077)) -ne 0 ]; then
+    printf 'Hobot Code credential file must not grant group or other access: %s\n' "$private_path" >&2
+    exit 1
+  fi
+}
+
+load_environment_file() {
+  environment_file=$1
+  environment_line_number=0
+  while IFS= read -r environment_line || [ -n "$environment_line" ]; do
+    environment_line_number=$((environment_line_number + 1))
+    case "$environment_line" in
+      ''|'#'*) continue ;;
+      *=*) ;;
+      *)
+        printf '%s:%s must use KEY=VALUE syntax\n' "$environment_file" "$environment_line_number" >&2
+        exit 1
+        ;;
+    esac
+    environment_key=${environment_line%%=*}
+    environment_value=${environment_line#*=}
+    case "$environment_key" in
+      ''|[0-9]*|*[!A-Za-z0-9_]*)
+        printf '%s:%s has an invalid variable name\n' "$environment_file" "$environment_line_number" >&2
+        exit 1
+        ;;
+      BASH_ENV|BUN_OPTIONS|CDPATH|DYLD_*|ENV|GLOBIGNORE|HOME|IFS|LD_*|NODE_OPTIONS|PATH|PS4|SHELL|SHELLOPTS)
+        printf '%s:%s cannot set process-injection variable %s\n' "$environment_file" "$environment_line_number" "$environment_key" >&2
+        exit 1
+        ;;
+      HOBOT_CODE_CONFIG_DIR|XDG_CONFIG_HOME|XDG_STATE_HOME)
+        printf '%s:%s must set launcher path variable %s before invoking hobot\n' "$environment_file" "$environment_line_number" "$environment_key" >&2
+        exit 1
+        ;;
+    esac
+    case "$environment_value" in
+      \"*\") environment_value=${environment_value#\"}; environment_value=${environment_value%\"} ;;
+      \'*\') environment_value=${environment_value#\'}; environment_value=${environment_value%\'} ;;
+      \"*|*\"|\'*|*\')
+        printf '%s:%s has an unmatched quote\n' "$environment_file" "$environment_line_number" >&2
+        exit 1
+        ;;
+    esac
+    export "$environment_key=$environment_value"
+  done < "$environment_file"
+}
+
 hobot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 hobot_state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 hobot_config_root=${HOBOT_CODE_CONFIG_DIR:-$hobot_config_home/hobot-code}
@@ -28,46 +113,79 @@ require_absolute_path XDG_CONFIG_HOME "$hobot_config_home"
 require_absolute_path XDG_STATE_HOME "$hobot_state_home"
 require_absolute_path HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
 
-umask 077
+reject_symlink "$hobot_config_root"
+reject_symlink "$hobot_config_root/agent"
 mkdir -p "$hobot_config_root" "$hobot_config_root/agent"
+chmod 0700 "$hobot_config_root" "$hobot_config_root/agent"
+reject_symlink "$hobot_config_root/hobot.env"
 if [ ! -e "$hobot_config_root/hobot.env" ]; then
   cp "$hobot_default_config/hobot.env.example" "$hobot_config_root/hobot.env"
   chmod 0600 "$hobot_config_root/hobot.env"
 fi
+require_private_file "$hobot_config_root/hobot.env"
 
-if [ -r "$hobot_config_root/hobot.env" ]; then
-  set -a
-  . "$hobot_config_root/hobot.env"
-  set +a
-fi
+load_environment_file "$hobot_config_root/hobot.env"
 
 hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-$hobot_config_root/agent}
 hobot_state_dir=${HOBOT_CODE_STATE_DIR:-$hobot_state_home/hobot-code}
 hobot_session_dir=${HOBOT_CODING_AGENT_SESSION_DIR:-$hobot_state_dir/sessions}
+hobot_permission_policy=${HOBOT_CODE_PERMISSION_POLICY:-$hobot_agent_dir/permissions.json}
+hobot_memory_config=${HOBOT_CODE_MEMORY_CONFIG:-$hobot_agent_dir/memory.json}
+hobot_memory_db=${HOBOT_CODE_MEMORY_DB:-$hobot_state_dir/memory/memory.db}
+hobot_goal_config=${HOBOT_CODE_GOAL_CONFIG:-$hobot_agent_dir/goals.json}
+hobot_goal_db=${HOBOT_CODE_GOAL_DB:-$hobot_state_dir/goals/goals.db}
+hobot_hook_config=${HOBOT_CODE_HOOK_CONFIG:-$hobot_agent_dir/hooks.json}
+hobot_hook_audit=${HOBOT_CODE_HOOK_AUDIT:-$hobot_state_dir/audit/hooks.jsonl}
+hobot_notification_config=${HOBOT_CODE_NOTIFICATION_CONFIG:-$hobot_agent_dir/notifications.json}
+hobot_lsp_config=${HOBOT_CODE_LSP_CONFIG:-$hobot_agent_dir/lsp.json}
+hobot_rdk_knowledge_dir=${HOBOT_CODE_RDK_KNOWLEDGE_DIR:-/usr/local/lib/hobot-code/knowledge}
+hobot_rdk_expert_prompt=${HOBOT_CODE_RDK_EXPERT_PROMPT:-/usr/local/lib/hobot-code/prompts/rdk-expert.md}
 require_absolute_path HOBOT_CODING_AGENT_DIR "$hobot_agent_dir"
 require_absolute_path HOBOT_CODE_STATE_DIR "$hobot_state_dir"
 require_absolute_path HOBOT_CODING_AGENT_SESSION_DIR "$hobot_session_dir"
+require_absolute_path HOBOT_CODE_PERMISSION_POLICY "$hobot_permission_policy"
+require_absolute_path HOBOT_CODE_MEMORY_CONFIG "$hobot_memory_config"
+require_absolute_path HOBOT_CODE_MEMORY_DB "$hobot_memory_db"
+require_absolute_path HOBOT_CODE_GOAL_CONFIG "$hobot_goal_config"
+require_absolute_path HOBOT_CODE_GOAL_DB "$hobot_goal_db"
+require_absolute_path HOBOT_CODE_HOOK_CONFIG "$hobot_hook_config"
+require_absolute_path HOBOT_CODE_HOOK_AUDIT "$hobot_hook_audit"
+require_absolute_path HOBOT_CODE_NOTIFICATION_CONFIG "$hobot_notification_config"
+require_absolute_path HOBOT_CODE_LSP_CONFIG "$hobot_lsp_config"
+require_absolute_path HOBOT_CODE_RDK_KNOWLEDGE_DIR "$hobot_rdk_knowledge_dir"
+require_absolute_path HOBOT_CODE_RDK_EXPERT_PROMPT "$hobot_rdk_expert_prompt"
 
+for hobot_path in "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"; do
+  reject_symlink "$hobot_path"
+done
 mkdir -p "$hobot_agent_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"
+chmod 0700 "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"
 for hobot_config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+  reject_symlink "$hobot_agent_dir/$hobot_config_name"
+  if [ -e "$hobot_agent_dir/$hobot_config_name" ] && [ ! -f "$hobot_agent_dir/$hobot_config_name" ]; then
+    printf 'Hobot Code configuration must be a regular file: %s\n' "$hobot_agent_dir/$hobot_config_name" >&2
+    exit 1
+  fi
   if [ ! -e "$hobot_agent_dir/$hobot_config_name" ]; then
     cp "$hobot_default_config/$hobot_config_name" "$hobot_agent_dir/$hobot_config_name"
-    chmod 0600 "$hobot_agent_dir/$hobot_config_name"
   fi
+  chmod 0600 "$hobot_agent_dir/$hobot_config_name"
 done
 
 export HOBOT_CODING_AGENT_DIR="$hobot_agent_dir"
 export HOBOT_CODING_AGENT_SESSION_DIR="$hobot_session_dir"
 export HOBOT_CODE_STATE_DIR="$hobot_state_dir"
-export HOBOT_CODE_PERMISSION_POLICY="${HOBOT_CODE_PERMISSION_POLICY:-$hobot_agent_dir/permissions.json}"
-export HOBOT_CODE_MEMORY_CONFIG="${HOBOT_CODE_MEMORY_CONFIG:-$hobot_agent_dir/memory.json}"
-export HOBOT_CODE_MEMORY_DB="${HOBOT_CODE_MEMORY_DB:-$hobot_state_dir/memory/memory.db}"
-export HOBOT_CODE_GOAL_CONFIG="${HOBOT_CODE_GOAL_CONFIG:-$hobot_agent_dir/goals.json}"
-export HOBOT_CODE_GOAL_DB="${HOBOT_CODE_GOAL_DB:-$hobot_state_dir/goals/goals.db}"
-export HOBOT_CODE_HOOK_CONFIG="${HOBOT_CODE_HOOK_CONFIG:-$hobot_agent_dir/hooks.json}"
-export HOBOT_CODE_HOOK_AUDIT="${HOBOT_CODE_HOOK_AUDIT:-$hobot_state_dir/audit/hooks.jsonl}"
-export HOBOT_CODE_NOTIFICATION_CONFIG="${HOBOT_CODE_NOTIFICATION_CONFIG:-$hobot_agent_dir/notifications.json}"
-export HOBOT_CODE_LSP_CONFIG="${HOBOT_CODE_LSP_CONFIG:-$hobot_agent_dir/lsp.json}"
+export HOBOT_CODE_PERMISSION_POLICY="$hobot_permission_policy"
+export HOBOT_CODE_MEMORY_CONFIG="$hobot_memory_config"
+export HOBOT_CODE_MEMORY_DB="$hobot_memory_db"
+export HOBOT_CODE_GOAL_CONFIG="$hobot_goal_config"
+export HOBOT_CODE_GOAL_DB="$hobot_goal_db"
+export HOBOT_CODE_HOOK_CONFIG="$hobot_hook_config"
+export HOBOT_CODE_HOOK_AUDIT="$hobot_hook_audit"
+export HOBOT_CODE_NOTIFICATION_CONFIG="$hobot_notification_config"
+export HOBOT_CODE_LSP_CONFIG="$hobot_lsp_config"
+export HOBOT_CODE_RDK_KNOWLEDGE_DIR="$hobot_rdk_knowledge_dir"
+export HOBOT_CODE_RDK_EXPERT_PROMPT="$hobot_rdk_expert_prompt"
 if [ -r /usr/local/lib/hobot-code/VERSION ]; then
   HOBOT_CODE_VERSION=$(sed -n '1p' /usr/local/lib/hobot-code/VERSION)
   export HOBOT_CODE_VERSION
@@ -75,4 +193,5 @@ fi
 export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
 export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 
+umask "$original_umask"
 exec /usr/local/lib/hobot-code/hobot "$@"

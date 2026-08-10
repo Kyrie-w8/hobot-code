@@ -1,105 +1,102 @@
-# Hobot Code 0.12.1 架构
+# Hobot Code 架构
+
+Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 负责终端编辑、会话、Agent 循环和通用工具；Hobot Code 只实现 RDK 所需的 Provider、证据、知识、安全与部署能力。
 
 ## 运行路径
 
 ```mermaid
 flowchart LR
   U["Terminal user"] --> T["Pi TUI and editor"]
-  T --> S["Pi session, tree, compaction"]
-  S --> A["Pi agent and tool loop"]
+  T --> S["Session tree and compaction"]
+  S --> A["Main Pi agent and tool loop"]
+
   A --> P["Provider registry"]
-  P --> K["Hobot Code D-Robotics Kimi adapter"]
-  P --> V["Pi built-in and models.json providers"]
-  A --> B["Pi built-in coding tools"]
-  A --> R["Hobot Code RDK extension"]
-  R --> H["Board, BPU, thermal status"]
-  R --> D["Versioned local RDK knowledge"]
-  R --> E["Dynamic RDK expert role"]
-  R --> M["Scoped SQLite and FTS5 memory"]
-  R --> G["Persistent goals and budgets"]
-  R --> C["Permission, quality gate, and hooks"]
-  R --> L["On-demand resource-aware LSP"]
-  R --> N["SSH OSC and bell notifications"]
-  A --> X["Pi extensions, packages, Skills"]
-  T --> W["Ephemeral side-agent overlay"]
-  W --> Q["Context snapshot and isolated Pi process"]
-  Q --> A
+  P --> K["D-Robotics Kimi adapter"]
+  P --> V["Pi and models.json providers"]
+
+  A --> B["Pi coding tools"]
+  A --> R["RDK extension"]
+  A --> X["Extensions, packages and Skills"]
+
+  R --> H["Live board evidence"]
+  R --> D["Versioned RDK knowledge"]
+  R --> E["RDK expert role"]
+  R --> C["Permissions, gates and hooks"]
+  R --> M["Memory and goals"]
+  R --> L["On-demand LSP"]
+
+  T --> W["Right-side agent pane"]
+  W --> Q["Context snapshot"]
+  Q --> SA["Independent Pi RPC process"]
+  SA --> P
+  SA --> B
+  SA --> R
 ```
 
-交互路径没有 Hobot Code 自建 TUI。`runtime/hobot` 是固定版本的 Pi 官方 Bun standalone
-二进制；它读取同目录的 Hobot Code `package.json`，由 Pi 自己生成标题、帮助、配置路径、
-会话 UI 和快捷键。这使交互升级可以跟随明确的 Pi 上游版本，而无需维护两套编辑器。
+图中主 Agent 与侧边 Agent 指向相同组件，表示两个进程加载相同的 Provider、工具和 RDK 扩展实现，不表示它们共享同一个进程内实例。
 
-## 产品适配层
+`runtime/hobot` 是按版本与 SHA256 固定的 Pi Linux ARM64 standalone 二进制。它读取同目录的产品配置，由 Pi 生成标题、帮助、配置路径、会话 UI 和快捷键。Hobot Code 不复制或修改 Pi 的 TUI 组件、消息队列与会话树实现。
 
-`extensions/rdk/index.ts` 是唯一必须加载的产品扩展，包含以下适配：
+## RDK 适配层
 
-1. D-Robotics Provider：使用 Bearer token 调用 Anthropic-compatible 网关。网关不发送
-   完整 SSE 结束事件，因此适配器使用完整响应并生成 Pi 原生 thinking、text、tool call
-   和 done 事件。
-2. 硬件工具：从 device tree、`/etc/version`、sysfs、procfs 和 RDK 工具位置读取实时状态。
-3. 专家角色：把稳定实机标识渲染进紧凑 RDK 覆盖层，只规定 Pi 不具备的证据、版本、BPU
-   验收和硬件安全边界。
-4. 知识路由：按 X5 3.x、S100 4.x、S600 5.x 检索本地知识包，返回版本匹配状态和官方来源。
-5. 安全钩子：阻止虚拟设备文件写入，并确认工作区外写入和破坏性 Shell 命令。
-6. 板卡 UX：在 Pi 原生 footer status 中显示本机摘要，并增加 `/rdk`、`/doctor`、
-   `/knowledge`、`/system-prompt` 和退出别名。
-7. 持久化记忆：使用 Bun 内置 SQLite/FTS5 按 user、project、board、session 隔离，
-   支持过期、去重、检索、召回、审计和用户删除。
-8. 持久目标：用户显式创建项目目标，记录 turn/token 预算、耗时、继续次数、进度和验证指纹，
-   跨会话恢复且不把上下文压缩当作完成。
-9. 工具 Hook：在工具调用前后运行结构化 argv 命令，提供超时、输出上限、block/warn 策略和
-   脱敏审计；项目 Hook 必须由全局配置显式放行。
-10. SSH 通知：在批准等待、长任务完成、失败或目标预算耗尽时发出可关闭的 OSC/bell 通知。
-11. 资源感知 LSP：按文件扩展名和已安装服务按需启动，限制进程数、RSS、请求时间和空闲时间。
-12. 临时侧边 Agent：把主会话当前内存分支、有效系统 Prompt、模型、thinking 和工具集合复制到
-    临时 Pi RPC 会话；侧边会话在浮层内支持多轮对话并并发运行，关闭时删除且不写回主会话。
+`extensions/rdk/index.ts` 是发行包必须加载的产品扩展入口，负责向 Pi 注册 Provider、工具、命令与生命周期事件，并编排各个独立模块。协议解析、底层安全判定和状态存储核心均由独立模块承担，入口只连接并执行这些策略：
 
-扩展不替换 Pi 的 `read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`，也不修改
-InteractiveMode、SessionManager、TUI 组件或消息队列。
+1. **`drobotics-provider.ts`**：编排 Anthropic-compatible 网络请求、超时、SSE 与有界缓冲回退，并生成 Pi 原生 thinking、text、tool call 和 usage 事件。
+2. **Provider helpers**：`drobotics-config.mjs`、`drobotics-payload.mjs`、`drobotics-response.mjs`、`anthropic-sse.mjs` 和 `text-safety.mjs` 分别收口超时配置、请求转换、响应验证、有界分帧与 Unicode 修复，避免协议细节混入主编排。
+3. **入口中的板卡编排**：从 device tree、`/etc/version`、procfs、sysfs 和 RDK 工具路径取得实机证据，并按 X5 3.x、S100 4.x、S600 5.x 路由版本化知识。
+4. **`control-plane.mjs`、`runtime-safety.mjs` 与 `user-paths.mjs`**：实现权限和质量门辅助逻辑、脱敏、工作区指纹、路径解析及高风险 Shell 识别。
+5. **`memory-store.ts`、`goal-store.ts`、`hook-runner.ts`、`lsp-manager.ts` 与 `notifications.ts`**：分别管理 SQLite 状态、结构化 Hook 子进程、按需语言服务器和终端通知，入口只负责生命周期衔接。
+6. **`side-agent.ts` 及其会话和租约模块**：管理右侧窗格、独立 Pi RPC 子进程、多轮事件和同 UID 并发。
+7. **板卡交互层**：渲染紧凑 RDK 专家角色，在 Pi footer 显示本机摘要，并注册 `/rdk`、`/doctor`、`/knowledge`、`/system-prompt`、`/btw` 和退出别名。
 
-## 数据和隐私
+扩展继续使用 Pi 的 `read`、`bash`、`edit`、`write`、`grep`、`find` 和 `ls`，不维护同名工具的替代实现。Pi 的其他 Provider、扩展包、Skills、Prompt templates 和 themes 保持可用。
 
-Pi JSONL 会话存放在 `~/.local/state/hobot-code/sessions`。终端展示与执行状态仍由 Pi 会话模型统一
-管理。Hobot Code 另外在同一用户状态根目录维护 `memory/memory.db` 和 `goals/goals.db`，
-不复制会话消息。
+## Provider 数据流
 
-RDK footer 在本地读取状态。系统 Prompt 保留 Pi 的通用编码层，并追加不超过 1700 字符、同为
-英文的 RDK 紧凑层；它要求回答跟随用户语言。完整硬件详情与知识正文分别只在模型调用
-`system_snapshot`、`rdk_docs_search` 时进入上下文。
-`/system-prompt` 默认只报告各层字符数和状态，避免把全文刷满终端；显式执行
-`/system-prompt full` 才展开最近一轮的完整内容。
-记忆在写入前执行敏感数据检查，数据库和目录分别为 `0600` 和 `0700`。自动召回有条数上限，
-只将当前作用域内的相关条目加入模型上下文。质量门、召回记忆和持久目标采用条件状态层：仅在
-实际配置、命中或激活时加入短段落，空状态不进入 Prompt。Hook 审计写入
-`~/.local/state/hobot-code/audit/hooks.jsonl`，保存输入哈希、退出状态和脱敏后的有界输出，不重复保存
-完整工具输入。
+D-Robotics 适配器将 Pi 消息、工具描述和 thinking 预算转换为 Anthropic Messages 请求。文本在序列化前修复不完整的 Unicode 代理项，响应体则受超时与字节上限约束。
 
-## 控制面
+正常路径以 `stream: true` 请求，并逐条解析 SSE。只有在网关明确返回非 SSE 内容，或返回已知的不支持流式响应时，才读取有界的完整响应；因此两种路径对 Pi 暴露相同的增量事件语义，而不会无限缓冲响应体。
 
-`extensions/rdk/control-plane.mjs` 提供无第三方依赖、可单测的权限、初始化、脱敏和
-工作区指纹逻辑，`extensions/rdk/index.ts` 只负责接入 Pi 生命周期。会话启动时 deny 工具从 active
-tools 中移除，`tool_call` 再执行 fail-closed 检查；ask 工具必须在交互 TUI 中确认。
+## 控制面顺序
 
-质量门配置来自项目 `.hobot/quality-gates.json`，会话覆盖与结果通过 Pi custom entry 保存，
-不引入第二套数据库。结果只对运行后取得的工作区指纹有效；后续写入、编辑、Shell 或 MCP
-调用会保守地将结果标记为 stale。质量门与修改工具出现在同一并行批次时，门禁调用会被拒绝。
-工具执行顺序为权限判定、交互批准、PreToolUse Hook、实际工具、PostToolUse Hook。持久目标只有
-用户显式创建；模型完成目标时必须满足当前质量门，预算耗尽则自动暂停。
+一次工具调用按以下顺序执行：
 
-LSP 客户端不常驻预热：第一次查询匹配语言时才启动，超出进程数会回收最久未使用实例，超过
-RSS 或空闲上限会自动停止。默认发行包只提供协议客户端和配置，不捆绑各语言服务器。
+```text
+权限匹配 -> 交互确认 -> PreToolUse Hook -> 工具执行 -> PostToolUse Hook
+```
 
-`/btw` 使用持续存活的独立 Pi RPC 子进程，因此主 Agent 的事件循环、消息队列和会话树保持不变。快照直接来自
-`SessionManager.getBranch()`，包含尚未刷入 JSONL 的当前用户消息，并使用父会话当轮的完整系统
-Prompt，避免重新召回或重复拼接上下文。子会话继承当前有效工具和安全策略；每轮用户输入通过 RPC
-追加到同一个临时会话，确认、选择和输入请求由父浮层转交，持久记忆写入和目标状态变更仍被禁止。
-临时目录使用 `0700`，其中会话和 Prompt 使用 `0600`，浮层关闭或主会话退出时统一终止子进程并
-删除目录。工作区和设备副作用不属于会话数据，不会回滚。
+权限规则按顺序匹配，`deny` 工具会先从活跃工具集合移除，调用阶段仍进行 fail-closed 复核。内置 `write`、`edit` 不允许修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`；它们写入工作区外及 Shell 命中破坏性规则时需要确认。root 下的 `bash`、`write`、`edit` 始终逐次确认，非交互 root 会话拒绝这些调用。
+
+质量门配置来自项目 `.hobot/quality-gates.json`，会话覆盖与运行结果作为 Pi custom entry 保存。通过结果绑定运行后的工作区指纹；后续写入、编辑、Shell 或 MCP 调用会将结果标记为 `stale`。质量门和修改工具出现在同一并行批次时，门禁调用会被拒绝。
+
+持久目标只能由用户显式创建。模型可以更新进展，但完成目标必须满足当前质量门；预算耗尽只会暂停目标，不会把上下文压缩误判为完成。
+
+LSP 客户端仅在请求匹配语言且命令存在时启动。进程数、单进程 RSS、请求时间和空闲时间都有上限；发行包不捆绑 clangd、pylsp、gopls 等大型语言服务器。
+
+终端通知仅在交互 TUI 中尝试发送，并要求 `stderr` 是 TTY；默认还要求检测到 SSH，除非用户启用本地通知。print、JSON 和 RPC 模式不会写入 OSC 通知序列。
+
+## 侧边 Agent
+
+`/btw` 使用持续存活的独立 Pi RPC 子进程，不占用主 Agent 的事件循环、消息队列或会话树。创建时从 `SessionManager.getBranch()` 获取一次性快照，其中包含尚未写入 JSONL 的当前用户消息；子进程还获得父会话当轮的有效系统 Prompt、模型、thinking 等级、工具集合和项目信任状态。
+
+子进程不会重新扫描 Skills。父 Prompt 中已经生效的 Skill 指引会随快照保留，但它不是一套独立的 Skill discovery 流程。每轮输入追加到同一个临时会话，因此侧边对话可以多轮继续；确认、选择和补充输入请求由右侧窗格转交。
+
+侧边 Agent 禁止调用持久记忆写入和持久目标变更工具。其消息不写回主会话，关闭后临时会话、Prompt 与运行记录会被删除；但它与主 Agent 共享工作区、OS 用户、进程命名空间、服务和设备视图，已经产生的文件或硬件副作用不会回滚。
+
+每个主会话最多打开一个侧边 Agent。同一 OS 用户的所有 Hobot Code 进程通过 `/tmp` 下的原子租约共同计数，默认上限为 2，可在 1 到 8 之间调整。该计数按 UID 隔离，不是跨用户的整板配额；陈旧租约会在后续获取时清理。
+
+## 数据与隐私
+
+Pi JSONL 会话位于 `~/.local/state/hobot-code/sessions`。Hobot Code 在同一用户状态根目录维护 `memory/memory.db`、`goals/goals.db` 和 Hook 审计；这些数据库不复制主会话消息。`/btw` 为运行需要创建受限权限的临时上下文快照，关闭时删除。
+
+系统 Prompt 保留 Pi 通用编码层，并追加有长度预算的英文 RDK 专家层；回复语言跟随用户。完整硬件详情和知识正文只在模型调用 `system_snapshot`、`rdk_docs_search` 时进入上下文。质量门、召回记忆和活跃目标采用条件注入，没有有效内容时不增加空段落。
+
+记忆写入前执行敏感数据检查，数据库文件和目录默认分别为 `0600` 与 `0700`。自动召回限制条数与作用域。Hook 审计仅保存输入哈希、退出状态和脱敏后的有界输出，不重复保存完整工具输入。
 
 ## 部署与回滚
 
-发行包包含 Pi、fd、ripgrep 的官方 ARM64 二进制及许可证，并锁定版本和 SHA256。
-安装目录为 `/usr/local/lib/hobot-code`，启动器为 `/usr/local/bin/hobot`。安装前的命令和
-运行时放入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`，`hobot-rollback` 可恢复。升级保留
-现有配置、会话、记忆和目标数据库；新的 P1 配置文件仅在缺失时安装。
+发行包包含按锁文件校验的 Pi、`fd`、`ripgrep` Linux ARM64 二进制及许可证。程序安装在 `/usr/local/lib/hobot-code`，启动器位于 `/usr/local/bin/hobot`，回滚命令位于 `/usr/local/sbin/hobot-rollback`。
+
+安装器必须以 root 运行，并把用户配置与状态写入安装目标用户的 home。通过 `sudo` 调用时目标用户默认取 `SUDO_USER`；直接由 root 调用时默认为 root，也可用 `HOBOT_CODE_INSTALL_USER` 显式指定。升级只补充缺失的默认配置，不覆盖现有用户设置。
+
+升级前，旧命令与运行时会写入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`。回滚同样需要 root，并且只接受同时包含旧运行时与旧启动命令的完整备份；首次安装没有前一版本时不可回滚。成功恢复的备份会以 `.hobot-restored` 标记并拒绝再次使用，避免同一备份重复切换运行时。回滚不删除当前用户的配置、会话、记忆或目标。

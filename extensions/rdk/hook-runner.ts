@@ -52,10 +52,31 @@ interface ProcessResult {
   stdout: string;
   stderr: string;
   durationMs: number;
+  failureReason?: string;
+}
+
+export const HOOK_MAX_INPUT_BYTES = 1024 * 1024;
+
+function hookChildEnv() {
+  return sanitizedChildEnv(process.env, { HOBOT_CODE_HOOK: "1" });
 }
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function serializeHookPayload(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const serialized = JSON.stringify(value, (_key, item: unknown) => {
+    if (typeof item === "bigint") return item.toString();
+    if (item && typeof item === "object") {
+      if (seen.has(item)) return "[Circular]";
+      seen.add(item);
+    }
+    return item;
+  });
+  if (serialized === undefined) throw new Error("hook payload is not JSON serializable");
+  return serialized;
 }
 
 function wildcardMatches(value: string, pattern: string): boolean {
@@ -72,10 +93,31 @@ async function runProcess(
   signal?: AbortSignal,
 ): Promise<ProcessResult> {
   const started = Date.now();
+  if (signal?.aborted) {
+    return {
+      code: null,
+      killed: true,
+      stdout: "",
+      stderr: "",
+      durationMs: 0,
+      failureReason: "hook execution was aborted before start",
+    };
+  }
+  const inputBytes = Buffer.byteLength(input);
+  if (inputBytes > HOOK_MAX_INPUT_BYTES) {
+    return {
+      code: null,
+      killed: false,
+      stdout: "",
+      stderr: "",
+      durationMs: 0,
+      failureReason: `hook input exceeds ${HOOK_MAX_INPUT_BYTES} bytes`,
+    };
+  }
   return await new Promise((resolve, reject) => {
     const child = spawn(command[0]!, command.slice(1), {
       cwd,
-      env: sanitizedChildEnv(process.env, { HOBOT_CODE_HOOK: "1" }),
+      env: hookChildEnv(),
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -83,18 +125,32 @@ async function runProcess(
     let stderr = "";
     let killed = false;
     let settled = false;
+    let capturedChars = 0;
+    let outputTruncated = false;
+    let failureReason: string | undefined;
     const append = (current: string, chunk: Buffer): string => {
-      const next = current + chunk.toString("utf8");
-      return next.length > maxOutputChars ? next.slice(0, maxOutputChars) : next;
+      const text = chunk.toString("utf8");
+      const available = Math.max(0, maxOutputChars - capturedChars);
+      const captured = text.slice(0, available);
+      capturedChars += captured.length;
+      if (captured.length < text.length) outputTruncated = true;
+      return current + captured;
     };
     child.stdout.on("data", (chunk: Buffer) => { stdout = append(stdout, chunk); });
     child.stderr.on("data", (chunk: Buffer) => { stderr = append(stderr, chunk); });
-    const stop = () => {
+    child.stdin.on("error", (error) => {
+      if (settled || failureReason) return;
+      failureReason = `hook stdin failed: ${error.message}`;
+      killed = true;
+      terminateProcessGroup(child, "SIGKILL");
+    });
+    const stop = (reason: string) => {
+      if (!failureReason) failureReason = reason;
       killed = true;
       terminateProcessGroup(child, "SIGKILL");
     };
-    const timer = setTimeout(stop, timeoutMs);
-    const abort = () => stop();
+    const timer = setTimeout(() => stop(`hook timed out after ${timeoutMs} ms`), timeoutMs);
+    const abort = () => stop("hook execution was aborted");
     signal?.addEventListener("abort", abort, { once: true });
     child.on("error", (error) => {
       if (settled) return;
@@ -108,9 +164,24 @@ async function runProcess(
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
-      resolve({ code, killed, stdout, stderr, durationMs: Date.now() - started });
+      resolve({
+        code,
+        killed,
+        stdout,
+        stderr,
+        durationMs: Date.now() - started,
+        ...(failureReason || outputTruncated
+          ? { failureReason: failureReason || `hook output exceeds ${maxOutputChars} characters` }
+          : {}),
+      });
     });
-    child.stdin.end(input);
+    if (signal?.aborted) abort();
+    try {
+      child.stdin.end(input);
+    } catch (error) {
+      failureReason = `hook stdin failed: ${error instanceof Error ? error.message : String(error)}`;
+      stop(failureReason);
+    }
   });
 }
 
@@ -143,6 +214,7 @@ export async function runHooks(options: {
   if (!options.config.enabled) return outcome;
   const hooks = options.config.hooks.filter((hook) =>
     hook.event === options.event && wildcardMatches(options.toolName, hook.tool));
+  if (hooks.length === 0) return outcome;
   const payload: HookInput = {
     schemaVersion: 1,
     event: options.event,
@@ -152,7 +224,32 @@ export async function runHooks(options: {
     input: options.input,
     ...(options.result ? { result: options.result } : {}),
   };
-  const serialized = JSON.stringify(payload);
+  let serialized: string;
+  try {
+    serialized = serializeHookPayload(payload);
+  } catch (error) {
+    const reason = redactSensitiveText(
+      `hook input serialization failed: ${error instanceof Error ? error.message : String(error)}`,
+      800,
+    );
+    const blocked = hooks.some((hook) => (hook.failurePolicy ?? options.config.failurePolicy) === "block");
+    return blocked
+      ? { blocked: true, reason, warnings: [] }
+      : { blocked: false, warnings: [reason] };
+  }
+
+  const appendOutcomeText = (value: string): void => {
+    const combined = [outcome.appendText, value].filter(Boolean).join("\n");
+    outcome.appendText = combined.slice(0, options.config.maxOutputChars);
+  };
+  let warningChars = 0;
+  const appendWarning = (value: string): void => {
+    const remaining = options.config.maxOutputChars - warningChars;
+    if (remaining <= 0) return;
+    const warning = value.slice(0, remaining);
+    outcome.warnings.push(warning);
+    warningChars += warning.length;
+  };
 
   for (const hook of hooks) {
     const policy = hook.failurePolicy ?? options.config.failurePolicy;
@@ -167,12 +264,14 @@ export async function runHooks(options: {
         options.signal,
       );
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       result = {
         code: null,
         killed: false,
         stdout: "",
-        stderr: error instanceof Error ? error.message : String(error),
+        stderr: "",
         durationMs: 0,
+        failureReason: `hook process could not be started: ${message}`,
       };
     }
 
@@ -184,9 +283,12 @@ export async function runHooks(options: {
         result = { ...result, code: result.code === 0 ? null : result.code, stderr: "hook returned invalid JSON" };
       }
     }
-    const failed = result.code !== 0 || result.killed;
+    const failed = result.code !== 0 || result.killed || Boolean(result.failureReason);
     const reason = redactSensitiveText(
-      response.reason || result.stderr || `${hook.name} exited with ${result.code ?? "no status"}`,
+      response.reason
+        || result.failureReason
+        || result.stderr
+        || `${hook.name} exited with ${result.code ?? "no status"}`,
       800,
     );
     audit(options.auditPath, {
@@ -207,8 +309,7 @@ export async function runHooks(options: {
     });
 
     if (response.appendText) {
-      outcome.appendText = [outcome.appendText, redactSensitiveText(response.appendText, options.config.maxOutputChars)]
-        .filter(Boolean).join("\n");
+      appendOutcomeText(redactSensitiveText(response.appendText, options.config.maxOutputChars));
     }
     if (response.isError) outcome.forceError = true;
     if (response.block || (failed && policy === "block")) {
@@ -216,7 +317,7 @@ export async function runHooks(options: {
       outcome.reason = reason;
       break;
     }
-    if (failed) outcome.warnings.push(`${hook.name}: ${reason}`);
+    if (failed) appendWarning(`${hook.name}: ${reason}`);
   }
   return outcome;
 }

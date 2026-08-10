@@ -1,20 +1,20 @@
-VERSION ?= $(shell cat VERSION)
-
 .PHONY: check release pi-release pi-check clean
 
 pi-check:
-	sh -n scripts/package-pi.sh scripts/install-pi.sh scripts/rollback-pi.sh packaging/pi/hobot-launcher
+	sh -n scripts/package-pi.sh scripts/install-pi.sh scripts/rollback-pi.sh scripts/validate-tar-archive.sh packaging/pi/hobot-launcher
 	node -e 'for (const f of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(f, "utf8"))' pi-runtime/package.json packaging/pi/settings.json packaging/pi/models.json packaging/pi/permissions.json packaging/pi/memory.json packaging/pi/goals.json packaging/pi/hooks.json packaging/pi/notifications.json packaging/pi/lsp.json
 	node --test tests/*.test.mjs
 	node scripts/validate-knowledge.mjs
 	node scripts/validate-expert-prompt.mjs
 	node scripts/validate-branding.mjs
+	node scripts/validate-doc-links.mjs
 	node scripts/validate-version.mjs
+	node scripts/validate-package.mjs --source .
 
 check: pi-check
 
 pi-release: pi-check
-	./scripts/package-pi.sh $(VERSION)
+	./scripts/package-pi.sh
 
 release: pi-release
 

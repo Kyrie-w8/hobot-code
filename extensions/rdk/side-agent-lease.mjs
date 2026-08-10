@@ -59,7 +59,7 @@ export async function acquireSideAgentLease({
     if (activeCount > limit) {
       await release();
       throw new Error(
-        `This board already has ${limit} side agents. Close one or raise HOBOT_CODE_MAX_SIDE_AGENTS (maximum 8).`,
+        `This OS user already has ${limit} side agents. Close one or raise HOBOT_CODE_MAX_SIDE_AGENTS (maximum 8).`,
       );
     }
     return { activeCount, limit, release };

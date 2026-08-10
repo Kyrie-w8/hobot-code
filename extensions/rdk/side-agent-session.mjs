@@ -3,13 +3,34 @@ const MAX_STREAM_TEXT_CHARS = 200_000;
 const MAX_TOOL_EVENTS = 100;
 
 export function parseSideAgentLimit(value, fallback = 2) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  return Number.isFinite(parsed) ? Math.min(8, Math.max(1, parsed)) : fallback;
+  const normalized = String(value ?? "").trim();
+  const parsed = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
+  const boundedFallback = Math.min(8, Math.max(1, Number.isInteger(fallback) ? fallback : 2));
+  return Number.isSafeInteger(parsed) ? Math.min(8, Math.max(1, parsed)) : boundedFallback;
+}
+
+export function sideAgentPanelLayout(width, rows) {
+  const panelWidth = Number.isFinite(width) ? Math.max(1, Math.floor(width)) : 1;
+  const panelRows = Number.isFinite(rows) ? Math.max(1, Math.floor(rows)) : 1;
+  const compact = panelWidth < 4 || panelRows < 5;
+  return {
+    panelWidth,
+    panelRows,
+    compact,
+    innerWidth: compact ? panelWidth : panelWidth - 2,
+    contentRows: compact ? 0 : panelRows - 5,
+  };
 }
 
 function boundedTail(value, limit = MAX_STREAM_TEXT_CHARS) {
   if (value.length <= limit) return value;
   return `[Earlier output omitted]\n${value.slice(-limit)}`;
+}
+
+function boundedTokenCount(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.round(parsed));
 }
 
 export function buildSideSessionSnapshot({ header, entries, id, timestamp, cwd, parentSession }) {
@@ -125,10 +146,10 @@ export function applySideAgentEvent(state, event, redact = (value) => value) {
     next.stopReason = event.message.stopReason;
     next.errorMessage = event.message.errorMessage;
     const usage = event.message.usage ?? {};
-    next.inputTokens += Number(usage.input ?? 0);
-    next.outputTokens += Number(usage.output ?? 0);
-    next.cacheReadTokens += Number(usage.cacheRead ?? 0);
-    next.cacheWriteTokens += Number(usage.cacheWrite ?? 0);
+    next.inputTokens += boundedTokenCount(usage.input);
+    next.outputTokens += boundedTokenCount(usage.output);
+    next.cacheReadTokens += boundedTokenCount(usage.cacheRead);
+    next.cacheWriteTokens += boundedTokenCount(usage.cacheWrite);
   } else if (event.type === "tool_execution_start") {
     const rawTarget = toolTarget(String(event.toolName ?? "tool"), event.args);
     const target = redact(rawTarget).replace(/\s+/g, " ").slice(0, 160);

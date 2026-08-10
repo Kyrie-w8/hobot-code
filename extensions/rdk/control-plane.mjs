@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, chmod, lstat, mkdir, readFile, readlink, readdir, rename, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { access, chmod, lstat, mkdir, opendir, readFile, readlink, rename, writeFile } from "node:fs/promises";
+import { basename, extname, join, resolve } from "node:path";
 
 export const DEFAULT_POLICY = Object.freeze({
   schemaVersion: 2,
@@ -84,7 +84,30 @@ export const DEFAULT_LSP_CONFIG = Object.freeze({
 });
 
 const permissionActions = new Set(["allow", "ask", "deny"]);
-const fingerprintExcludedDirectories = new Set([".git", ".cache", "node_modules"]);
+const fingerprintExcludedDirectories = new Set([
+  ".cache",
+  ".git",
+  ".mypy_cache",
+  ".next",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tox",
+  ".venv",
+  "__pycache__",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "target",
+  "venv",
+]);
+const fingerprintMetadataOnlyExtensions = new Set([
+  ".a", ".bin", ".db", ".gz", ".hbm", ".jpeg", ".jpg", ".mp4", ".npy", ".npz",
+  ".o", ".onnx", ".parquet", ".png", ".so", ".sqlite", ".tar", ".wasm", ".zip",
+]);
+const MAX_FINGERPRINT_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_FINGERPRINT_TOTAL_BYTES = 128 * 1024 * 1024;
 
 function cloneDefaultPolicy() {
   return {
@@ -191,6 +214,23 @@ export function resolveToolAction(policy, toolName, mcp = false) {
     if (wildcardMatches(toolName, rule.tool)) return rule.action;
   }
   return policy.default;
+}
+
+export function reconcileToolVisibility(allTools, activeTools, hiddenTools, deniedTools) {
+  const available = new Set(allTools);
+  const active = new Set(activeTools);
+  const hidden = new Set([...hiddenTools].filter((name) => available.has(name)));
+  const denied = new Set(deniedTools);
+
+  for (const name of [...hidden]) {
+    if (denied.has(name)) continue;
+    active.add(name);
+    hidden.delete(name);
+  }
+  for (const name of denied) {
+    if (active.delete(name)) hidden.add(name);
+  }
+  return { activeTools: [...active], hiddenTools: hidden };
 }
 
 export function setPolicyRule(policy, tool, action) {
@@ -674,12 +714,30 @@ export async function fingerprintWorkspace(cwd) {
   const root = resolve(cwd);
   const hash = createHash("sha256");
   let files = 0;
+  let entryCount = 0;
   let hashedBytes = 0;
 
-  async function hashFile(path) {
+  async function hashFile(path, size) {
+    if (fingerprintMetadataOnlyExtensions.has(extname(path).toLowerCase())) return;
+    if (size > MAX_FINGERPRINT_FILE_BYTES) {
+      throw new Error(`workspace source file exceeds ${MAX_FINGERPRINT_FILE_BYTES} bytes: ${path}`);
+    }
+    if (hashedBytes + size > MAX_FINGERPRINT_TOTAL_BYTES) {
+      throw new Error(`workspace fingerprint exceeds ${MAX_FINGERPRINT_TOTAL_BYTES} content bytes`);
+    }
     await new Promise((resolveHash, rejectHash) => {
       const source = createReadStream(path);
+      let fileBytes = 0;
       source.on("data", (chunk) => {
+        fileBytes += chunk.length;
+        if (fileBytes > MAX_FINGERPRINT_FILE_BYTES) {
+          source.destroy(new Error(`workspace source file exceeds ${MAX_FINGERPRINT_FILE_BYTES} bytes: ${path}`));
+          return;
+        }
+        if (hashedBytes + chunk.length > MAX_FINGERPRINT_TOTAL_BYTES) {
+          source.destroy(new Error(`workspace fingerprint exceeds ${MAX_FINGERPRINT_TOTAL_BYTES} content bytes`));
+          return;
+        }
         hash.update(chunk);
         hashedBytes += chunk.length;
       });
@@ -689,9 +747,15 @@ export async function fingerprintWorkspace(cwd) {
   }
 
   async function visit(directory, relativeDirectory = "") {
-    const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
+    const directoryEntries = [];
+    const directoryHandle = await opendir(directory);
+    for await (const entry of directoryHandle) {
+      entryCount += 1;
+      if (entryCount > 20_000) throw new Error("workspace fingerprint exceeds 20000 entries");
+      directoryEntries.push(entry);
+    }
+    directoryEntries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of directoryEntries) {
       if (entry.isDirectory() && fingerprintExcludedDirectories.has(entry.name)) continue;
       const path = join(directory, entry.name);
       const relativePath = join(relativeDirectory, entry.name);
@@ -704,8 +768,7 @@ export async function fingerprintWorkspace(cwd) {
         await visit(path, relativePath);
       } else if (entry.isFile()) {
         files += 1;
-        if (files > 20_000) throw new Error("workspace fingerprint exceeds 20000 files");
-        await hashFile(path);
+        await hashFile(path, info.size);
       }
     }
   }

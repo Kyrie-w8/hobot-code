@@ -1,53 +1,46 @@
-# Hobot Code 0.12.1 配置
+# Hobot Code 配置
 
-## 路径
+Hobot Code 沿用 Pi 的配置机制，并使用独立的用户配置与状态目录。推荐优先通过 TUI 命令修改交互设置，只在需要精确控制或自动化部署时直接编辑 JSON。
 
-| 路径 | 作用 |
+## 配置入口
+
+| 入口 | 用途 |
 |---|---|
-| `~/.config/hobot-code/hobot.env` | 当前用户的模型密钥和端点 |
-| `~/.config/hobot-code/agent/settings.json` | Pi/Hobot Code 全局设置 |
-| `~/.config/hobot-code/agent/models.json` | 自定义 Provider 和模型 |
-| `~/.config/hobot-code/agent/auth.json` | `/login` 保存的认证信息 |
-| `~/.config/hobot-code/agent/permissions.json` | allow/ask/deny 工具权限策略 |
-| `~/.config/hobot-code/agent/memory.json` | 持久化记忆开关、检索与长度上限 |
-| `~/.config/hobot-code/agent/goals.json` | 持久目标默认 turn/token 预算 |
-| `~/.config/hobot-code/agent/hooks.json` | PreToolUse/PostToolUse Hook 和失败策略 |
-| `~/.config/hobot-code/agent/notifications.json` | SSH OSC/bell 通知触发条件 |
-| `~/.config/hobot-code/agent/lsp.json` | 语言服务器命令、文件匹配和资源上限 |
-| `~/.local/state/hobot-code/sessions` | Pi JSONL 会话 |
-| `~/.local/state/hobot-code/memory/memory.db` | SQLite/FTS5 持久化记忆与审计事件 |
-| `~/.local/state/hobot-code/goals/goals.db` | 持久目标状态机与事件 |
-| `~/.local/state/hobot-code/audit/hooks.jsonl` | 脱敏 Hook 执行审计 |
-| `/usr/local/lib/hobot-code/bin` | 固定版本的 fd 和 ripgrep |
-| `/usr/local/lib/hobot-code/extensions` | RDK 扩展 |
-| `/usr/local/lib/hobot-code/skills` | 板端 Skills |
-| `/usr/local/lib/hobot-code/knowledge` | 版本化 RDK 板卡知识与官方来源索引 |
-| `/usr/local/lib/hobot-code/prompts/rdk-expert.md` | 动态渲染、带长度预算的紧凑 RDK 角色模板 |
-| `<project>/.hobot/quality-gates.json` | 项目默认质量门命令与单命令超时 |
+| `~/.config/hobot-code/hobot.env` | 模型端点、密钥和进程级覆盖 |
+| `~/.config/hobot-code/agent` | Pi 设置、模型及 Hobot Code 功能配置 |
+| `<project>/.hobot` | 受 Pi project trust 保护的项目配置与资源 |
+| `~/.local/state/hobot-code` | 会话、记忆、目标与审计等可变状态 |
 
-启动器遵循 `XDG_CONFIG_HOME` 与 `XDG_STATE_HOME`，并设置对应的 Agent、会话和状态路径。项目目录使用 `.hobot/`
-放置局部 settings、extensions、skills、prompts 和 themes；Pi 的 project trust 机制会在
-首次加载项目资源前询问。
+启动器遵循 `XDG_CONFIG_HOME` 和 `XDG_STATE_HOME`。完整文件清单、权限和迁移规则见[用户目录布局](user-directory-layout.md)。
+
+安装器和启动器只在配置文件缺失时写入默认值，不覆盖已有用户设置。默认创建的用户配置文件权限为 `0600`；用户应持续保持该权限，并避免把配置目录暴露给其他账号。
 
 ## D-Robotics Kimi
 
-`~/.config/hobot-code/hobot.env`：
+编辑 `~/.config/hobot-code/hobot.env`：
 
 ```text
 ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
 ANTHROPIC_AUTH_TOKEN=your-token
 ANTHROPIC_MODEL=kimi-k3
+API_TIMEOUT_MS=3000000
 HOBOT_CODE_MODEL_CONTEXT_WINDOW=1000000
 HOBOT_CODE_MODEL_MAX_TOKENS=8192
 ```
 
-文件权限必须是 `0600`。Hobot Code 不把 token 写入 `models.json`、会话或日志。默认设置选择
-`drobotics/kimi-k3`，thinking 等级为 `max`，Provider 请求超时为 3000000 ms。
+Hobot Code 默认选择 `drobotics/kimi-k3`，thinking 等级为 `max`。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
 
-## 添加模型
+D-Robotics Provider 优先发起 Anthropic SSE 请求并实时转发 thinking、文本、工具参数和 usage。端点明确不支持流式格式或返回普通 JSON 时，会回退到有字节上限的缓冲读取。
 
-Pi 支持在 `models.json` 中定义 Anthropic Messages、OpenAI Chat Completions、OpenAI
-Responses 和 Google Generative AI 兼容服务。例如本机 Ollama：
+`hobot.env` 只按逐行 `KEY=VALUE` 数据解析；空行和以 `#` 开头的行会忽略，外层单引号或双引号会移除。变量替换、命令替换和其他 Shell 语法不会执行，危险的进程注入变量会被拒绝。决定配置文件自身位置的 `XDG_CONFIG_HOME`、`XDG_STATE_HOME` 和 `HOBOT_CODE_CONFIG_DIR` 也不能写在该文件中，必须在调用 `hobot` 前设置。
+
+启动器只接受普通的可信凭据文件：路径不能是符号链接，文件必须属于当前用户，且不能向组或其他用户开放权限。不满足条件时启动会直接失败，而不是带着不可信环境继续运行。不要提交该文件，也不要把真实 token 写入会话、项目配置或 issue。
+
+## 添加其他模型
+
+Pi 支持 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 和 Google Generative AI 等 Provider。可使用 `/login <provider>` 配置 Pi 支持的登录型 Provider，或编辑 `~/.config/hobot-code/agent/models.json` 添加兼容服务。
+
+本机 Ollama 示例：
 
 ```json
 {
@@ -68,57 +61,91 @@ Responses 和 Google Generative AI 兼容服务。例如本机 Ollama：
 }
 ```
 
-保存后打开 `/model`；文件会重新读取，不需要重启。API key 可以写成 `$ENV_NAME` 引用，
-不要把真实密钥直接写进 JSON。
+API key 可以写成 `$ENV_NAME` 引用，避免把真实密钥放进 JSON。保存后打开 `/model` 重新选择模型即可。
 
-## 交互设置
+## Pi 交互与扩展
 
-推荐直接使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认 settings
-启用自动压缩、三次 Agent 级重试、1M Kimi 上下文、可见 thinking 和 regular TUI。
+推荐使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认设置启用自动压缩、最多三次 Agent 级重试、可见 thinking 和 regular TUI。
 
-扩展、Skills 和 Prompt 可用 Pi 原生命令管理：
+扩展、Skills 和 Prompt 使用 Pi 原生命令管理：
 
 ```bash
-hobot install <npm-or-git-source>
+hobot install npm:@scope/package@1.0.0
+hobot install git:github.com/owner/repository@v1
 hobot list
 hobot config
 hobot update --extensions
 ```
 
-第三方扩展拥有当前用户的完整系统权限，安装前必须审查源码。在 root 板端尤其不要加载
-来源不明的 package 或 Skill。
+第三方扩展与 Skills 不是沙箱内容，它们拥有当前用户权限。安装前应审查来源和代码；root 会话尤其不应加载来源不明的 package。
 
-## 环境覆盖
+基础 Hobot Code 运行时不依赖板端 Node.js。Pi package 若包含 npm 依赖，安装过程仍需要可用的 `npm`，或在 `settings.json` 中配置 `npmCommand`；Git 来源还需要 `git` 和相应网络或 SSH 凭据。
 
-可按进程覆盖：
+## 路径与开发覆盖
+
+所有路径覆盖必须使用绝对路径。启动器和 RDK 扩展都会拒绝相对值，不会按当前工作目录静默展开。前三项决定 `hobot.env` 的查找位置，只能在启动进程的外部环境中设置；其余项也可以写入 `hobot.env`：
+
+| 环境变量 | 默认值或用途 |
+|---|---|
+| `XDG_CONFIG_HOME` | 默认 `$HOME/.config`；仅限启动前设置 |
+| `XDG_STATE_HOME` | 默认 `$HOME/.local/state`；仅限启动前设置 |
+| `HOBOT_CODE_CONFIG_DIR` | `${XDG_CONFIG_HOME:-$HOME/.config}/hobot-code`；仅限启动前设置 |
+| `HOBOT_CODE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/hobot-code` |
+| `HOBOT_CODING_AGENT_DIR` | `<config-root>/agent` |
+| `HOBOT_CODING_AGENT_SESSION_DIR` | `<state-root>/sessions` |
+| `HOBOT_CODE_PERMISSION_POLICY` | 权限策略文件 |
+| `HOBOT_CODE_MEMORY_CONFIG`、`HOBOT_CODE_MEMORY_DB` | 记忆配置与数据库 |
+| `HOBOT_CODE_GOAL_CONFIG`、`HOBOT_CODE_GOAL_DB` | 目标配置与数据库 |
+| `HOBOT_CODE_HOOK_CONFIG`、`HOBOT_CODE_HOOK_AUDIT` | Hook 配置与审计 |
+| `HOBOT_CODE_NOTIFICATION_CONFIG` | 通知配置 |
+| `HOBOT_CODE_LSP_CONFIG` | LSP 配置 |
+| `HOBOT_CODE_RDK_KNOWLEDGE_DIR`、`HOBOT_CODE_RDK_EXPERT_PROMPT` | 版本化知识目录与专家 Prompt 文件 |
+
+例如，在调用 `hobot` 前为一次测试使用隔离目录：
 
 ```bash
-HOBOT_CODING_AGENT_DIR=/tmp/hobot-agent hobot
-HOBOT_CODING_AGENT_SESSION_DIR=/tmp/hobot-sessions hobot
+HOBOT_CODE_CONFIG_DIR=/tmp/hobot-config \
+HOBOT_CODE_STATE_DIR=/tmp/hobot-state \
+hobot
 ```
 
-`PI_SKIP_VERSION_CHECK=1` 默认开启，避免 Hobot Code 被 Pi 的自更新提示误导。Hobot Code 的 Pi
-运行时升级必须修改 `pi-runtime/pi.lock`、重新构建并完成板端回归。
+`PI_SKIP_VERSION_CHECK=1` 默认开启，避免 Pi 的自更新提示绕过 Hobot Code 的版本锁。升级 Pi 运行时必须更新 `pi-runtime/pi.lock`、重新构建并完成板端回归。
 
-知识目录可在开发和测试时按进程覆盖：
+知识库与专家 Prompt 可在开发时覆盖：
 
 ```bash
-HOBOT_CODE_RDK_KNOWLEDGE_DIR=/path/to/knowledge hobot
-HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
+HOBOT_CODE_RDK_KNOWLEDGE_DIR=/path/to/knowledge \
+HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md \
+hobot
 ```
 
-生产环境建议使用安装包内的只读知识目录。更新知识时修改 `knowledge/manifest.json` 的
-`knowledgeVersion` 和 `updatedAt`，运行 `make pi-check` 后重新打包；不要直接在板端堆放
-没有版本和来源的零散说明。
+生产环境应使用安装包内的版本化知识目录。知识更新需要同步修改 `knowledge/manifest.json` 的 `knowledgeVersion` 和 `updatedAt`，再运行 `make check`。
 
-专家模板中的 `BOARD_NAME`、`BOARD_ID`、`RDK_OS_VERSION`、`DOCUMENTATION_TRACK`、
-`HOSTNAME` 和 `ARCHITECTURE` 占位符由扩展动态替换。修改模板后运行 `make pi-check`，
-可在板端用 `/system-prompt` 检查最终内容。
+## 构建覆盖
+
+`make release` 默认把下载的 Pi 归档缓存在 `dist/pi-cache`。无法稳定访问 GitHub Releases 时，可复用已下载归档，并提供已解压的 `fd`、`rg` 及许可证：
+
+```bash
+HOBOT_CODE_PI_CACHE_DIR=/path/to/pi-cache \
+HOBOT_CODE_TOOL_BUNDLE_DIR=/path/to/tool-bundle \
+make release
+```
+
+构建脚本仍会依据 `pi-runtime/pi.lock` 和 `pi-runtime/tools.lock` 校验版本、文件与 SHA256；缓存不会绕过完整性检查。
+
+正式发行默认拒绝脏工作区，确保归档可追溯到确定提交。本地验证尚未提交的改动时可以显式构建开发包：
+
+```bash
+HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
+```
+
+开发包会在发行元数据中标记为 dirty，不应作为正式产物分发。发行目录中的 `BUILD_INFO.json` 记录提交、构建时间和锁定组件，`MANIFEST.sha256` 覆盖包内文件；归档旁还会生成同名 `.sha256` 文件，传输到板卡后应在解压前校验。
+
+受控构建可以在调用前设置非负整数 `SOURCE_DATE_EPOCH`，控制 `BUILD_INFO.json` 的构建时间，并统一包内文件与目录的时间戳。它只是可复现构建的一部分；归档排序、权限规范化和确定性的 gzip 输出同样由构建流程负责。
 
 ## 工具权限
 
-规则按数组顺序匹配，第一条命中规则生效；未命中时使用 `default`。`mcp:*` 匹配所有 MCP
-来源工具，普通 `*` 可用于工具名通配。示例：
+`~/.config/hobot-code/agent/permissions.json` 按数组顺序匹配，第一条命中规则生效；未命中时使用 `default`。`mcp:*` 匹配所有 MCP 来源工具，普通 `*` 可用于工具名通配。
 
 ```json
 {
@@ -132,15 +159,20 @@ HOBOT_CODE_RDK_EXPERT_PROMPT=/path/to/rdk-expert.md hobot
 }
 ```
 
-`/permissions set <pattern> <action>` 会把规则放到数组开头并原子写回配置。配置不存在或无效时
-使用内置的保守默认值并显示警告。deny 工具从 Pi 活跃工具集合中移除，工具调用阶段仍会再次
-检查，防止动态插件绕过。旧版 schema 1 配置会自动迁移；其中可能修改系统的 allow 规则会降级为
-ask。root 会话中的 Shell、写入和编辑始终逐次确认，非交互 root 会话拒绝这些操作。密钥、
-Bearer Token 和常见 secret 字段不会出现在确认详情中。
+`/permissions set <pattern> <action>` 将规则放到数组开头并原子写回。配置缺失或无效时使用内置保守默认值并显示警告。`deny` 工具从活跃工具集合移除，调用时仍会复核；旧版 schema 1 中可能修改系统的 `allow` 规则会降级为 `ask`。
+
+硬安全边界高于用户规则：
+
+- 内置 `write`、`edit` 禁止修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
+- 内置工具写入工作区外，以及 Shell 命中破坏性规则时，需要交互确认。
+- root 会话的 `bash`、`write`、`edit` 始终逐次确认；非交互 root 会话拒绝这些调用。
+- 确认详情会尽力隐藏 token、Bearer Token 和常见 secret 字段。
+
+默认策略允许 `memory_search`，将 `memory_save` 设为 `ask`。这意味着默认每次由模型发起的记忆写入都要确认，但用户可以修改该规则；直接执行 `/memory add` 本身就是明确的用户操作。
 
 ## 质量门
 
-项目配置格式：
+项目质量门位于 `<project>/.hobot/quality-gates.json`：
 
 ```json
 {
@@ -150,11 +182,11 @@ Bearer Token 和常见 secret 字段不会出现在确认详情中。
 }
 ```
 
-每个会话会从项目配置初始化，然后用 Pi custom entry 持久化会话覆盖和最近运行结果。
-`/gate set`、`add`、`remove`、`timeout` 和 `clear` 只改变当前会话，`/gate reload` 重新加载项目
-配置。命令顺序执行，首个失败即停止，输出脱敏并截断；通过结果记录当前工作区指纹。
+`/init` 可以在缺失时创建该文件和 `AGENTS.md`。每个会话从项目配置初始化，`/gate set`、`add`、`remove`、`timeout` 与 `clear` 只修改当前会话覆盖；`/gate reload` 重新加载项目文件。
 
-## 持久化记忆
+命令依次执行，首个失败即停止，输出会脱敏并截断。通过结果绑定运行后的工作区指纹；之后的修改会将其标记为 `stale`。
+
+## 持久记忆
 
 `~/.config/hobot-code/agent/memory.json` 默认值：
 
@@ -170,25 +202,25 @@ Bearer Token 和常见 secret 字段不会出现在确认详情中。
 }
 ```
 
-`maxInjected` 是每轮自动召回的最大条数，`maxSearchResults` 是单次显式检索上限，
-`defaultExpiresDays` 为 `null` 时不自动过期。修改后执行 `/memory reload`。开发测试可用
-`HOBOT_CODE_MEMORY_CONFIG`、`HOBOT_CODE_MEMORY_DB` 和 `HOBOT_CODE_MEMORY_USER` 覆盖路径或本地用户键。
+`maxInjected` 是每轮自动召回上限，`maxSearchResults` 是显式检索上限，`defaultExpiresDays=null` 表示默认不自动过期。修改后执行 `/memory reload`。
 
-作用域为 `user`、`project`、`board`、`session`；类型为 `preference`、`decision`、`fact`、
-`fix`、`instruction`、`note`。重复内容会刷新时间而不是新建副本。写入、检索、删除、
-清空和过期操作都写审计事件，审计详情只保存内容哈希和作用域，不复制记忆正文。
+记忆按 `user`、`project`、`board`、`session` 隔离，可使用 `preference`、`decision`、`fact`、`fix`、`instruction`、`note` 类型。重复内容刷新时间而不新增副本。审计只保存内容哈希和作用域，不复制记忆正文；疑似密钥、私钥和银行卡号会在存储层被拒绝。
+
+开发测试还可使用 `HOBOT_CODE_MEMORY_USER` 覆盖本地用户键。记忆是可能过期的辅助上下文，不能覆盖当前用户指令或实时板卡证据。
 
 ## 侧边 Agent 并发
 
-`/btw` 在每个主会话中最多打开一个侧边 Agent。板卡级并发上限默认为 2，可设置为 1 到 8：
+每个主会话最多打开一个 `/btw` 侧边 Agent。同一 OS 用户的全部 Hobot Code 进程默认合计最多运行两个：
 
-```sh
+```bash
 HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 ```
 
-多个终端进程通过板卡本地的原子租约共同计数，进程异常退出留下的陈旧租约会被自动回收。
+有效范围为 1 到 8。租约存放在按 UID 隔离的本地临时目录中，因此这是同一用户的并发限制，不是跨用户的整板全局限制；陈旧租约会自动回收。上下文继承、禁止能力和副作用边界见 README 的[侧边 Agent](../README.md#侧边-agent)章节。
 
 ## 持久目标
+
+`~/.config/hobot-code/agent/goals.json` 默认值：
 
 ```json
 {
@@ -199,11 +231,11 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 }
 ```
 
-`defaultTokenBudget=null` 表示新目标默认只限制 turn；用户可在 `/goal create` 中同时指定两种预算。
-每个工作区只允许一个 active/paused 目标。每次 Pi turn 累加 token 和执行时间；预算耗尽时
-状态变为 paused，只能由用户 `/goal extend` 增加预算。
+`defaultTokenBudget=null` 表示新目标默认只限制 turn。每个工作区只允许一个 active 或 paused 目标；预算耗尽后状态变为 paused，只能由用户通过 `/goal extend` 增加预算。模型完成目标时仍需满足当前质量门。
 
-## Tool Hook
+## 工具 Hook
+
+`~/.config/hobot-code/agent/hooks.json` 示例：
 
 ```json
 {
@@ -225,19 +257,18 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 }
 ```
 
-Hook stdin 是 `{schemaVersion,event,toolName,toolCallId,cwd,input,result?}` JSON。成功时可不输出，或输出
-`{"block":true,"reason":"..."}`；PostToolUse 还可输出 `appendText` 和 `isError`。`failurePolicy=block`
-会阻止 Pre 调用或将 Post 结果标错；`warn` 只在 TUI 告警。Hook 不通过 Shell 解析命令数组。
+Hook 命令是未经 Shell 解析的 argv 数组。stdin 为 `{schemaVersion,event,toolName,toolCallId,cwd,input,result?}` JSON；成功时可不输出，或输出 `{"block":true,"reason":"..."}`。PostToolUse 还可返回 `appendText` 与 `isError`。
+
+`failurePolicy=block` 会阻止 Pre 调用或把 Post 结果标记为错误，`warn` 只在 TUI 告警。项目 `.hobot/hooks.json` 默认不执行，必须由全局配置显式设置 `allowProjectHooks=true`。
 
 ## SSH 通知
 
-`notifications.json` 支持 `osc9`、`osc777`、`both` 协议，可分别控制批准等待、完成和失败通知。
-`allowLocal=false` 表示只在检测到 `SSH_CONNECTION` 时发送；`minDurationMs` 避免短任务频繁弹出。
-RPC、print 和 JSON 模式不写 OSC 序列。
+`~/.config/hobot-code/agent/notifications.json` 支持 `osc9`、`osc777` 和 `both`，可分别控制批准等待、完成与失败通知。`minDurationMs` 用于抑制短任务通知。
+
+通知只在交互 TUI 中尝试发送，并要求 `stderr` 是 TTY。`allowLocal=false` 时还必须检测到 `SSH_CONNECTION`；print、JSON 和 RPC 模式不会写入 OSC 通知序列。使用 `/notifications test` 验证当前终端是否支持，或用 `/notifications off` 关闭。
 
 ## 资源感知 LSP
 
-`lsp.json` 用 `extensions` 匹配文件，`command` 是不经 Shell 解析的 argv 数组。`maxProcesses`、
-`maxMemoryMiB`、`idleTimeoutMs`、`requestTimeoutMs` 分别约束进程数、单进程 RSS、空闲回收和
-单请求时间。超过进程数时回收最久未使用实例；超过 RSS 时强制停止语言服务器。
-未安装命令时 `lsp status` 报告 `installed=false`，不会自动下载或常驻进程。
+`~/.config/hobot-code/agent/lsp.json` 使用 `extensions` 匹配文件，`command` 是未经 Shell 解析的 argv 数组。`maxProcesses`、`maxMemoryMiB`、`idleTimeoutMs` 和 `requestTimeoutMs` 分别约束进程数、单进程 RSS、空闲回收与单次请求时间。
+
+语言服务器只在实际请求且命令存在时启动。超过进程数时回收最久未使用实例，超过 RSS 时停止对应服务；未安装命令时 `lsp status` 显示 `installed=false`，不会自动下载。基础发行包不捆绑语言服务器。

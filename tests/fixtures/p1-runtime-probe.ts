@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { GoalStore } from "../../extensions/rdk/goal-store.ts";
 import { runHooks } from "../../extensions/rdk/hook-runner.ts";
 import { LspManager } from "../../extensions/rdk/lsp-manager.ts";
+import { MemoryStore } from "../../extensions/rdk/memory-store.ts";
 
 export default function p1RuntimeProbe(pi: ExtensionAPI) {
   pi.registerCommand("p1-probe", {
@@ -25,6 +26,50 @@ export default function p1RuntimeProbe(pi: ExtensionAPI) {
       const completed = goalStore.complete({ project: root, outcome: "probe passed", actor: "user", verificationStatus: "passed" });
       if (completed.status !== "completed") throw new Error("goal completion failed");
       goalStore.close();
+      const readOnlyGoalStore = new GoalStore(resolve(root, "goals.db"), { readOnly: true });
+      if (readOnlyGoalStore.history(root).length !== 1) throw new Error("read-only goal history failed");
+      let readOnlyGoalRejected = false;
+      try {
+        readOnlyGoalStore.create({ project: resolve(root, "readonly"), objective: "must fail", turnBudget: 2 });
+      } catch {
+        readOnlyGoalRejected = true;
+      }
+      readOnlyGoalStore.close();
+      if (!readOnlyGoalRejected) throw new Error("read-only goal mutation succeeded");
+
+      const memoryStore = new MemoryStore(resolve(root, "memory.db"), { maintenance: false });
+      const memoryContext = { user: "probe", project: root, board: "probe", session: "one" };
+      const memoryInput = {
+        scope: "project" as const,
+        kind: "fact" as const,
+        content: "P1 runtime probe validates Bun SQLite FTS5",
+        context: memoryContext,
+        sourceSession: "one",
+        maxContentChars: 4000,
+        actor: "probe",
+      };
+      const firstMemory = memoryStore.add(memoryInput);
+      const duplicateMemory = memoryStore.add(memoryInput);
+      const recalledMemory = memoryStore.search("SQLite FTS5", memoryContext, undefined, 5, null);
+      if (!firstMemory.created || duplicateMemory.created || duplicateMemory.record.id !== firstMemory.record.id) {
+        throw new Error("memory create or deduplication failed");
+      }
+      if (!recalledMemory.some((record) => record.id === firstMemory.record.id)) {
+        throw new Error("memory FTS5 recall failed");
+      }
+      memoryStore.close();
+      const readOnlyMemoryStore = new MemoryStore(resolve(root, "memory.db"), { readOnly: true });
+      if (readOnlyMemoryStore.search("SQLite FTS5", memoryContext, undefined, 5).length !== 1) {
+        throw new Error("read-only memory search failed");
+      }
+      let readOnlyMemoryRejected = false;
+      try {
+        readOnlyMemoryStore.add({ ...memoryInput, content: "read-only memory mutation must fail" });
+      } catch {
+        readOnlyMemoryRejected = true;
+      }
+      readOnlyMemoryStore.close();
+      if (!readOnlyMemoryRejected) throw new Error("read-only memory mutation succeeded");
 
       const hookConfig = {
         schemaVersion: 1 as const,

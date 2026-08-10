@@ -27,6 +27,7 @@ export async function* iterateAnthropicSse(body, options = {}) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   try {
     while (true) {
       if (options.signal?.aborted) throw new Error("Request was aborted");
@@ -50,7 +51,9 @@ export async function* iterateAnthropicSse(body, options = {}) {
       const event = decodeEvent(buffer);
       if (event) yield event;
     }
+    completed = true;
   } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
@@ -61,6 +64,7 @@ export async function readBoundedBody(response, maxBytes) {
   const decoder = new TextDecoder();
   let total = 0;
   let text = "";
+  let completed = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -70,8 +74,10 @@ export async function readBoundedBody(response, maxBytes) {
       text += decoder.decode(value, { stream: true });
     }
     text += decoder.decode();
+    completed = true;
     return text;
   } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }

@@ -87,9 +87,18 @@ function lexicalScore(content: string, query: string): number {
 }
 
 export class MemoryStore {
+  readonly path: string;
   private readonly db: Database;
+  private readonly readOnly: boolean;
 
-  constructor(readonly path: string) {
+  constructor(path: string, options: { maintenance?: boolean; readOnly?: boolean } = {}) {
+    this.path = path;
+    this.readOnly = options.readOnly ?? false;
+    if (this.readOnly) {
+      this.db = new Database(path, { readonly: true });
+      this.db.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 3000;");
+      return;
+    }
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new Database(path, { create: true });
     chmodSync(path, 0o600);
@@ -151,7 +160,7 @@ export class MemoryStore {
         details TEXT NOT NULL
       );
     `);
-    this.pruneExpired("system");
+    if (options.maintenance ?? true) this.pruneExpired("system");
   }
 
   private audit(event: string, memoryId: string | undefined, actor: string, details: Record<string, unknown>): void {
@@ -159,6 +168,10 @@ export class MemoryStore {
       "INSERT INTO memory_events(event, memory_public_id, actor, created_at, details) VALUES (?, ?, ?, ?, ?)",
       [event, memoryId ?? null, actor, new Date().toISOString(), JSON.stringify(details)],
     );
+  }
+
+  private transaction<T>(operation: () => T): T {
+    return this.db.transaction(operation).immediate();
   }
 
   private accessibleRow(id: string, context: MemoryContext): MemoryRow | null {
@@ -188,54 +201,51 @@ export class MemoryStore {
       ? new Date(Date.now() + options.expiresDays * 86_400_000).toISOString()
       : null;
     const hash = sha256(input.content);
-    const existing = this.db.query(`
-      SELECT public_id, scope, kind, content, created_at, updated_at, expires_at
-      FROM memories
-      WHERE scope = ? AND scope_key = ? AND kind = ? AND content_hash = ?
-    `).get(options.scope, key, options.kind, hash) as MemoryRow | null;
-
-    if (existing) {
-      this.db.run(
-        "UPDATE memories SET updated_at = ?, source_session = ?, expires_at = ? WHERE public_id = ?",
-        [now, options.sourceSession ?? null, expiresAt, existing.public_id],
-      );
-      const updated = this.accessibleRow(existing.public_id, options.context);
-      if (!updated) throw new Error("failed to reload deduplicated memory");
-      this.audit("refresh", existing.public_id, options.actor, {
+    return this.transaction(() => {
+      const candidateId = `mem_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      const inserted = this.db.query(`
+        INSERT INTO memories(
+          public_id, scope, scope_key, kind, content, content_hash,
+          source_session, created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scope, scope_key, kind, content_hash) DO NOTHING
+        RETURNING public_id
+      `).get(
+        candidateId,
+        options.scope,
+        key,
+        options.kind,
+        input.content,
+        hash,
+        options.sourceSession ?? null,
+        now,
+        now,
+        expiresAt,
+      ) as { public_id: string } | null;
+      const created = inserted?.public_id === candidateId;
+      let memoryId = candidateId;
+      if (!created) {
+        const existing = this.db.query(`
+          SELECT public_id FROM memories
+          WHERE scope = ? AND scope_key = ? AND kind = ? AND content_hash = ?
+        `).get(options.scope, key, options.kind, hash) as { public_id: string } | null;
+        if (!existing) throw new Error("failed to reload deduplicated memory");
+        memoryId = existing.public_id;
+        this.db.run(
+          "UPDATE memories SET updated_at = ?, source_session = ?, expires_at = ? WHERE public_id = ?",
+          [now, options.sourceSession ?? null, expiresAt, memoryId],
+        );
+      }
+      const record = this.accessibleRow(memoryId, options.context);
+      if (!record) throw new Error(`failed to reload ${created ? "created" : "deduplicated"} memory`);
+      this.audit(created ? "create" : "refresh", memoryId, options.actor, {
         scope: options.scope,
         kind: options.kind,
         contentHash: hash,
+        ...(created ? { expiresAt } : {}),
       });
-      return { record: toRecord(updated), created: false };
-    }
-
-    const publicId = `mem_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    this.db.run(`
-      INSERT INTO memories(
-        public_id, scope, scope_key, kind, content, content_hash,
-        source_session, created_at, updated_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      publicId,
-      options.scope,
-      key,
-      options.kind,
-      input.content,
-      hash,
-      options.sourceSession ?? null,
-      now,
-      now,
-      expiresAt,
-    ]);
-    this.audit("create", publicId, options.actor, {
-      scope: options.scope,
-      kind: options.kind,
-      contentHash: hash,
-      expiresAt,
+      return { record: toRecord(record), created };
     });
-    const created = this.accessibleRow(publicId, options.context);
-    if (!created) throw new Error("failed to reload created memory");
-    return { record: toRecord(created), created: true };
   }
 
   search(
@@ -288,13 +298,15 @@ export class MemoryStore {
       rows.push(...fallback);
     }
 
-    if (auditActor) {
-      const now = new Date().toISOString();
-      for (const row of rows) this.db.run("UPDATE memories SET last_used_at = ? WHERE public_id = ?", [now, row.public_id]);
-      this.audit("search", undefined, auditActor, {
-        queryHash: sha256(normalized),
-        scopes: scopes ?? ["user", "project", "board", "session"],
-        resultCount: rows.length,
+    if (auditActor && !this.readOnly) {
+      this.transaction(() => {
+        const now = new Date().toISOString();
+        for (const row of rows) this.db.run("UPDATE memories SET last_used_at = ? WHERE public_id = ?", [now, row.public_id]);
+        this.audit("search", undefined, auditActor, {
+          queryHash: sha256(normalized),
+          scopes: scopes ?? ["user", "project", "board", "session"],
+          resultCount: rows.length,
+        });
       });
     }
     return rows.map(toRecord);
@@ -318,39 +330,42 @@ export class MemoryStore {
   }
 
   forget(id: string, context: MemoryContext, actor: string): boolean {
-    const row = this.accessibleRow(id, context);
-    if (!row) return false;
-    this.db.run("DELETE FROM memories WHERE public_id = ?", [id]);
-    this.audit("delete", id, actor, {
-      scope: row.scope,
-      kind: row.kind,
-      contentHash: sha256(row.content),
+    return this.transaction(() => {
+      const row = this.accessibleRow(id, context);
+      if (!row) return false;
+      this.db.run("DELETE FROM memories WHERE public_id = ?", [id]);
+      this.audit("delete", id, actor, {
+        scope: row.scope,
+        kind: row.kind,
+        contentHash: sha256(row.content),
+      });
+      return true;
     });
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    return true;
   }
 
   clear(scope: MemoryScope, context: MemoryContext, actor: string): number {
     const key = scopeKey(scope, context);
     if (!key) return 0;
-    const row = this.db.query("SELECT count(*) AS count FROM memories WHERE scope = ? AND scope_key = ?")
-      .get(scope, key) as { count: number };
-    this.db.run("DELETE FROM memories WHERE scope = ? AND scope_key = ?", [scope, key]);
-    this.audit("clear", undefined, actor, { scope, count: row.count });
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    this.db.exec("VACUUM");
-    return row.count;
+    return this.transaction(() => {
+      const row = this.db.query("SELECT count(*) AS count FROM memories WHERE scope = ? AND scope_key = ?")
+        .get(scope, key) as { count: number };
+      this.db.run("DELETE FROM memories WHERE scope = ? AND scope_key = ?", [scope, key]);
+      this.audit("clear", undefined, actor, { scope, count: row.count });
+      return row.count;
+    });
   }
 
   pruneExpired(actor: string): number {
     const now = new Date().toISOString();
-    const row = this.db.query("SELECT count(*) AS count FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?")
-      .get(now) as { count: number };
-    if (row.count > 0) {
-      this.db.run("DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?", [now]);
-      this.audit("expire", undefined, actor, { count: row.count });
-    }
-    return row.count;
+    return this.transaction(() => {
+      const row = this.db.query("SELECT count(*) AS count FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?")
+        .get(now) as { count: number };
+      if (row.count > 0) {
+        this.db.run("DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?", [now]);
+        this.audit("expire", undefined, actor, { count: row.count });
+      }
+      return row.count;
+    });
   }
 
   stats(context: MemoryContext): { total: number; byScope: Record<string, number>; databaseBytes: number } {
@@ -394,7 +409,7 @@ export class MemoryStore {
 
   close(): void {
     try {
-      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      if (!this.readOnly) this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } finally {
       this.db.close();
     }

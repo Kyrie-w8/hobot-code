@@ -1,19 +1,28 @@
 # Changelog
 
+## 0.12.2
+
+- Split the D-Robotics gateway into a focused provider module and preserve valid Unicode while rejecting malformed text.
+- Bound total gateway, Hook, LSP, and workspace-fingerprint memory use for predictable operation on embedded boards.
+- Bound LSP diagnostic retention and shutdown latency, reject relative runtime path overrides, and keep `/btw` within narrow terminals.
+- Make memory deduplication and persistent-goal transitions transactional, keep side-agent memory reads non-mutating, and ignore untrusted project quality gates.
+- Harden release provenance, package closure validation, environment parsing, installation, and complete command rollback.
+- Reorganize the project documentation around installation and daily workflows, with contributor guidance, security reporting, and CI.
+
 ## 0.12.1
 
 - Upgrade `/btw` from a one-shot response to a persistent, private multi-turn RPC Agent with an in-overlay input line.
-- Present `/btw` as a full-height right-side 50% pane and cap board-wide side-agent concurrency (default 2, configurable up to 8).
+- Present `/btw` as a full-height right-side 50% pane and cap same-user side-agent concurrency (default 2, configurable up to 8).
 - Keep the side conversation, thinking stream, tool activity, and usage visible across follow-up turns until the user closes it.
 - Forward confirmation, selection, and input requests from the side process into the overlay while preserving close-time deletion and parent-session isolation.
 - Stream D-Robotics Anthropic responses as SSE with bounded buffered fallback, explicit stop-reason handling, visible thinking, and payload limits.
-- Harden tool execution with realpath-aware workspace boundaries, destructive-command detection, credential-free child environments, project-hook trust, and mandatory root mutation confirmation.
-- Make installation and rollback transactional with locking, process and disk preflight checks, staged self-tests, command backups, and failure restoration.
+- Harden tool execution with realpath-aware workspace boundaries, destructive-command detection, credential-free Hook/LSP environments, project-hook trust, and mandatory root confirmation for `bash`, `write`, and `edit`.
+- Make runtime and command swaps transactional with locking, process preflight checks, staged self-tests, command backups, and failure restoration.
 - Improve resource lifecycle cleanup, relevant-only memory recall, Chinese knowledge search, accurate quality-gate mutation tracking, readable doctor/knowledge output, and version provenance checks.
 
 ## 0.12.0
 
-- Add `/btw <task>` as an ephemeral full-capability side agent that can run while the parent Agent continues.
+- Add `/btw <task>` as an ephemeral independent coding agent that can run while the parent Agent continues.
 - Snapshot the parent session's in-memory branch, effective system prompt, model, thinking level, active tools, trust state, and scoped memory context without writing side messages back.
 - Add a live, scrollable overlay with tool activity, streamed output, usage, cancellation, bounded event handling, and guaranteed temporary-session cleanup.
 - Preserve workspace and device side effects while preventing side sessions from consuming persistent-goal budgets or writing parent memory and goal state.

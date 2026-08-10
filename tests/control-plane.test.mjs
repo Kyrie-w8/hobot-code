@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,6 +22,7 @@ import {
   parseNotificationConfig,
   parsePolicy,
   parseQualityConfig,
+  reconcileToolVisibility,
   resolveToolAction,
   sensitiveMemoryReasons,
   setPolicyRule,
@@ -50,6 +51,35 @@ test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   assert.equal(resolveToolAction(denied, "read"), "allow");
 });
 
+test("permission changes restore only tools hidden by the permission layer", () => {
+  const initiallyRestricted = reconcileToolVisibility(
+    ["read", "bash", "write"],
+    ["read"],
+    new Set(),
+    ["bash"],
+  );
+  assert.deepEqual(initiallyRestricted.activeTools, ["read"]);
+  assert.deepEqual([...initiallyRestricted.hiddenTools], []);
+
+  const hiddenByPolicy = reconcileToolVisibility(
+    ["read", "bash", "write"],
+    ["read", "bash"],
+    new Set(),
+    ["bash"],
+  );
+  assert.deepEqual(hiddenByPolicy.activeTools, ["read"]);
+  assert.deepEqual([...hiddenByPolicy.hiddenTools], ["bash"]);
+
+  const restored = reconcileToolVisibility(
+    ["read", "bash", "write"],
+    hiddenByPolicy.activeTools,
+    hiddenByPolicy.hiddenTools,
+    [],
+  );
+  assert.deepEqual(restored.activeTools, ["read", "bash"]);
+  assert.deepEqual([...restored.hiddenTools], []);
+});
+
 test("child processes do not inherit credentials or runtime injection variables", () => {
   const env = sanitizedChildEnv({
     PATH: "/usr/bin",
@@ -57,7 +87,11 @@ test("child processes do not inherit credentials or runtime injection variables"
     ANTHROPIC_AUTH_TOKEN: "secret",
     OPENAI_API_KEY: "secret",
     NODE_OPTIONS: "--require=/tmp/inject.js",
+    NODE_PATH: "/tmp/node-inject",
     LD_PRELOAD: "/tmp/inject.so",
+    LD_LIBRARY_PATH: "/tmp/linker-inject",
+    PYTHONPATH: "/tmp/python-inject",
+    RUBYLIB: "/tmp/ruby-inject",
   });
   assert.deepEqual(env, { PATH: "/usr/bin", LANG: "C.UTF-8" });
 });
@@ -182,6 +216,23 @@ test("workspace fingerprint changes after a source edit", async () => {
     await writeFile(join(root, "source.txt"), "two\n");
     const after = await fingerprintWorkspace(root);
     assert.notEqual(before.digest, after.digest);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace fingerprint ignores generated trees and rejects oversized source files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-fingerprint-limits-"));
+  try {
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, "dist", "generated.js"), "one\n");
+    const before = await fingerprintWorkspace(root);
+    await writeFile(join(root, "dist", "generated.js"), "two\n");
+    const after = await fingerprintWorkspace(root);
+    assert.equal(before.digest, after.digest);
+
+    await writeFile(join(root, "oversized.ts"), Buffer.alloc(8 * 1024 * 1024 + 1));
+    await assert.rejects(() => fingerprintWorkspace(root), /source file exceeds/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
