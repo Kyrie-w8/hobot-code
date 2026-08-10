@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.9
+
+- Define the user-facing Agent identity as Hobot Code; underlying models and runtimes remain implementation details.
+- Rename the `/system-prompt` composition label from `Pi base` to `Core agent` and validate release prompts against identity regressions.
+
 ## 0.12.8
 
 - Treat Shell redirects to `/dev/null` as routine output suppression instead of protected-device writes.

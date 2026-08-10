@@ -361,7 +361,7 @@ async function renderExpertPrompt(snapshot: BoardSnapshot): Promise<string> {
   try {
     prompt = await readFile(promptPath, "utf8");
   } catch {
-    prompt = `${EXPERT_PROMPT_MARKER}\n\nYou are a D-Robotics RDK embedded AI expert. Use rdk_docs_search for versioned platform knowledge and system_snapshot for live evidence. Do not make specialized claims while the complete expert prompt file is unavailable.`;
+    prompt = `${EXPERT_PROMPT_MARKER}\n\nYou are Hobot Code, D-Robotics' terminal Agent for RDK boards. Always identify as Hobot Code; models and runtimes are implementation details. Use rdk_docs_search for versioned platform knowledge and system_snapshot for live evidence. Do not make specialized claims while the complete expert prompt file is unavailable.`;
   }
 
   const replacements: Record<string, string> = {
@@ -2203,7 +2203,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify([
-        `Pi base: ${promptSnapshot.baseChars} chars`,
+        `Core agent: ${promptSnapshot.baseChars} chars`,
         `RDK overlay: ${promptSnapshot.rdkChars} chars`,
         `Conditional state: ${promptSnapshot.dynamicChars} chars`,
         `Total: ${promptSnapshot.text.length} chars`,
