@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.7
+
+- Repair interrupted tool-call history at request time so sessions stopped during approval or execution can resume without invalid gateway payloads.
+- Reload the shared permission policy before every tool call and `/permissions` operation, keeping concurrent terminals consistent without restarts.
+- Preserve mandatory confirmation for destructive Shell commands and writes outside the workspace even when root policy mode honors an explicit `allow` rule.
+
 ## 0.12.6
 
 - Add explicit root permission modes: the safe `confirm` default and opt-in `policy` mode, which honors persistent `allow/ask/deny` rules for routine root operations.

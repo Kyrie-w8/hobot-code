@@ -797,6 +797,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
     return resolveToolAction(permissionPolicy, toolName, isMcpTool(info ?? toolName)) as PermissionAction;
   }
 
+  async function refreshPermissionPolicy(): Promise<void> {
+    const loaded = await loadPolicy(permissionPolicyPath());
+    permissionPolicy = loaded.policy as PermissionPolicy;
+    permissionPolicyError = loaded.error;
+  }
+
   function toolIsMcp(toolName: string): boolean {
     const info = pi.getAllTools().find((tool) => tool.name === toolName);
     return isMcpTool(info ?? toolName);
@@ -1299,6 +1305,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    await refreshPermissionPolicy();
     applyDeniedTools();
     if (sideAgentMode) return undefined;
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
@@ -1463,6 +1470,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    // Policies are shared across processes; read the authoritative file for every call.
+    await refreshPermissionPolicy();
     if (sideAgentMode && ["memory_save", "goal_progress", "goal_complete"].includes(event.toolName)) {
       return { block: true, reason: `${event.toolName} cannot write parent state from an ephemeral side agent` };
     }
@@ -1604,10 +1613,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
       const input = String(args ?? "").trim();
       const [operation = "status", first, second] = input.split(/\s+/);
       try {
-        if (operation === "reload") {
-          const loaded = await loadPolicy(permissionPolicyPath());
-          permissionPolicy = loaded.policy as PermissionPolicy;
-          permissionPolicyError = loaded.error;
+        await refreshPermissionPolicy();
+        if (operation === "reload" || operation === "status") {
+          // Refreshing above is the complete operation.
         } else if (operation === "set") {
           if (!first || !second) throw new Error("Usage: /permissions set <tool-pattern|mcp:*> <allow|ask|deny>");
           permissionPolicy = await writePolicy(
@@ -1631,7 +1639,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
             parsePolicy({ ...permissionPolicy, rootMode: first }),
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
-        } else if (operation !== "status") {
+        } else {
           throw new Error("Usage: /permissions [status|reload|set <pattern> <action>|default <action>|root <confirm|policy>]");
         }
 

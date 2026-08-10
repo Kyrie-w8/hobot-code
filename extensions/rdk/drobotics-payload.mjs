@@ -14,10 +14,26 @@ export function convertContentBlocks(content) {
 export function convertMessages(messages, options = {}) {
   const converted = [];
   const allowEmptyThinkingSignature = options.allowEmptyThinkingSignature === true;
+  let pendingToolCallIds = [];
+
+  const flushInterruptedToolCalls = () => {
+    if (pendingToolCallIds.length === 0) return;
+    converted.push({
+      role: "user",
+      content: pendingToolCallIds.map((toolCallId) => ({
+        type: "tool_result",
+        tool_use_id: toolCallId,
+        content: "Tool execution was interrupted before a result was recorded.",
+        is_error: true,
+      })),
+    });
+    pendingToolCallIds = [];
+  };
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.role === "user") {
+      flushInterruptedToolCalls();
       const content = typeof message.content === "string"
         ? toWellFormedText(message.content)
         : convertContentBlocks(message.content);
@@ -26,7 +42,9 @@ export function convertMessages(messages, options = {}) {
     }
 
     if (message.role === "assistant") {
+      flushInterruptedToolCalls();
       const content = [];
+      const toolCallIds = [];
       for (const block of message.content) {
         if (block.type === "text" && block.text) {
           content.push({ type: "text", text: toWellFormedText(block.text) });
@@ -43,30 +61,49 @@ export function convertMessages(messages, options = {}) {
           }
         } else if (block.type === "toolCall") {
           content.push({ type: "tool_use", id: block.id, name: block.name, input: block.arguments });
+          toolCallIds.push(block.id);
         }
       }
       if (content.length > 0) converted.push({ role: "assistant", content });
+      pendingToolCallIds = toolCallIds;
       continue;
     }
 
     if (message.role === "toolResult") {
       const results = [];
+      const seenToolCallIds = new Set();
       let current = message;
       while (true) {
-        results.push({
-          type: "tool_result",
-          tool_use_id: current.toolCallId,
-          content: convertContentBlocks(current.content),
-          is_error: current.isError,
-        });
+        if (pendingToolCallIds.includes(current.toolCallId) && !seenToolCallIds.has(current.toolCallId)) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: current.toolCallId,
+            content: convertContentBlocks(current.content),
+            is_error: current.isError,
+          });
+          seenToolCallIds.add(current.toolCallId);
+        }
         const next = messages[index + 1];
         if (!next || next.role !== "toolResult") break;
         index += 1;
         current = next;
       }
+      if (pendingToolCallIds.length === 0) continue;
+      for (const toolCallId of pendingToolCallIds) {
+        if (seenToolCallIds.has(toolCallId)) continue;
+        results.push({
+          type: "tool_result",
+          tool_use_id: toolCallId,
+          content: "Tool execution was interrupted before a result was recorded.",
+          is_error: true,
+        });
+      }
       converted.push({ role: "user", content: results });
+      pendingToolCallIds = [];
     }
   }
+
+  flushInterruptedToolCalls();
 
   return converted;
 }

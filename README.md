@@ -72,7 +72,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 此时安装器使用 `SUDO_USER` 作为目标用户。root 直接安装时目标用户默认为 root，无需 `sudo`，运行 `./install.sh` 即可；也可用 `HOBOT_CODE_INSTALL_USER` 显式指定其他目标用户，例如 `HOBOT_CODE_INSTALL_USER=developer ./install.sh`。
 
-目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。破坏性命令、工作区外写入和关键系统路径仍受保护。
+目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。权限文件会在每次工具调用前重新读取，因此设置会立即同步到同一用户已打开的其他会话。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
 ### 3. 配置模型
 

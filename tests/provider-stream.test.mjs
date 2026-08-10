@@ -287,6 +287,75 @@ test("gateway history replays unsigned thinking as text", () => {
   });
 });
 
+test("gateway history preserves complete tool-call sequences", () => {
+  const history = [
+    { role: "assistant", content: [
+      { type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } },
+      { type: "toolCall", id: "tool-2", name: "bash", arguments: { command: "pwd" } },
+    ] },
+    { role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "readme" }], isError: false },
+    { role: "toolResult", toolCallId: "tool-2", content: [{ type: "text", text: "/work" }], isError: false },
+  ];
+  assert.deepEqual(convertMessages(history), [
+    { role: "assistant", content: [
+      { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+      { type: "tool_use", id: "tool-2", name: "bash", input: { command: "pwd" } },
+    ] },
+    { role: "user", content: [
+      { type: "tool_result", tool_use_id: "tool-1", content: "readme", is_error: false },
+      { type: "tool_result", tool_use_id: "tool-2", content: "/work", is_error: false },
+    ] },
+  ]);
+});
+
+test("gateway history repairs interrupted and partial tool-call sequences", () => {
+  const interrupted = convertMessages([
+    { role: "assistant", content: [{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "sleep 1" } }] },
+    { role: "user", content: "continue" },
+  ]);
+  assert.deepEqual(interrupted[1], {
+    role: "user",
+    content: [{
+      type: "tool_result",
+      tool_use_id: "tool-1",
+      content: "Tool execution was interrupted before a result was recorded.",
+      is_error: true,
+    }],
+  });
+  assert.deepEqual(interrupted[2], { role: "user", content: "continue" });
+
+  const partial = convertMessages([
+    { role: "assistant", content: [
+      { type: "toolCall", id: "tool-1", name: "read", arguments: {} },
+      { type: "toolCall", id: "tool-2", name: "bash", arguments: {} },
+    ] },
+    { role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "ok" }], isError: false },
+  ]);
+  assert.deepEqual(partial[1].content, [
+    { type: "tool_result", tool_use_id: "tool-1", content: "ok", is_error: false },
+    {
+      type: "tool_result",
+      tool_use_id: "tool-2",
+      content: "Tool execution was interrupted before a result was recorded.",
+      is_error: true,
+    },
+  ]);
+});
+
+test("gateway history drops orphan tool results and closes dangling calls", () => {
+  assert.deepEqual(convertMessages([
+    { role: "toolResult", toolCallId: "orphan", content: [{ type: "text", text: "stale" }], isError: false },
+    { role: "user", content: "hello" },
+  ]), [{ role: "user", content: "hello" }]);
+
+  const dangling = convertMessages([
+    { role: "assistant", content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: {} }] },
+  ]);
+  assert.equal(dangling.length, 2);
+  assert.equal(dangling[1].content[0].tool_use_id, "tool-1");
+  assert.equal(dangling[1].content[0].is_error, true);
+});
+
 test("buffered gateway responses reject malformed runtime types", () => {
   const valid = {
     id: "msg_1",
