@@ -77,7 +77,7 @@ LSP 客户端仅在请求匹配语言且命令存在时启动。进程数、单�
 
 ## 侧边 Agent
 
-`/btw` 使用持续存活的独立 Pi RPC 子进程，不占用主 Agent 的事件循环、消息队列或会话树。主 Agent 空闲时，创建过程从 `SessionManager.getBranch()` 物化当前分支；主 Agent 运行时，则从本轮 `before_agent_start` 记录的稳定叶节点物化分支，并以 `agent_settled` 更新该边界。创建时还会校验分支结构，正在运行的 user、未闭合 assistant tool call 或 toolResult 后缀不会进入子进程。子进程还获得父会话当轮的有效系统 Prompt、模型、thinking 等级、工具集合和项目信任状态。
+`/btw` 使用持续存活的独立 Pi RPC 子进程，不占用主 Agent 的事件循环、消息队列或会话树。全屏模式下，主界面与侧边面板被挂载到同一个水平布局树；侧边输出使用 Pi 原生 `ScrollView`，使全屏渲染器可以按指针坐标路由滚轮。一个不消费事件的前置指针监听器只在鼠标主键按下时按横坐标切换输入焦点，随后仍由 Pi 处理文本选择、链接、滚轮和拖动。主 Agent 空闲时，创建过程从 `SessionManager.getBranch()` 物化当前分支；主 Agent 运行时，则从本轮 `before_agent_start` 记录的稳定叶节点物化分支，并以 `agent_settled` 更新该边界。创建时还会校验分支结构，正在运行的 user、未闭合 assistant tool call 或 toolResult 后缀不会进入子进程。子进程还获得父会话当轮的有效系统 Prompt、模型、thinking 等级、工具集合和项目信任状态。
 
 子进程不会重新扫描 Skills。父 Prompt 中已经生效的 Skill 指引会随快照保留，但它不是一套独立的 Skill discovery 流程。每轮输入追加到同一个临时会话，因此侧边对话可以多轮继续；只有 `agent_settled` 才开放下一轮输入。确认、选择和补充输入请求由右侧窗格按请求 ID 排队转交，审批最长等待两分钟。
 
@@ -100,3 +100,5 @@ Pi JSONL 会话位于 `~/.local/state/hobot-code/sessions`。Hobot Code 在同�
 安装器必须以 root 运行，并把用户配置与状态写入安装目标用户的 home。通过 `sudo` 调用时目标用户默认取 `SUDO_USER`；直接由 root 调用时默认为 root，也可用 `HOBOT_CODE_INSTALL_USER` 显式指定。升级只补充缺失的默认配置，不覆盖现有用户设置。
 
 升级前，旧命令与运行时会写入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`。回滚同样需要 root，并且只接受同时包含旧运行时与旧启动命令的完整备份；首次安装没有前一版本时不可回滚。成功恢复的备份会以 `.hobot-restored` 标记并拒绝再次使用，避免同一备份重复切换运行时。回滚不删除当前用户的配置、会话、记忆或目标。
+
+启动器的 `persistent` 子命令把同一个 Hobot Code TUI 置于当前用户的 `tmux` 会话中。终端连接只是可分离的客户端，因此 SSH 断开不触发 Agent 或工具进程退出；重新附着后继续使用同一个进程和屏幕状态。会话名经过严格约束并统一添加 `hobot-code-` 前缀，启动器不会列出或终止用户的其他 `tmux` 工作负载。该层不承担板卡重启或进程崩溃恢复。

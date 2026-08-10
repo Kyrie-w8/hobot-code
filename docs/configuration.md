@@ -65,7 +65,7 @@ API key 可以写成 `$ENV_NAME` 引用，避免把真实密钥放进 JSON。保
 
 ## Pi 交互与扩展
 
-推荐使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认设置启用自动压缩、最多三次 Agent 级重试、可见 thinking 和 regular TUI。
+推荐使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认设置启用自动压缩、最多三次 Agent 级重试、可见 thinking 和 fullscreen TUI；后者用于提供稳定的分屏布局与按指针区域滚动。
 
 扩展、Skills 和 Prompt 使用 Pi 原生命令管理：
 
@@ -221,6 +221,24 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 ```
 
 有效范围为 1 到 8。租约存放在按 UID 隔离的本地临时目录中，因此这是同一用户的并发限制，不是跨用户的整板全局限制；陈旧租约会自动回收。上下文继承、禁止能力和副作用边界见 README 的[侧边 Agent](../README.md#侧边-agent)章节。
+
+全屏模式下，`/btw` 将主 Agent 与侧边 Agent 等分显示，打开时不抢占主输入焦点。点击任一半屏即可切换到对应 Agent；也可使用 `Ctrl+Shift+Right` 切换到侧边 Agent，使用 `Ctrl+Shift+Left` 返回主 Agent。点击事件仍交给 Pi 的选择层处理，因此拖动选取、链接和滚轮不会被焦点切换功能吞掉。
+
+## SSH 断线续跑
+
+`hobot persistent` 使用当前 OS 用户的 `tmux` 服务托管完整交互进程：
+
+```bash
+hobot persistent
+hobot persistent start [name] [-- hobot-options...]
+hobot persistent attach [name]
+hobot persistent list
+hobot persistent stop [name]
+```
+
+省略动作时等价于 `hobot persistent start main`。名称默认为 `main`，只允许 1 到 48 个字母、数字、下划线或连字符，且必须以字母或数字开头。实际 `tmux` 会话带有 `hobot-code-` 前缀，`list` 和 `stop` 只处理该前缀下的会话。若已经位于另一个 `tmux` 客户端中，启动器会使用客户端切换而不是创建嵌套会话。Hobot 参数必须放在 `--` 后，例如 `hobot persistent start review -- --resume`。
+
+该模式需要系统安装 `tmux`。它保证 SSH 断开后进程继续运行，但不提供跨板卡重启或程序崩溃恢复；后者只能从已持久化的 Pi 会话重新开始。
 
 ## 持久目标
 

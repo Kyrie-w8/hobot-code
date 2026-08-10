@@ -7,7 +7,7 @@
   "collapseChangelog": true,
   "defaultProjectTrust": "ask",
   "enableInstallTelemetry": false,
-  "tuiMode": "regular",
+  "tuiMode": "fullscreen",
   "doubleEscapeAction": "tree",
   "outputPad": 1,
   "compaction": {

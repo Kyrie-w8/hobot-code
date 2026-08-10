@@ -40,7 +40,7 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 
 每篇资料在正文末尾就地列出 D-Robotics 官方文档或官方 GitHub 来源。发布校验会拒绝未登记文档、缺失核对日期、来源不足、正文未引用来源、非官方域名和疑似凭据；资料中的版本说明仍不能替代当前板端的实时检查。
 
-基础运行时自包含，使用内置能力时，板端无需另外安装 Node.js、Bun、Go、Python 或容器。第三方 Pi package 可能需要系统中的 `git`、`npm` 或自定义 `npmCommand`；用户配置的 Hook 与 LSP 也需要对应外部命令。
+基础运行时自包含，使用内置 Agent 能力时，板端无需另外安装 Node.js、Bun、Go、Python 或容器。SSH 断线续跑功能需要 `tmux`；第三方 Pi package 可能需要系统中的 `git`、`npm` 或自定义 `npmCommand`，用户配置的 Hook 与 LSP 也需要对应外部命令。
 
 ## 快速开始
 
@@ -107,6 +107,14 @@ API_TIMEOUT_MS=3000000
 hobot
 ```
 
+需要在 SSH 断开后继续运行时，使用持久会话启动：
+
+```bash
+hobot persistent
+```
+
+这会创建或进入默认的 `main` 会话。重新连接板卡后再次执行 `hobot persistent`，或执行 `hobot persistent attach main`，即可回到原界面。该能力依赖板卡上的 `tmux`；若尚未安装，执行 `sudo apt-get install tmux`。完整命令见[断线续跑](#断线续跑)。
+
 ## 日常使用
 
 | 命令 | 用途 |
@@ -128,6 +136,21 @@ hobot
 
 `Escape` 中断当前模型或工具，`Ctrl+D` 在编辑区为空时退出，`Ctrl+T` 显示或隐藏 thinking。其余快捷键以 `/hotkeys` 为准。
 
+## 断线续跑
+
+Hobot Code 可以由 `tmux` 托管完整 TUI 和子进程。SSH 或网络连接断开后，主 Agent、侧边 Agent、工具调用以及其前台子进程会继续在板卡上运行；重新连接只需附着原会话：
+
+```bash
+hobot persistent                           # 创建或重连默认 main 会话
+hobot persistent start main                # 创建；已存在时直接重连
+hobot persistent start debug -- --resume   # 以 Hobot 参数启动命名会话
+hobot persistent list                      # 列出当前用户的 Hobot Code 会话
+hobot persistent attach main               # 重连
+hobot persistent stop main                 # 终止会话及受其终端托管的进程
+```
+
+主动离开但保持任务运行时，按 `Ctrl+B`，松开后按 `D`。持久会话按 OS 用户隔离，命令不会显示或操作其他 `tmux` 会话。它只能承受客户端断线：板卡重启、断电、内存不足杀进程或程序崩溃仍会终止实时任务；此后可使用 `hobot --resume` 恢复已落盘的对话，但不会自动重放中断的工具调用。
+
 脚本化调用沿用 Pi：
 
 ```bash
@@ -146,13 +169,15 @@ hobot --resume
 
 ## 侧边 Agent
 
-`/btw <任务>` 在终端右半区启动一个独立的 Pi RPC 子进程。它支持多轮对话，并从主会话取得一次性上下文快照，同时继承当前模型、thinking 等级、有效系统 Prompt、工具集合和项目信任状态。若主 Agent 正在工作，快照严格截止到本轮开始前记录的稳定会话叶节点；当前未完成任务不会复制到侧边会话，也不会被误当成侧边任务继续执行。
+`/btw <任务>` 在全屏 TUI 中将终端等分为主 Agent 和右侧 Agent，后者运行在独立的 Pi RPC 子进程中。打开后键盘焦点保留在主 Agent；点击任一半屏即可切换到对应输入，也可按 `Ctrl+Shift+Right` 进入右侧、按 `Ctrl+Shift+Left` 返回主输入。鼠标滚轮和触控板会滚动指针所在的半屏；侧边输出的自动跟随会在用户向上滚动时暂停，避免阅读历史时被新输出拉回底部。窄终端或非全屏模式会自动回退到非抢占焦点的右侧浮层。
+
+侧边 Agent 支持多轮对话，并从主会话取得一次性上下文快照，同时继承当前模型、thinking 等级、有效系统 Prompt、工具集合和项目信任状态。若主 Agent 正在工作，快照严格截止到本轮开始前记录的稳定会话叶节点；当前未完成任务不会复制到侧边会话，也不会被误当成侧边任务继续执行。
 
 侧边 Agent 与主 Agent 具有相同的工作目录、用户权限、环境、进程命名空间、服务和设备视图，因此文件、进程或硬件副作用会保留。它的对话记录不会写回主会话；关闭后临时会话与 Prompt 会被删除。它不会独立重新扫描 Skills，并禁止写入持久记忆或修改持久目标状态。
 
 每个主会话同时只能打开一个侧边 Agent。同一 **OS 用户** 的所有 Hobot Code 进程默认合计最多运行两个，可通过 `HOBOT_CODE_MAX_SIDE_AGENTS=1..8` 调整；该限制不是跨用户的整板全局配额。异常退出留下的陈旧租约会在后续打开时回收。工具审批会在侧栏按顺序显示，可按 `Y`/`N` 处理；无人处理时会在两分钟后自动拒绝，侧边任务不会无限等待。
 
-在侧边窗格中按 `Enter` 继续追问，`Escape` 中断当前一轮或在空闲时关闭，`Ctrl+D` 随时关闭。
+在侧边窗格中按 `Enter` 继续追问，`Escape` 中断当前一轮或在空闲时关闭，`Ctrl+D` 随时关闭。键盘滚动可用 `Ctrl+PageUp` / `Ctrl+PageDown` 或在输入为空时使用上下方向键。
 
 ## 安全模型
 

@@ -105,6 +105,148 @@ load_environment_file() {
   done < "$environment_file"
 }
 
+persistent_usage() {
+  cat <<'EOF'
+Usage:
+  hobot persistent
+  hobot persistent start [name] [-- hobot-options...]
+  hobot persistent attach [name]
+  hobot persistent list
+  hobot persistent stop [name]
+
+The default name is "main". Detach with Ctrl+B, then D.
+EOF
+}
+
+require_tmux() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    printf 'Persistent Hobot Code sessions require tmux. Install it with: sudo apt-get install tmux\n' >&2
+    exit 127
+  fi
+}
+
+persistent_session_name() {
+  logical_name=${1:-main}
+  case "$logical_name" in
+    ''|*[!A-Za-z0-9_-]*|[-_]*|?????????????????????????????????????????????????*)
+      printf 'Persistent session names must start with a letter or digit, use only A-Z, a-z, 0-9, _ or -, and contain at most 48 characters: %s\n' "$logical_name" >&2
+      exit 2
+      ;;
+  esac
+  printf 'hobot-code-%s\n' "$logical_name"
+}
+
+append_shell_word() {
+  shell_word=$(printf '%sX' "$1" | sed "s/'/'\\\\''/g")
+  shell_word=${shell_word%X}
+  persistent_command="$persistent_command '$shell_word'"
+}
+
+attach_persistent_session() {
+  target_session=$1
+  if [ -n "${TMUX:-}" ]; then
+    exec tmux switch-client -t "=$target_session"
+  fi
+  exec tmux attach-session -t "=$target_session"
+}
+
+handle_persistent_command() {
+  shift
+  persistent_action=${1:-start}
+  if [ "$#" -gt 0 ]; then shift; fi
+
+  case "$persistent_action" in
+    help|-h|--help)
+      persistent_usage
+      exit 0
+      ;;
+    list)
+      if [ "$#" -ne 0 ]; then
+        printf 'Usage: hobot persistent list\n' >&2
+        exit 2
+      fi
+      require_tmux
+      persistent_sessions=$(tmux list-sessions -F '#{session_name}|#{session_attached}|#{session_windows}|#{session_created_string}' 2>/dev/null || :)
+      persistent_sessions=$(printf '%s\n' "$persistent_sessions" | sed -n '/^hobot-code-/p')
+      if [ -z "$persistent_sessions" ]; then
+        printf 'No persistent Hobot Code sessions.\n'
+        exit 0
+      fi
+      printf 'NAME\tATTACHED\tWINDOWS\tCREATED\n'
+      printf '%s\n' "$persistent_sessions" | awk -F '|' '{ sub(/^hobot-code-/, "", $1); printf "%s\t%s\t%s\t%s\n", $1, $2, $3, $4 }'
+      exit 0
+      ;;
+    attach|stop)
+      if [ "$#" -gt 1 ]; then
+        printf 'Usage: hobot persistent %s [name]\n' "$persistent_action" >&2
+        exit 2
+      fi
+      require_tmux
+      target_session=$(persistent_session_name "${1:-main}")
+      if ! tmux has-session -t "=$target_session" 2>/dev/null; then
+        printf 'Persistent Hobot Code session does not exist: %s\n' "${1:-main}" >&2
+        exit 1
+      fi
+      if [ "$persistent_action" = stop ]; then
+        tmux kill-session -t "=$target_session"
+        printf 'Stopped persistent Hobot Code session: %s\n' "${1:-main}"
+        exit 0
+      fi
+      attach_persistent_session "$target_session"
+      ;;
+    start)
+      require_tmux
+      logical_name=main
+      if [ "$#" -gt 0 ] && [ "$1" != -- ]; then
+        logical_name=$1
+        shift
+      fi
+      if [ "$#" -gt 0 ]; then
+        if [ "$1" != -- ]; then
+          printf 'Hobot options must follow --: hobot persistent start [name] [-- hobot-options...]\n' >&2
+          exit 2
+        fi
+        shift
+      fi
+      target_session=$(persistent_session_name "$logical_name")
+      if tmux has-session -t "=$target_session" 2>/dev/null; then
+        if [ "$#" -gt 0 ]; then
+          printf 'Persistent session %s already exists; new Hobot options were ignored.\n' "$logical_name" >&2
+        fi
+        attach_persistent_session "$target_session"
+      fi
+
+      case "$0" in
+        /*) hobot_launcher=$0 ;;
+        *)
+          hobot_launcher=$(command -v "$0" 2>/dev/null || :)
+          case "$hobot_launcher" in
+            /*) ;;
+            *)
+              printf 'Cannot resolve the Hobot Code launcher path: %s\n' "$0" >&2
+              exit 1
+              ;;
+          esac
+          ;;
+      esac
+      persistent_command=exec
+      append_shell_word "$hobot_launcher"
+      for persistent_arg in "$@"; do append_shell_word "$persistent_arg"; done
+
+      if [ -n "${TMUX:-}" ]; then
+        tmux new-session -d -s "$target_session" -c "$PWD" "$persistent_command"
+        attach_persistent_session "$target_session"
+      fi
+      exec tmux new-session -s "$target_session" -c "$PWD" "$persistent_command"
+      ;;
+    *)
+      printf 'Unknown persistent action: %s\n' "$persistent_action" >&2
+      persistent_usage >&2
+      exit 2
+      ;;
+  esac
+}
+
 hobot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 hobot_state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 hobot_config_root=${HOBOT_CODE_CONFIG_DIR:-$hobot_config_home/hobot-code}
@@ -194,4 +336,7 @@ export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
 export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 
 umask "$original_umask"
+if [ "${1:-}" = persistent ]; then
+  handle_persistent_command "$@"
+fi
 exec /usr/local/lib/hobot-code/hobot "$@"

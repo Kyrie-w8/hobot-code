@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -55,13 +55,42 @@ async function createLauncherFixture(prefix) {
     await copyFile(new URL(`../packaging/pi/${name}`, import.meta.url), join(defaults, name));
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
-  await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf '%s\\n' \"$HOBOT_CODING_AGENT_DIR\" \"$HOBOT_CODING_AGENT_SESSION_DIR\" \"$HOBOT_CODE_MEMORY_DB\"\n");
+  await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf '%s\\n' \"$HOBOT_CODING_AGENT_DIR\" \"$HOBOT_CODING_AGENT_SESSION_DIR\" \"$HOBOT_CODE_MEMORY_DB\"\nfor hobot_arg in \"$@\"; do printf 'arg=<%s>\\n' \"$hobot_arg\"; done\n");
   await chmod(join(runtime, "hobot"), 0o755);
   const source = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
   const launcher = join(root, "hobot-launcher");
   await writeFile(launcher, source.replaceAll("/usr/local/lib/hobot-code", runtime));
   await chmod(launcher, 0o755);
   return { root, home, launcher };
+}
+
+async function installFakeTmux(root) {
+  const binDir = join(root, "fake-bin");
+  const tmux = join(binDir, "tmux");
+  await mkdir(binDir, { recursive: true });
+  await writeFile(tmux, `#!/bin/sh
+case "\$1" in
+  has-session)
+    [ "\${FAKE_TMUX_SESSION_EXISTS:-0}" = 1 ]
+    ;;
+  list-sessions)
+    printf 'hobot-code-main|1|1|2026-08-10 12:00:00\\nother-work|1|2|2026-08-09 10:00:00\\n'
+    ;;
+  new-session)
+    if [ "\${FAKE_TMUX_RUN_COMMAND:-0}" = 1 ]; then
+      for fake_tmux_arg in "\$@"; do fake_tmux_command=\$fake_tmux_arg; done
+      exec /bin/sh -c "\$fake_tmux_command"
+    fi
+    printf '<%s>\\n' "\$@"
+    ;;
+  attach-session|switch-client|kill-session)
+    printf '<%s>\\n' "\$@"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  await chmod(tmux, 0o755);
+  return binDir;
 }
 
 test("Hobot Code defaults config and mutable state to the current user", () => {
@@ -183,6 +212,61 @@ test("launcher initializes an isolated user without system configuration", async
       join(fixture.home, ".local/state/hobot-code/memory/memory.db"),
     ]);
     assert.equal(JSON.parse(await readFile(join(paths[0], "settings.json"), "utf8")).defaultProvider, "drobotics");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("launcher persistent sessions preserve arguments and shell safety", async () => {
+  const fixture = await createLauncherFixture("hobot-persistent-start-");
+  try {
+    const fakeBin = await installFakeTmux(fixture.root);
+    const marker = join(fixture.root, "must-not-run");
+    const unsafeArgument = `'; touch ${marker}; #`;
+    const { stdout } = await execFileAsync(
+      fixture.launcher,
+      ["persistent", "start", "review", "--", "--resume", unsafeArgument],
+      {
+        cwd: fixture.root,
+        env: {
+          HOME: fixture.home,
+          PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          FAKE_TMUX_RUN_COMMAND: "1",
+        },
+      },
+    );
+    assert.ok(stdout.includes(join(fixture.home, ".config/hobot-code/agent")));
+    assert.match(stdout, /arg=<--resume>/);
+    assert.ok(stdout.includes(`arg=<${unsafeArgument}>`));
+    await assert.rejects(() => access(marker));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("launcher persistent management is scoped to Hobot Code sessions", async () => {
+  const fixture = await createLauncherFixture("hobot-persistent-manage-");
+  try {
+    const fakeBin = await installFakeTmux(fixture.root);
+    const env = { HOME: fixture.home, PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}` };
+    const started = await execFileAsync(fixture.launcher, ["persistent"], { cwd: fixture.root, env });
+    assert.match(started.stdout, /<new-session>\n<-s>\n<hobot-code-main>/);
+
+    const listed = await execFileAsync(fixture.launcher, ["persistent", "list"], { env });
+    assert.match(listed.stdout, /^NAME\s+ATTACHED\s+WINDOWS\s+CREATED/m);
+    assert.match(listed.stdout, /^main\s+1\s+1\s+2026-08-10/m);
+    assert.doesNotMatch(listed.stdout, /other-work/);
+
+    const stopped = await execFileAsync(fixture.launcher, ["persistent", "stop", "review"], {
+      env: { ...env, FAKE_TMUX_SESSION_EXISTS: "1" },
+    });
+    assert.match(stopped.stdout, /<kill-session>\n<-t>\n<=hobot-code-review>/);
+    assert.match(stopped.stdout, /Stopped persistent Hobot Code session: review/);
+
+    await assert.rejects(
+      () => execFileAsync(fixture.launcher, ["persistent", "start", "../other"], { env }),
+      /Persistent session names must start with a letter or digit/,
+    );
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

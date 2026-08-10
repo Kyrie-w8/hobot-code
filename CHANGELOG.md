@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.1
+
+- Mount `/btw` as a true equal-width fullscreen workspace so the main editor remains active while the side agent runs.
+- Add explicit `Ctrl+Shift+Right` and `Ctrl+Shift+Left` focus navigation between the main and side agents.
+- Switch input focus by clicking either half while preserving Pi's text selection, links, dragging, and wheel handling.
+- Route mouse and trackpad scrolling to the side transcript under the pointer, with a native scrollbar and history-friendly follow behavior.
+- Keep a non-capturing overlay fallback for narrow terminals and regular TUI mode.
+- Make fullscreen TUI the default for new installations so split-pane focus and pointer-routed scrolling work without extra setup.
+- Add named `hobot persistent` sessions backed by tmux so Agent and tool processes survive SSH disconnects and can be listed, reattached, or stopped safely.
+
 ## 0.13.0
 
 - Expand the versioned RDK knowledge pack from 7 to 27 professional topics spanning X5, S100, S600, official resource routing, RDK Studio/XBurn, X5 SDK, S600 application cases, system lifecycle, AI toolchains, BPU runtime, Model Zoo, LLM/VLM/VLA, camera and multimedia, TROS, peripheral I/O, MCU/IPC/CAN, VDSP/GPU, drivers, storage, networking, bring-up, safety, and performance engineering.

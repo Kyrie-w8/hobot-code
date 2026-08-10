@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -21,6 +21,7 @@ import {
   sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
   sideAgentPhaseAfterEvent,
+  sideAgentPointerFocusTarget,
 } from "../extensions/rdk/side-agent-session.mjs";
 
 test("side session snapshot serializes the captured branch exactly", () => {
@@ -324,6 +325,34 @@ test("side agent panel layout stays within narrow terminal bounds", () => {
     innerWidth: 2,
     contentRows: 0,
   });
+});
+
+test("side agent keeps main input active and exposes pointer-routed scrolling", async () => {
+  const source = await readFile(new URL("../extensions/rdk/side-agent.ts", import.meta.url), "utf8");
+  const settings = JSON.parse(await readFile(new URL("../packaging/pi/settings.json", import.meta.url), "utf8"));
+  assert.equal(settings.tuiMode, "fullscreen", "new installs must enable pointer-routed split panes by default");
+  assert.match(source, /new HStack\(\[/, "fullscreen /btw must be mounted beside the main layout");
+  assert.match(source, /basis:\s*mainWidth[\s\S]*basis:\s*sideWidth/, "the initial split must be exactly equal");
+  assert.match(source, /new SideAgentCustomHost\(pane\)/, "the hidden custom host must not share side-pane focus identity");
+  assert.match(source, /new ScrollView\(/, "the side transcript must participate in TUI wheel routing");
+  assert.match(source, /nonCapturing:\s*true/, "the compatibility overlay must not steal main input focus");
+  assert.match(source, /registerShortcut\("ctrl\+shift\+right"/, "main-to-side focus switching must remain available");
+  assert.match(source, /matchesKey\(data, "ctrl\+shift\+left"\)/, "side-to-main focus switching must remain available");
+  assert.match(source, /prependTuiInputListener\(viewport/, "pointer focus must run before Pi consumes mouse input");
+  assert.doesNotMatch(source, /onHandle:\s*\(handle\)\s*=>\s*handle\.focus\(\)/);
+});
+
+test("primary pointer presses focus the clicked half without intercepting other mouse events", () => {
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;1;1M", 120), "main");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;60;20M", 120), "main");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;61;20M", 120), "side");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<4;62;20M", 121), "side", "modifier bits remain valid");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;61;20M", 121), "main", "odd widths favor main");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;62;20M", 121), "side");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;61;20m", 120), undefined, "release does not refocus");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<32;61;20M", 120), undefined, "drag does not refocus");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<64;61;20M", 120), undefined, "wheel does not refocus");
+  assert.equal(sideAgentPointerFocusTarget("\x1b[<0;121;20M", 120), undefined, "stale coordinates are ignored");
 });
 
 test("side agent leases reject excess agents and release capacity", async (t) => {

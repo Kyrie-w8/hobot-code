@@ -113,6 +113,22 @@ export function sideAgentPanelLayout(width, rows) {
   };
 }
 
+export function sideAgentPointerFocusTarget(data, columns) {
+  const match = /^\x1b\[<(\d+);(\d+);(\d+)M$/.exec(String(data ?? ""));
+  if (!match) return undefined;
+
+  const button = Number.parseInt(match[1], 10);
+  const x = Number.parseInt(match[2], 10) - 1;
+  const y = Number.parseInt(match[3], 10) - 1;
+  const width = Number.isFinite(columns) ? Math.floor(columns) : 0;
+  // SGR button 0 is a primary press. Modifier bits are allowed, while motion,
+  // wheel, release, and additional-button events must retain their native role.
+  if ((button & ~28) !== 0 || x < 0 || x >= width || y < 0 || width < 2) return undefined;
+
+  const mainWidth = width - Math.floor(width / 2);
+  return x < mainWidth ? "main" : "side";
+}
+
 function boundedTail(value, limit = MAX_STREAM_TEXT_CHARS) {
   if (value.length <= limit) return value;
   return `[Earlier output omitted]\n${value.slice(-limit)}`;

@@ -12,13 +12,20 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
+  HStack,
   Input,
   Markdown,
+  ScrollView,
+  VStack,
+  isViewportTUI,
   matchesKey,
   truncateToWidth,
   visibleWidth,
+  type Component,
   type Focusable,
   type TUI,
+  type TuiInputListener,
+  type ViewportTUI,
 } from "@earendil-works/pi-tui";
 
 import { redactSensitiveText } from "./control-plane.mjs";
@@ -38,6 +45,7 @@ import {
   sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
   sideAgentPhaseAfterEvent,
+  sideAgentPointerFocusTarget,
 } from "./side-agent-session.mjs";
 
 const MAX_QUESTION_CHARS = 32_000;
@@ -518,14 +526,150 @@ class SideAgentRun {
   }
 }
 
-class SideAgentOverlay implements Focusable {
+interface SplitViewportTui extends ViewportTUI {
+  layoutRoot?: Component;
+  getFocusedComponent?: () => Component | null;
+  inputListeners?: Set<TuiInputListener>;
+}
+
+function prependTuiInputListener(tui: SplitViewportTui, listener: TuiInputListener): () => void {
+  const unsubscribe = tui.addInputListener(listener);
+  const listeners = tui.inputListeners;
+  if (!(listeners instanceof Set)) return unsubscribe;
+
+  // Pi consumes fullscreen SGR mouse events, so the non-consuming focus
+  // observer must run first while preserving every existing listener's order.
+  listeners.delete(listener);
+  const existing = [...listeners];
+  listeners.clear();
+  listeners.add(listener);
+  for (const existingListener of existing) listeners.add(existingListener);
+  return unsubscribe;
+}
+
+class DynamicComponent implements Component {
+  private readonly renderer: (width: number) => string[];
+
+  constructor(renderer: (width: number) => string[]) {
+    this.renderer = renderer;
+  }
+
+  render(width: number): string[] {
+    return this.renderer(width);
+  }
+
+  invalidate(): void {}
+}
+
+class SideAgentCustomHost implements Component {
+  private readonly sidePane: SideAgentPane;
+
+  constructor(sidePane: SideAgentPane) {
+    this.sidePane = sidePane;
+  }
+
+  render(_width: number): string[] {
+    return [];
+  }
+
+  invalidate(): void {
+    this.sidePane.invalidate();
+  }
+
+  dispose(): void {
+    this.sidePane.dispose();
+  }
+}
+
+class SideAgentSplitWorkspace {
+  private readonly tui: SplitViewportTui;
+  private readonly originalRoot: Component;
+  private readonly splitRoot: HStack;
+  private readonly mainFocus: Component | null;
+  private readonly sidePane: SideAgentPane;
+  private unsubscribePointerFocus?: () => void;
+  private restored = false;
+
+  private constructor(
+    tui: SplitViewportTui,
+    originalRoot: Component,
+    splitRoot: HStack,
+    mainFocus: Component | null,
+    sidePane: SideAgentPane,
+  ) {
+    this.tui = tui;
+    this.originalRoot = originalRoot;
+    this.splitRoot = splitRoot;
+    this.mainFocus = mainFocus;
+    this.sidePane = sidePane;
+  }
+
+  static mount(tui: TUI, sidePane: SideAgentPane): SideAgentSplitWorkspace | undefined {
+    if (
+      !isViewportTUI(tui)
+      || tui.mode !== "fullscreen"
+      || tui.terminal.columns < 80
+      || tui.terminal.rows < 7
+    ) return undefined;
+    const viewport = tui as SplitViewportTui;
+    const originalRoot = viewport.layoutRoot;
+    if (!originalRoot) return undefined;
+
+    const mainFocus = viewport.getFocusedComponent?.() ?? null;
+    const sideWidth = Math.floor(tui.terminal.columns / 2);
+    const mainWidth = tui.terminal.columns - sideWidth;
+    const splitRoot = new HStack([
+      { component: originalRoot, basis: mainWidth, grow: 1, shrink: 1, minSize: 1 },
+      { component: sidePane, basis: sideWidth, grow: 1, shrink: 1, minSize: 1 },
+    ]);
+    const workspace = new SideAgentSplitWorkspace(viewport, originalRoot, splitRoot, mainFocus, sidePane);
+    workspace.unsubscribePointerFocus = prependTuiInputListener(viewport, (data) => {
+      const target = sideAgentPointerFocusTarget(data, viewport.terminal.columns);
+      if (target === "side") workspace.focusSide();
+      else if (target === "main") workspace.focusMain();
+      return undefined;
+    });
+    sidePane.setSplitMounted(true);
+    viewport.setLayoutRoot(splitRoot);
+    viewport.requestRender(true);
+    return workspace;
+  }
+
+  focusSide(): void {
+    if (this.restored) return;
+    this.tui.setFocus(this.sidePane);
+    this.tui.requestRender();
+  }
+
+  focusMain(): void {
+    if (this.restored) return;
+    this.tui.setFocus(this.mainFocus);
+    this.tui.requestRender();
+  }
+
+  restore(): void {
+    if (this.restored) return;
+    this.restored = true;
+    this.unsubscribePointerFocus?.();
+    this.unsubscribePointerFocus = undefined;
+    this.sidePane.setSplitMounted(false);
+    if (this.tui.layoutRoot === this.splitRoot) this.tui.setLayoutRoot(this.originalRoot);
+    this.tui.setFocus(this.mainFocus);
+    this.tui.requestRender(true);
+  }
+}
+
+class SideAgentPane extends VStack implements Focusable {
   private readonly input = new Input();
   private readonly tui: TUI;
   private readonly theme: Theme;
   private readonly run: SideAgentRun;
   private readonly done: (result: "close") => void;
+  private readonly focusMain: () => void;
+  private readonly transcriptView: ScrollView;
   private _focused = false;
   private scrollOffset = 0;
+  private splitMounted = false;
   private disposed = false;
   private inputError = "";
   private unsubscribe: () => void;
@@ -545,19 +689,48 @@ class SideAgentOverlay implements Focusable {
     theme: Theme,
     run: SideAgentRun,
     done: (result: "close") => void,
+    focusMain: () => void,
   ) {
+    super();
     this.tui = tui;
     this.theme = theme;
     this.run = run;
     this.done = done;
+    this.focusMain = focusMain;
     this.input.onSubmit = (value) => this.submit(value);
+    this.transcriptView = new ScrollView(
+      new DynamicComponent((width) => this.renderSplitTranscript(width)),
+      {
+        follow: "end",
+        overscroll: "contain",
+        scrollbar: "auto",
+        scrollbarStyle: (text) => theme.fg("accent", text),
+      },
+    );
+    this.addChild(new DynamicComponent((width) => this.renderHeader(width)), {
+      basis: 1,
+      grow: 0,
+      shrink: 0,
+      minSize: 1,
+    });
+    this.addChild(this.transcriptView, { basis: 0, grow: 1, shrink: 1, minSize: 1 });
+    this.addChild(new DynamicComponent((width) => this.renderInputArea(width)), {
+      basis: 4,
+      grow: 0,
+      shrink: 0,
+      minSize: 4,
+    });
     this.unsubscribe = run.subscribe(() => {
-      this.scrollOffset = Number.MAX_SAFE_INTEGER;
+      if (!this.splitMounted) this.scrollOffset = Number.MAX_SAFE_INTEGER;
       this.inputError = "";
       this.syncTicker();
       this.tui.requestRender();
     });
     this.syncTicker();
+  }
+
+  setSplitMounted(value: boolean): void {
+    this.splitMounted = value;
   }
 
   private syncTicker(): void {
@@ -610,10 +783,17 @@ class SideAgentOverlay implements Focusable {
       this.tui.requestRender();
       return;
     }
-    if (this.run.sendPrompt(trimmed)) this.input.setValue("");
+    if (this.run.sendPrompt(trimmed)) {
+      this.input.setValue("");
+      this.transcriptView.scrollToEnd();
+    }
   }
 
   handleInput(data: string): void {
+    if (matchesKey(data, "ctrl+shift+left")) {
+      this.focusMain();
+      return;
+    }
     if (matchesKey(data, "ctrl+d")) {
       this.done("close");
       return;
@@ -645,23 +825,29 @@ class SideAgentOverlay implements Focusable {
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, "pageup")) {
-      this.scrollOffset = Math.max(0, this.scrollOffset - 8);
+    if (matchesKey(data, "pageup") || matchesKey(data, "ctrl+pageup")) {
+      const amount = Math.max(1, this.transcriptView.viewportHeight - 2);
+      if (this.splitMounted) this.transcriptView.scrollBy(-amount);
+      else this.scrollOffset = Math.max(0, this.scrollOffset - 8);
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, "pagedown")) {
-      this.scrollOffset += 8;
+    if (matchesKey(data, "pagedown") || matchesKey(data, "ctrl+pagedown")) {
+      const amount = Math.max(1, this.transcriptView.viewportHeight - 2);
+      if (this.splitMounted) this.transcriptView.scrollBy(amount);
+      else this.scrollOffset += 8;
       this.tui.requestRender();
       return;
     }
     if (!this.input.getValue() && matchesKey(data, "up")) {
-      this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+      if (this.splitMounted) this.transcriptView.scrollBy(-1);
+      else this.scrollOffset = Math.max(0, this.scrollOffset - 1);
       this.tui.requestRender();
       return;
     }
     if (!this.input.getValue() && matchesKey(data, "down")) {
-      this.scrollOffset += 1;
+      if (this.splitMounted) this.transcriptView.scrollBy(1);
+      else this.scrollOffset += 1;
       this.tui.requestRender();
       return;
     }
@@ -722,15 +908,9 @@ class SideAgentOverlay implements Focusable {
     return lines;
   }
 
-  render(width: number): string[] {
+  private renderHeader(width: number): string[] {
     const th = this.theme;
     const layout = sideAgentPanelLayout(width, this.tui.terminal.rows);
-    const { innerWidth, panelWidth } = layout;
-    const border = (value: string) => th.fg("border", value);
-    const pad = (value: string) => {
-      const clipped = truncateToWidth(value, innerWidth, innerWidth >= 3 ? "..." : "", true);
-      return clipped + " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
-    };
     const request = this.run.pendingUiRequest;
     const displayPhase = request
       ? `${request.method === "confirm" ? "approval" : "input"}${this.run.pendingUiRequestCount > 1 ? ` 1/${this.run.pendingUiRequestCount}` : ""}`
@@ -738,39 +918,44 @@ class SideAgentOverlay implements Focusable {
     const phaseColor = request
       ? "warning"
       : this.run.phase === "idle"
-      ? "success"
-      : this.run.phase === "failed"
-        ? "error"
-        : this.run.phase === "aborting"
-          ? "warning"
-          : "accent";
+        ? "success"
+        : this.run.phase === "failed"
+          ? "error"
+          : this.run.phase === "aborting"
+            ? "warning"
+            : "accent";
     const elapsedStart = this.run.isBusy ? this.run.turnStartedAt : this.run.startedAt;
     const elapsed = Math.max(0, Math.round((Date.now() - elapsedStart) / 1000));
     if (layout.compact) {
-      const status = th.fg(phaseColor as any, `BTW ${displayPhase} ${elapsed}s`);
-      const clipped = truncateToWidth(status, panelWidth, "", true);
-      return [clipped + " ".repeat(Math.max(0, panelWidth - visibleWidth(clipped)))];
+      const status = th.fg(phaseColor as any, `BTW ${displayPhase} ${this.focused ? "side" : "main"} ${elapsed}s`);
+      const clipped = truncateToWidth(status, layout.panelWidth, "", true);
+      return [clipped + " ".repeat(Math.max(0, layout.panelWidth - visibleWidth(clipped)))];
     }
-    const title = ` BTW side agent | ${displayPhase} | ${elapsed}s `;
-    const titleText = truncateToWidth(title, innerWidth, innerWidth >= 3 ? "..." : "", true);
-    const titleRule = "─".repeat(Math.max(0, innerWidth - visibleWidth(titleText)));
+    const title = ` BTW side agent | ${displayPhase} | ${this.focused ? "side active" : "main active"} | ${elapsed}s `;
+    const titleText = truncateToWidth(title, layout.innerWidth, layout.innerWidth >= 3 ? "..." : "", true);
+    const titleRule = "─".repeat(Math.max(0, layout.innerWidth - visibleWidth(titleText)));
+    return [
+      th.fg("border", "╭")
+        + th.fg(phaseColor as any, titleText)
+        + th.fg("border", `${titleRule}╮`),
+    ];
+  }
 
-    const content = this.transcriptLines(innerWidth);
-    const maxContentLines = layout.contentRows;
-    const maxOffset = Math.max(0, content.length - maxContentLines);
-    this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
-    const visible = content.slice(this.scrollOffset, this.scrollOffset + maxContentLines);
-    const result = [border("╭") + th.fg(phaseColor as any, titleText) + border(`${titleRule}╮`)];
-    for (const line of visible) result.push(border("│") + pad(line) + border("│"));
-    while (result.length < maxContentLines + 1) result.push(border("│") + pad("") + border("│"));
-
+  private renderInputArea(width: number): string[] {
+    const th = this.theme;
+    const layout = sideAgentPanelLayout(width, this.tui.terminal.rows);
+    if (layout.compact) return Array.from({ length: 4 }, () => " ".repeat(layout.panelWidth));
+    const border = (value: string) => th.fg("border", value);
+    const pad = (value: string) => {
+      const clipped = truncateToWidth(value, layout.innerWidth, layout.innerWidth >= 3 ? "..." : "", true);
+      return clipped + " ".repeat(Math.max(0, layout.innerWidth - visibleWidth(clipped)));
+    };
+    const frame = (value: string) => `${border("│")}${pad(value)}${border("│")}`;
+    const request = this.run.pendingUiRequest;
     let inputLabel = request ? " Reply: " : " You: ";
-    if (innerWidth < 10) inputLabel = request ? "?" : ">";
-    const inputWidth = Math.max(1, innerWidth - visibleWidth(inputLabel));
+    if (layout.innerWidth < 10) inputLabel = request ? "?" : ">";
+    const inputWidth = Math.max(1, layout.innerWidth - visibleWidth(inputLabel));
     const inputLine = this.input.render(inputWidth)[0] ?? "";
-    result.push(border("├") + border("─".repeat(innerWidth)) + border("┤"));
-    result.push(border("│") + pad(`${th.fg("accent", inputLabel)}${inputLine}`) + border("│"));
-
     const usage = [
       `${this.run.state.turns} response${this.run.state.turns === 1 ? "" : "s"}`,
       `in ${formatTokens(this.run.state.inputTokens)}`,
@@ -779,17 +964,59 @@ class SideAgentOverlay implements Focusable {
     ].filter(Boolean).join(" | ");
     const help = request
       ? request.method === "confirm"
-        ? "Y allow | N deny | Esc cancel | Ctrl+D close and delete"
-        : "Enter reply | Esc cancel | Ctrl+D close and delete"
+        ? "Y allow | N deny | Ctrl+Shift+Left main | Ctrl+D close"
+        : "Enter reply | Ctrl+Shift+Left main | Ctrl+D close"
       : this.run.isBusy
-        ? "Enter after completion | Esc abort turn | Ctrl+D close and delete"
-        : "Enter send | Esc/Ctrl+D close and delete | PgUp/PgDn scroll";
-    result.push(border("│") + pad(th.fg("dim", ` ${usage} | ${help}`)) + border("│"));
-    result.push(border(`╰${"─".repeat(innerWidth)}╯`));
+        ? "Ctrl+Shift+Left main | Esc abort | wheel scroll | Ctrl+D close"
+        : "Enter send | Ctrl+Shift+Left main | wheel/Ctrl+PgUp/PgDn scroll | Ctrl+D close";
+    return [
+      border("├") + border("─".repeat(layout.innerWidth)) + border("┤"),
+      frame(`${th.fg("accent", inputLabel)}${inputLine}`),
+      frame(th.fg("dim", ` ${usage} | ${help}`)),
+      border(`╰${"─".repeat(layout.innerWidth)}╯`),
+    ];
+  }
+
+  private renderSplitTranscript(width: number): string[] {
+    const th = this.theme;
+    const layout = sideAgentPanelLayout(width, this.tui.terminal.rows);
+    if (layout.compact) return [truncateToWidth("BTW", layout.panelWidth, "", true)];
+    const border = (value: string) => th.fg("border", value);
+    const pad = (value: string) => {
+      const clipped = truncateToWidth(value, layout.innerWidth, layout.innerWidth >= 3 ? "..." : "", true);
+      return clipped + " ".repeat(Math.max(0, layout.innerWidth - visibleWidth(clipped)));
+    };
+    const content = this.transcriptLines(layout.innerWidth);
+    const minimumRows = Math.max(1, this.tui.terminal.rows - 5);
+    while (content.length < minimumRows) content.push("");
+    return content.map((line) => `${border("│")}${pad(line)}${border("│")}`);
+  }
+
+  render(width: number): string[] {
+    const th = this.theme;
+    const layout = sideAgentPanelLayout(width, this.tui.terminal.rows);
+    const { innerWidth } = layout;
+    if (layout.compact) return this.renderHeader(width);
+    const border = (value: string) => th.fg("border", value);
+    const pad = (value: string) => {
+      const clipped = truncateToWidth(value, innerWidth, innerWidth >= 3 ? "..." : "", true);
+      return clipped + " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
+    };
+
+    const content = this.transcriptLines(innerWidth);
+    const maxContentLines = layout.contentRows;
+    const maxOffset = Math.max(0, content.length - maxContentLines);
+    this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
+    const visible = content.slice(this.scrollOffset, this.scrollOffset + maxContentLines);
+    const result = this.renderHeader(width);
+    for (const line of visible) result.push(border("│") + pad(line) + border("│"));
+    while (result.length < maxContentLines + 1) result.push(border("│") + pad("") + border("│"));
+    result.push(...this.renderInputArea(width));
     return result;
   }
 
   invalidate(): void {
+    super.invalidate();
     this.input.invalidate();
   }
 
@@ -853,6 +1080,8 @@ async function createSideAgentRun(
 export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
   let active: SideAgentRun | undefined;
   let activeLease: SideAgentLease | undefined;
+  let activeFocus: { focusSide: () => void; focusMain: () => void } | undefined;
+  let activeWorkspace: SideAgentSplitWorkspace | undefined;
   let parentRunActive = false;
   let lastSettledLeafId: string | undefined;
   let transitioning = false;
@@ -886,6 +1115,17 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
     parentRunActive = false;
   });
 
+  pi.registerShortcut("ctrl+shift+right", {
+    description: "Focus the open /btw side agent",
+    handler: async (ctx) => {
+      if (!activeFocus) {
+        ctx.ui.notify("No /btw side agent is open.", "info");
+        return;
+      }
+      activeFocus.focusSide();
+    },
+  });
+
   pi.registerCommand("btw", {
     description: "Open a private multi-turn agent with a snapshot of the current context",
     handler: async (args, ctx) => {
@@ -901,6 +1141,9 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
       transitioning = true;
       let run: SideAgentRun | undefined;
       let lease: SideAgentLease | undefined;
+      let pane: SideAgentPane | undefined;
+      let workspace: SideAgentSplitWorkspace | undefined;
+      let overlayHandle: { focus: () => void; unfocus: () => void } | undefined;
       try {
         const parentEntries = selectSideAgentParentEntries({
           currentEntries: ctx.sessionManager.getBranch(),
@@ -917,11 +1160,49 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
         ctx.ui.setStatus("hobot-btw", `btw: open ${lease.activeCount}/${lease.limit}`);
         run.start();
         await ctx.ui.custom<"close">(
-          (tui, theme, _keybindings, done) => new SideAgentOverlay(tui, theme, run, done),
+          (tui, theme, _keybindings, done) => {
+            pane = new SideAgentPane(
+              tui,
+              theme,
+              run,
+              (result) => {
+                workspace?.restore();
+                done(result);
+              },
+              () => {
+                if (workspace) workspace.focusMain();
+                else overlayHandle?.unfocus();
+              },
+            );
+            workspace = SideAgentSplitWorkspace.mount(tui, pane);
+            activeWorkspace = workspace;
+            activeFocus = {
+              focusSide: () => {
+                if (workspace) workspace.focusSide();
+                else overlayHandle?.focus();
+              },
+              focusMain: () => {
+                if (workspace) workspace.focusMain();
+                else overlayHandle?.unfocus();
+              },
+            };
+            return workspace ? new SideAgentCustomHost(pane) : pane;
+          },
           {
             overlay: true,
-            overlayOptions: { anchor: "right-center", width: "50%", maxHeight: "100%", margin: 0 },
-            onHandle: (handle) => handle.focus(),
+            overlayOptions: () => workspace
+              ? { nonCapturing: true, visible: () => false }
+              : {
+                  anchor: "right-center",
+                  width: "50%",
+                  maxHeight: "100%",
+                  margin: 0,
+                  nonCapturing: true,
+                },
+            onHandle: (handle) => {
+              overlayHandle = handle;
+              if (!workspace) handle.unfocus();
+            },
           },
         );
       } catch (error) {
@@ -933,6 +1214,9 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
           }
         }
       } finally {
+        workspace?.restore();
+        if (activeWorkspace === workspace) activeWorkspace = undefined;
+        if (pane) activeFocus = undefined;
         if (active === run) active = undefined;
         if (activeLease === lease) activeLease = undefined;
         const [cleanupResult] = await Promise.allSettled([run?.cleanup() ?? Promise.resolve()]);
@@ -968,6 +1252,9 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
 
   return async () => {
     disposed = true;
+    activeWorkspace?.restore();
+    activeWorkspace = undefined;
+    activeFocus = undefined;
     const run = active;
     const lease = activeLease;
     active = undefined;
