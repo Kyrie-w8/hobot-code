@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { iterateAnthropicSse, readBoundedBody } from "../extensions/rdk/anthropic-sse.mjs";
@@ -9,12 +14,20 @@ import {
 } from "../extensions/rdk/drobotics-config.mjs";
 import { convertMessages } from "../extensions/rdk/drobotics-payload.mjs";
 import {
+  IncompleteGatewayStreamError,
   validateBufferedGatewayResponse,
   validateGatewayContentBlock,
   validateGatewayUsage,
   mapGatewayStopReason,
+  shouldRetryBufferedGatewayResponse,
 } from "../extensions/rdk/drobotics-response.mjs";
 import { toWellFormedText } from "../extensions/rdk/text-safety.mjs";
+
+const STRIP_TYPES_PROGRAM = [
+  'import { readFileSync } from "node:fs";',
+  'import { stripTypeScriptTypes } from "node:module";',
+  'process.stdout.write(stripTypeScriptTypes(readFileSync(0, "utf8"), { mode: "strip" }));',
+].join("\n");
 
 function chunkedBody(chunks) {
   const encoder = new TextEncoder();
@@ -24,6 +37,186 @@ function chunkedBody(chunks) {
       controller.close();
     },
   });
+}
+
+function sseEvent(event) {
+  return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function sseResponse(events, status = 200) {
+  return new Response(chunkedBody(events.map(sseEvent)), {
+    status,
+    headers: { "content-type": "text/event-stream; charset=utf-8" },
+  });
+}
+
+function jsonResponse(value, status = 200) {
+  return new Response(typeof value === "string" ? value : JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function emptyMessageStart(id = "stream-empty", inputTokens = 101) {
+  return {
+    type: "message_start",
+    message: {
+      id,
+      type: "message",
+      role: "assistant",
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    },
+  };
+}
+
+function bufferedMessage(id = "buffered-complete") {
+  return {
+    id,
+    type: "message",
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "check the result", signature: "signed" },
+      { type: "text", text: "OK" },
+    ],
+    stop_reason: "end_turn",
+    usage: {
+      input_tokens: 11,
+      output_tokens: 3,
+      cache_read_input_tokens: 2,
+      cache_creation_input_tokens: 1,
+    },
+  };
+}
+
+async function createProviderHarness(t) {
+  const root = await mkdtemp(join(tmpdir(), "hobot-provider-state-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const extensionRoot = new URL("../extensions/rdk/", import.meta.url);
+  for (const name of [
+    "anthropic-sse.mjs",
+    "drobotics-config.mjs",
+    "drobotics-payload.mjs",
+    "drobotics-response.mjs",
+    "text-safety.mjs",
+  ]) {
+    await copyFile(new URL(name, extensionRoot), join(root, name));
+  }
+
+  const providerSource = await readFile(new URL("drobotics-provider.ts", extensionRoot), "utf8");
+  const strippedProvider = execFileSync(
+    process.execPath,
+    ["--no-warnings", "--input-type=module", "-e", STRIP_TYPES_PROGRAM],
+    { input: providerSource, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  await writeFile(
+    join(root, "drobotics-provider.mjs"),
+    strippedProvider,
+  );
+
+  const stubRoot = join(root, "node_modules", "@earendil-works", "pi-ai");
+  await mkdir(stubRoot, { recursive: true });
+  await writeFile(join(stubRoot, "package.json"), JSON.stringify({
+    name: "@earendil-works/pi-ai",
+    type: "module",
+    exports: "./index.mjs",
+  }));
+  await writeFile(join(stubRoot, "index.mjs"), `
+export function calculateCost() {}
+
+export function createAssistantMessageEventStream() {
+  const events = [];
+  let ended = false;
+  let finish;
+  const completed = new Promise((resolve) => { finish = resolve; });
+  return {
+    events,
+    completed,
+    push(event) {
+      if (ended) throw new Error("event pushed after stream end");
+      events.push(event);
+    },
+    end() {
+      if (ended) return;
+      ended = true;
+      finish();
+    },
+  };
+}
+`);
+
+  return import(`${pathToFileURL(join(root, "drobotics-provider.mjs")).href}?fixture=${Date.now()}`);
+}
+
+function providerModel() {
+  return {
+    id: "kimi-k3",
+    name: "Kimi K3",
+    api: "drobotics-anthropic",
+    provider: "drobotics",
+    baseUrl: "https://gateway.invalid",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 1_000_000,
+    maxTokens: 8192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+}
+
+function providerContext() {
+  return {
+    systemPrompt: "",
+    messages: [{ role: "user", content: "Reply with OK only." }],
+    tools: [],
+  };
+}
+
+function fakeFetchSequence(responses, requests) {
+  return async (_input, init) => {
+    requests.push({
+      accept: new Headers(init.headers).get("accept"),
+      body: JSON.parse(init.body),
+      aborted: init.signal.aborted,
+    });
+    const response = responses.shift();
+    if (response instanceof Error) throw response;
+    if (!response) throw new Error("unexpected extra gateway request");
+    return response;
+  };
+}
+
+async function collectProviderEvents(stream) {
+  let timer;
+  try {
+    await Promise.race([
+      stream.completed,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("provider stream did not end")), 2000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  return stream.events;
+}
+
+function providerOptions(fetch, signal) {
+  return {
+    apiKey: "test-token",
+    fetch,
+    maxTokens: 8192,
+    reasoning: "off",
+    timeoutMs: 1000,
+    ...(signal ? { signal } : {}),
+  };
 }
 
 test("Anthropic SSE parser preserves events across arbitrary chunk boundaries", async () => {
@@ -149,4 +342,179 @@ test("gateway stop reasons cover current Anthropic terminal states", () => {
   assert.equal(mapGatewayStopReason("refusal"), "stop");
   assert.equal(mapGatewayStopReason("model_context_window_exceeded"), "length");
   assert.equal(mapGatewayStopReason("future_reason"), "error");
+});
+
+test("empty incomplete streams alone may retry through the buffered gateway", () => {
+  const incomplete = new IncompleteGatewayStreamError("stream ended early");
+  assert.equal(shouldRetryBufferedGatewayResponse(incomplete, 0), true);
+  assert.equal(shouldRetryBufferedGatewayResponse(incomplete, 1), false);
+  assert.equal(shouldRetryBufferedGatewayResponse(incomplete, 0, true), false);
+  assert.equal(shouldRetryBufferedGatewayResponse(new Error("malformed event"), 0), false);
+});
+
+test("D-Robotics provider fallback state machine", async (t) => {
+  const { streamDrobotics } = await createProviderHarness(t);
+
+  await t.test("empty SSE retries once and emits only the buffered response", async () => {
+    const requests = [];
+    const fetch = fakeFetchSequence([
+      sseResponse([emptyMessageStart()]),
+      jsonResponse(bufferedMessage()),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel(),
+      providerContext(),
+      providerOptions(fetch),
+    ));
+
+    assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
+    assert.deepEqual(events.map((event) => event.type), [
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    assert.equal(events.filter((event) => event.type === "start").length, 1);
+    assert.equal(events.filter((event) => event.type === "done").length, 1);
+
+    const message = events.at(-1).message;
+    assert.equal(message.responseId, "buffered-complete");
+    assert.deepEqual(message.content, [
+      {
+        type: "thinking",
+        thinking: "check the result",
+        thinkingSignature: "signed",
+      },
+      { type: "text", text: "OK" },
+    ]);
+    assert.deepEqual(message.usage, {
+      input: 11,
+      output: 3,
+      cacheRead: 2,
+      cacheWrite: 1,
+      totalTokens: 17,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
+  });
+
+  await t.test("partial SSE fails without a buffered retry", async () => {
+    const requests = [];
+    const fetch = fakeFetchSequence([
+      sseResponse([
+        emptyMessageStart("stream-partial", 23),
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "partial" },
+        },
+      ]),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel(),
+      providerContext(),
+      providerOptions(fetch),
+    ));
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(events.map((event) => event.type), ["start", "text_start", "text_delta", "error"]);
+    const error = events.at(-1).error;
+    assert.match(error.errorMessage, /stream ended before message_stop/);
+    assert.equal(error.responseId, "stream-partial");
+    assert.equal(error.content[0].text, "partial");
+  });
+
+  await t.test("an aborted request never retries through the buffered gateway", async () => {
+    const requests = [];
+    const controller = new AbortController();
+    controller.abort();
+    const fetch = fakeFetchSequence([
+      sseResponse([emptyMessageStart("stream-aborted")]),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel(),
+      providerContext(),
+      providerOptions(fetch, controller.signal),
+    ));
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(events.map((event) => event.type), ["start", "error"]);
+    assert.equal(events.at(-1).reason, "aborted");
+    assert.match(events.at(-1).error.errorMessage, /Request was aborted/);
+  });
+
+  await t.test("fallback network and JSON errors preserve both causes and reset stream metadata", async (t) => {
+    for (const scenario of [
+      {
+        name: "network",
+        fallback: new Error("fallback offline"),
+        secondary: /fallback offline/,
+      },
+      {
+        name: "JSON",
+        fallback: jsonResponse("{not-json"),
+        secondary: /JSON|Unexpected token|Expected property name/,
+      },
+    ]) {
+      await t.test(scenario.name, async () => {
+        const requests = [];
+        const fetch = fakeFetchSequence([
+          sseResponse([emptyMessageStart(`stream-${scenario.name}`, 71)]),
+          scenario.fallback,
+        ], requests);
+
+        const events = await collectProviderEvents(streamDrobotics(
+          providerModel(),
+          providerContext(),
+          providerOptions(fetch),
+        ));
+
+        assert.equal(requests.length, 2);
+        assert.deepEqual(events.map((event) => event.type), ["start", "error"]);
+        const error = events.at(-1).error;
+        assert.match(error.errorMessage, /stream ended before message_stop/);
+        assert.match(error.errorMessage, /buffered fallback/i);
+        assert.match(error.errorMessage, scenario.secondary);
+        assert.equal(error.responseId, undefined);
+        assert.equal(error.rawStopReason, undefined);
+        assert.deepEqual(error.usage, {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        });
+      });
+    }
+  });
+
+  await t.test("an HTTP streaming fallback cannot trigger a third request", async () => {
+    const requests = [];
+    const fetch = fakeFetchSequence([
+      jsonResponse({ error: { type: "unsupported_stream", message: "streaming disabled" } }, 400),
+      sseResponse([emptyMessageStart("mislabeled-buffered")]),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel(),
+      providerContext(),
+      providerOptions(fetch),
+    ));
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
+    assert.deepEqual(events.map((event) => event.type), ["start", "error"]);
+  });
 });

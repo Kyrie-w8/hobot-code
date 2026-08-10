@@ -46,6 +46,7 @@ import {
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 import { registerSideAgent } from "./side-agent.ts";
 import { destructiveShellReasons, inspectResolvedPath } from "./runtime-safety.mjs";
+import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -369,7 +370,7 @@ async function renderExpertPrompt(snapshot: BoardSnapshot): Promise<string> {
     "{{ARCHITECTURE}}": snapshot.architecture,
   };
   for (const [token, value] of Object.entries(replacements)) {
-    prompt = prompt.replaceAll(token, () => sanitizeText(value));
+    prompt = prompt.replaceAll(token, () => toWellFormedText(value));
   }
   return prompt.trim();
 }

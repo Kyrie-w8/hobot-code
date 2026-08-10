@@ -5,6 +5,19 @@ const TOKEN_FIELDS = [
   "cache_creation_input_tokens",
 ];
 
+export class IncompleteGatewayStreamError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "IncompleteGatewayStreamError";
+  }
+}
+
+export function shouldRetryBufferedGatewayResponse(error, emittedContentBlocks, aborted = false) {
+  return error instanceof IncompleteGatewayStreamError
+    && emittedContentBlocks === 0
+    && !aborted;
+}
+
 export function mapGatewayStopReason(reason) {
   switch (reason) {
     case "end_turn":

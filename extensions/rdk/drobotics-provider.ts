@@ -17,10 +17,12 @@ import { iterateAnthropicSse, readBoundedBody } from "./anthropic-sse.mjs";
 import { resolveGatewayTimeout } from "./drobotics-config.mjs";
 import { convertMessages, convertTools } from "./drobotics-payload.mjs";
 import {
+  IncompleteGatewayStreamError,
   requireGatewayObject,
   requireGatewayString,
   requireGatewayStringAlternative,
   mapGatewayStopReason,
+  shouldRetryBufferedGatewayResponse,
   validateBufferedGatewayResponse,
   validateGatewayContentBlock,
   validateGatewayUsage,
@@ -105,6 +107,23 @@ function updateGatewayUsage(output: AssistantMessage, value: unknown, context: s
     throw new Error(`Model gateway returned invalid ${context}: token total exceeds the safe integer range`);
   }
   output.usage.totalTokens = total;
+}
+
+function resetGatewayOutputForRetry(output: AssistantMessage): void {
+  output.content.length = 0;
+  delete output.responseId;
+  delete output.rawStopReason;
+  output.stopReason = "pending";
+  output.usage.input = 0;
+  output.usage.output = 0;
+  output.usage.cacheRead = 0;
+  output.usage.cacheWrite = 0;
+  output.usage.totalTokens = 0;
+  output.usage.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function consumeBufferedGatewayResponse(
@@ -362,11 +381,13 @@ async function consumeStreamingGatewayResponse(
     delete block.partialJson;
   }
   if (signal?.aborted) throw new Error("Request was aborted");
-  if (!sawMessageStop) throw new Error("Model gateway stream ended before message_stop");
+  if (!sawMessageStop) throw new IncompleteGatewayStreamError("Model gateway stream ended before message_stop");
   if (activeProviderIndexes.size > 0) {
-    throw new Error("Model gateway stream ended with incomplete content blocks");
+    throw new IncompleteGatewayStreamError("Model gateway stream ended with incomplete content blocks");
   }
-  if (output.stopReason === "pending") throw new Error("Model gateway stream ended without a stop reason");
+  if (output.stopReason === "pending") {
+    throw new IncompleteGatewayStreamError("Model gateway stream ended without a stop reason");
+  }
   if (output.stopReason === "error") {
     throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${output.rawStopReason ?? "unknown"}`);
   }
@@ -464,11 +485,13 @@ export function streamDrobotics(
 
       let response = await request(body, "text/event-stream, application/json");
       let streamingFailure: { status: number; detail: string } | undefined;
+      let attemptedBuffered = false;
       if (!response.ok) {
         const firstStatus = response.status;
         const firstDetail = (await readBoundedBody(response, 64 * 1024)).slice(0, 4096);
         if ([400, 415, 422].includes(firstStatus)) {
           streamingFailure = { status: firstStatus, detail: firstDetail };
+          attemptedBuffered = true;
           response = await request({ ...body, stream: false }, "application/json");
         } else {
           throw new Error(`D-Robotics model gateway HTTP ${firstStatus}: ${firstDetail}`);
@@ -480,7 +503,30 @@ export function streamDrobotics(
       }
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
       if (contentType.includes("text/event-stream")) {
-        await consumeStreamingGatewayResponse(response, output, stream, controller.signal);
+        try {
+          await consumeStreamingGatewayResponse(response, output, stream, controller.signal);
+        } catch (error) {
+          if (attemptedBuffered
+            || !shouldRetryBufferedGatewayResponse(error, output.content.length, controller.signal.aborted)) throw error;
+          attemptedBuffered = true;
+          resetGatewayOutputForRetry(output);
+          try {
+            const fallback = await request({ ...body, stream: false }, "application/json");
+            if (!fallback.ok) {
+              const detail = (await readBoundedBody(fallback, 64 * 1024)).slice(0, 4096);
+              throw new Error(`HTTP ${fallback.status}: ${detail}`);
+            }
+            const fallbackContentType = fallback.headers.get("content-type")?.toLowerCase() ?? "";
+            if (fallbackContentType.includes("text/event-stream")) {
+              throw new Error("returned another event stream");
+            }
+            const text = await readBoundedBody(fallback, MAX_BUFFERED_RESPONSE_BYTES);
+            const value = JSON.parse(text) as unknown;
+            consumeBufferedGatewayResponse(value, output, stream);
+          } catch (fallbackError) {
+            throw new Error(`${describeError(error)}; buffered fallback failed: ${describeError(fallbackError)}`);
+          }
+        }
       } else {
         const text = await readBoundedBody(response, MAX_BUFFERED_RESPONSE_BYTES);
         consumeBufferedGatewayResponse(JSON.parse(text) as unknown, output, stream);

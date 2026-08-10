@@ -154,6 +154,13 @@ test("RDK extension delegates runtime paths to the shared fail-closed resolver",
   );
 });
 
+test("RDK prompt rendering uses the shared Unicode sanitizer", async () => {
+  const source = await readFile(new URL("../extensions/rdk/index.ts", import.meta.url), "utf8");
+  assert.match(source, /import \{ toWellFormedText \} from "\.\/text-safety\.mjs";/);
+  assert.match(source, /prompt\.replaceAll\(token, \(\) => toWellFormedText\(value\)\)/);
+  assert.doesNotMatch(source, /\bsanitizeText\b/);
+});
+
 test("packaged settings and launcher do not default to system config or state", async () => {
   const settings = JSON.parse(await readFile(new URL("../packaging/pi/settings.json", import.meta.url), "utf8"));
   const launcher = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");

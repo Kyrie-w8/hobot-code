@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.3
+
+- Restore RDK expert-prompt rendering after the Provider split by using the shared well-formed Unicode sanitizer.
+- Retry a bounded buffered request when the D-Robotics gateway ends an empty SSE response early, while continuing to reject partial streams after content has started.
+
 ## 0.12.2
 
 - Split the D-Robotics gateway into a focused provider module and preserve valid Unicode while rejecting malformed text.
