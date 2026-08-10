@@ -72,7 +72,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 此时安装器使用 `SUDO_USER` 作为目标用户。root 直接安装时目标用户默认为 root，无需 `sudo`，运行 `./install.sh` 即可；也可用 `HOBOT_CODE_INSTALL_USER` 显式指定其他目标用户，例如 `HOBOT_CODE_INSTALL_USER=developer ./install.sh`。
 
-目标用户必须已经存在并拥有可解析的 home 目录。以 root 日常运行时，Shell、写入和编辑工具始终逐次确认，非交互模式默认拒绝这些操作。
+目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
 ### 3. 配置模型
 
@@ -145,7 +145,7 @@ hobot --resume
 Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 
 - 内置 `write`、`edit` 禁止直接修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
-- 内置工具的工作区外写入、识别出的破坏性 Shell 命令，以及 root 下的 `bash`、`write`、`edit` 需要交互确认；非交互 root 会话拒绝这些调用。
+- 内置工具的工作区外写入和识别出的破坏性 Shell 命令需要交互确认；root 默认额外确认 `bash`、`write`、`edit`，可通过 `/permissions root policy` 让显式规则生效。
 - 默认权限允许模型检索记忆，但每次模型写入记忆都要求确认；用户可以修改该策略。
 - 第三方扩展和 Skills 以当前用户权限运行，安装前必须审查来源与代码。
 - `system_snapshot` 只能证明当前设备与工具状态，不能证明模型已经完成转换、量化或 BPU 验收。

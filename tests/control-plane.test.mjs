@@ -23,6 +23,7 @@ import {
   parsePolicy,
   parseQualityConfig,
   reconcileToolVisibility,
+  requiresRootToolApproval,
   resolveToolAction,
   sensitiveMemoryReasons,
   setPolicyRule,
@@ -49,6 +50,23 @@ test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   const denied = setPolicyRule(DEFAULT_POLICY, "mcp:*", "deny");
   assert.equal(resolveToolAction(denied, "mcp__git__status", true), "deny");
   assert.equal(resolveToolAction(denied, "read"), "allow");
+});
+
+test("root policy mode honors explicit tool rules without weakening hard guards", () => {
+  const legacyShape = parsePolicy({
+    schemaVersion: 2,
+    default: "ask",
+    rules: [{ tool: "bash", action: "allow" }],
+  });
+  assert.equal(legacyShape.rootMode, "confirm");
+  assert.equal(requiresRootToolApproval(legacyShape, true, "bash"), true);
+
+  const trusted = parsePolicy({ ...legacyShape, rootMode: "policy" });
+  assert.equal(resolveToolAction(trusted, "bash"), "allow");
+  assert.equal(requiresRootToolApproval(trusted, true, "bash"), false);
+  assert.equal(requiresRootToolApproval(trusted, true, "write"), false);
+  assert.equal(requiresRootToolApproval(trusted, true, "read"), false);
+  assert.ok(destructiveShellReasons("rm -rf ./build").length > 0);
 });
 
 test("permission changes restore only tools hidden by the permission layer", () => {
@@ -132,6 +150,10 @@ test("resolved path checks fail closed on symbolic link cycles", async () => {
 test("invalid policies and quality configs fail closed", () => {
   assert.throws(() => parsePolicy({ schemaVersion: 1, default: "yes", rules: [] }), /default/);
   assert.throws(
+    () => parsePolicy({ schemaVersion: 2, rootMode: "unrestricted", default: "ask", rules: [] }),
+    /rootMode/,
+  );
+  assert.throws(
     () => parseQualityConfig({ schemaVersion: 1, timeoutMs: 10, commands: ["make check"] }),
     /timeoutMs/,
   );
@@ -154,6 +176,7 @@ test("legacy and invalid permission policies cannot retain silent mutation acces
     assert.equal(migrated.migrated, true);
     assert.equal(resolveToolAction(migrated.policy, "bash"), "ask");
     assert.equal(resolveToolAction(migrated.policy, "write"), "ask");
+    assert.equal(migrated.policy.rootMode, "confirm");
     assert.equal(JSON.parse(await readFile(path, "utf8")).schemaVersion, 2);
 
     await writeFile(path, "not json");

@@ -150,6 +150,7 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 ```json
 {
   "schemaVersion": 2,
+  "rootMode": "confirm",
   "default": "ask",
   "rules": [
     { "tool": "read", "action": "allow" },
@@ -161,11 +162,14 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 `/permissions set <pattern> <action>` 将规则放到数组开头并原子写回。配置缺失或无效时使用内置保守默认值并显示警告。`deny` 工具从活跃工具集合移除，调用时仍会复核；旧版 schema 1 中可能修改系统的 `allow` 规则会降级为 `ask`。
 
+root 会话默认使用 `rootMode: "confirm"`，因此 `bash`、`write`、`edit` 即使匹配 `allow` 也会确认。执行 `/permissions root policy` 后，root 对普通操作遵守显式的 `allow/ask/deny` 规则；执行 `/permissions root confirm` 可恢复默认行为。当前模式会显示在 `/permissions status` 中。
+
 硬安全边界高于用户规则：
 
 - 内置 `write`、`edit` 禁止修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
 - 内置工具写入工作区外，以及 Shell 命中破坏性规则时，需要交互确认。
-- root 会话的 `bash`、`write`、`edit` 始终逐次确认；非交互 root 会话拒绝这些调用。
+- root `confirm` 模式的 `bash`、`write`、`edit` 逐次确认；`policy` 模式允许显式 `allow` 规则生效。
+- 无论 root 模式如何，工作区外写入和识别出的破坏性 Shell 命令仍需确认，关键系统目录写入仍会阻止。
 - 确认详情会尽力隐藏 token、Bearer Token 和常见 secret 字段。
 
 默认策略允许 `memory_search`，将 `memory_save` 设为 `ask`。这意味着默认每次由模型发起的记忆写入都要确认，但用户可以修改该规则；直接执行 `/memory add` 本身就是明确的用户操作。

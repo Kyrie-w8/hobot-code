@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.6
+
+- Add explicit root permission modes: the safe `confirm` default and opt-in `policy` mode, which honors persistent `allow/ask/deny` rules for routine root operations.
+- Keep destructive Shell commands, writes outside the workspace, and protected system paths guarded in every root mode.
+- Show the effective root mode in `/permissions status` and explain the active mode at startup and in diagnostics.
+
 ## 0.12.5
 
 - Replace Pi's bundled release history with the Hobot Code changelog inside release packages, preventing unrelated upstream entries and dates from flooding the startup screen.

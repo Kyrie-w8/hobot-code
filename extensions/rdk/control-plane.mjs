@@ -5,6 +5,7 @@ import { basename, extname, join, resolve } from "node:path";
 
 export const DEFAULT_POLICY = Object.freeze({
   schemaVersion: 2,
+  rootMode: "confirm",
   default: "ask",
   rules: Object.freeze([
     Object.freeze({ tool: "read", action: "allow" }),
@@ -84,6 +85,7 @@ export const DEFAULT_LSP_CONFIG = Object.freeze({
 });
 
 const permissionActions = new Set(["allow", "ask", "deny"]);
+const rootPermissionModes = new Set(["confirm", "policy"]);
 const fingerprintExcludedDirectories = new Set([
   ".cache",
   ".git",
@@ -112,6 +114,7 @@ const MAX_FINGERPRINT_TOTAL_BYTES = 128 * 1024 * 1024;
 function cloneDefaultPolicy() {
   return {
     schemaVersion: DEFAULT_POLICY.schemaVersion,
+    rootMode: DEFAULT_POLICY.rootMode,
     default: DEFAULT_POLICY.default,
     rules: DEFAULT_POLICY.rules.map((rule) => ({ ...rule })),
   };
@@ -126,6 +129,10 @@ export function parsePolicy(value) {
   }
   if (!permissionActions.has(value.default)) {
     throw new Error("permission policy default must be allow, ask, or deny");
+  }
+  const rootMode = value.schemaVersion === 1 ? "confirm" : (value.rootMode ?? "confirm");
+  if (!rootPermissionModes.has(rootMode)) {
+    throw new Error("permission policy rootMode must be confirm or policy");
   }
   if (!Array.isArray(value.rules) || value.rules.length > 128) {
     throw new Error("permission policy rules must be an array with at most 128 items");
@@ -151,6 +158,7 @@ export function parsePolicy(value) {
 
   return {
     schemaVersion: 2,
+    rootMode,
     default: value.schemaVersion === 1 && value.default === "allow" ? "ask" : value.default,
     rules,
   };
@@ -214,6 +222,14 @@ export function resolveToolAction(policy, toolName, mcp = false) {
     if (wildcardMatches(toolName, rule.tool)) return rule.action;
   }
   return policy.default;
+}
+
+export function requiresRootToolApproval(policy, runningAsRoot, toolName) {
+  return Boolean(
+    runningAsRoot
+      && policy.rootMode !== "policy"
+      && ["bash", "write", "edit"].includes(toolName),
+  );
 }
 
 export function reconcileToolVisibility(allTools, activeTools, hiddenTools, deniedTools) {

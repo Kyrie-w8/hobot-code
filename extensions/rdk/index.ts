@@ -27,6 +27,7 @@ import {
   parseQualityConfig,
   reconcileToolVisibility,
   redactSensitiveText,
+  requiresRootToolApproval,
   resolveToolAction,
   setPolicyRule,
   writeNotificationConfig,
@@ -117,6 +118,7 @@ interface PermissionRule {
 
 interface PermissionPolicy {
   schemaVersion: 2;
+  rootMode: "confirm" | "policy";
   default: PermissionAction;
   rules: PermissionRule[];
 }
@@ -658,7 +660,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   resolveUserPaths();
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_DROBOTICS_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
-  const rootMode = process.getuid?.() === 0;
+  const runningAsRoot = process.getuid?.() === 0;
   const configuredContextWindow = Number(process.env.HOBOT_CODE_MODEL_CONTEXT_WINDOW || 1_000_000);
   const configuredMaxTokens = Number(process.env.HOBOT_CODE_MODEL_MAX_TOKENS || 8192);
   const contextWindow = Number.isInteger(configuredContextWindow) && configuredContextWindow >= 8192
@@ -1263,8 +1265,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (permissionPolicyError) {
       ctx.ui.notify(`Permission policy fallback is active: ${permissionPolicyError}`, "warning");
     }
-    if (rootMode) {
-      ctx.ui.notify("Hobot Code is running as root. Shell and file mutations always require confirmation; use an unprivileged user for routine development.", "warning");
+    if (runningAsRoot && permissionPolicy.rootMode === "confirm") {
+      ctx.ui.notify("Hobot Code is running as root. Shell and file mutations require confirmation; use /permissions root policy to honor explicit allow rules.", "warning");
+    } else if (runningAsRoot) {
+      ctx.ui.notify("Root policy mode is active. Explicit allow rules bypass routine confirmations; destructive commands and protected paths remain guarded.", "warning");
     }
     if (qualityConfigError) {
       ctx.ui.notify(`Quality gate config was ignored: ${qualityConfigError}`, "warning");
@@ -1475,7 +1479,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     const approvalReasons: string[] = [];
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
-    if (rootMode && ["bash", "write", "edit"].includes(event.toolName)) {
+    if (requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName)) {
       approvalReasons.push("root sessions require confirmation for every mutation-capable tool");
     }
 
@@ -1618,8 +1622,17 @@ export default function rdkExtension(pi: ExtensionAPI) {
             parsePolicy({ ...permissionPolicy, default: first }),
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
+        } else if (operation === "root") {
+          if (first !== "confirm" && first !== "policy") {
+            throw new Error("Usage: /permissions root <confirm|policy>");
+          }
+          permissionPolicy = await writePolicy(
+            permissionPolicyPath(),
+            parsePolicy({ ...permissionPolicy, rootMode: first }),
+          ) as PermissionPolicy;
+          permissionPolicyError = undefined;
         } else if (operation !== "status") {
-          throw new Error("Usage: /permissions [status|reload|set <pattern> <action>|default <action>]");
+          throw new Error("Usage: /permissions [status|reload|set <pattern> <action>|default <action>|root <confirm|policy>]");
         }
 
         const hidden = applyDeniedTools();
@@ -1628,6 +1641,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           .join("\n");
         ctx.ui.notify([
           `Policy: ${permissionPolicyPath()}`,
+          `Root mode: ${permissionPolicy.rootMode}`,
           `Default: ${permissionPolicy.default}`,
           permissionPolicyError ? `Fallback: ${permissionPolicyError}` : undefined,
           `Hidden tools: ${hidden.length > 0 ? hidden.join(", ") : "none"}`,
@@ -2077,7 +2091,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
       const temperatures = snapshot.thermalZones.map((zone) => `${zone.name}=${zone.celsius}C`).join(", ") || "unavailable";
       const warnings = [
-        rootMode ? "Running as root; mutation tools require confirmation." : undefined,
+        runningAsRoot && permissionPolicy.rootMode === "confirm"
+          ? "Running as root; mutation tools require confirmation."
+          : undefined,
+        runningAsRoot && permissionPolicy.rootMode === "policy"
+          ? "Running as root in policy mode; explicit allow rules are active."
+          : undefined,
         permissionPolicyError ? `Permission policy: ${permissionPolicyError}` : undefined,
         memoryRuntimeError ? `Memory: ${memoryRuntimeError}` : undefined,
         goalRuntimeError ? `Goal: ${goalRuntimeError}` : undefined,

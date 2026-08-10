@@ -1,5 +1,6 @@
 {
   "schemaVersion": 2,
+  "rootMode": "confirm",
   "default": "ask",
   "rules": [
     { "tool": "read", "action": "allow" },
