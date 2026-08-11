@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.3
+
+- Use `curl` as the sole release downloader and restore the concise `curl -fsSL ... | sh` installation command.
+
 ## 0.14.2
 
 - Support secure release installation and updates with either `curl` or GNU `wget`, covering stock S100 images that do not include `curl`.

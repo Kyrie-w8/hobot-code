@@ -472,9 +472,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(launcher, /release\.sh update/);
   assert.match(launcher, /uninstall\.sh/);
   assert.match(releaseInstaller, /curl --proto '=https' --tlsv1\.2 -fsSL/);
-  assert.match(releaseInstaller, /command -v wget/);
-  assert.match(releaseInstaller, /wget --quiet --https-only --secure-protocol=TLSv1_2/);
-  assert.match(releaseInstaller, /ulimit -f "\$release_download_block_limit"/);
+  assert.doesNotMatch(releaseInstaller, /\bwget\b/);
   assert.match(releaseInstaller, /--max-filesize/);
   assert.match(releaseInstaller, /checksum_target/);
   assert.match(releaseInstaller, /unsupported entry type/);

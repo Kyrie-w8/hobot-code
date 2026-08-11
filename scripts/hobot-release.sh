@@ -120,16 +120,7 @@ case $(printf '%s' "$board_model" | tr '[:upper:]' '[:lower:]') in
     ;;
 esac
 
-if command -v curl >/dev/null 2>&1; then
-  release_downloader=curl
-elif command -v wget >/dev/null 2>&1; then
-  release_downloader=wget
-else
-  printf 'Downloading Hobot Code requires curl or wget.\n' >&2
-  exit 127
-fi
-
-for command_name in tar awk sed mktemp cp; do
+for command_name in curl tar awk sed mktemp cp; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf 'Required command is not installed: %s\n' "$command_name" >&2
     exit 127
@@ -142,32 +133,16 @@ download() {
   release_download_maximum_bytes=$3
   case "$release_download_url" in
     https://*)
-      if [ "$release_downloader" = curl ]; then
-        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 \
-          --retry-all-errors --max-filesize "$release_download_maximum_bytes" \
-          "$release_download_url" -o "$release_download_destination"
-      else
-        release_download_block_limit=$(((release_download_maximum_bytes + 511) / 512))
-        if ! (
-          ulimit -f "$release_download_block_limit"
-          wget --quiet --https-only --secure-protocol=TLSv1_2 --timeout=20 --tries=4 --waitretry=2 \
-            -O "$release_download_destination" "$release_download_url"
-        ); then
-          printf 'Release download failed: %s\n' "$release_download_url" >&2
-          return 1
-        fi
-      fi
+      curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 \
+        --retry-all-errors --max-filesize "$release_download_maximum_bytes" \
+        "$release_download_url" -o "$release_download_destination"
       ;;
     http://127.0.0.1:*|http://localhost:*)
       if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then
         printf 'Release downloads require HTTPS: %s\n' "$release_download_url" >&2
         exit 1
       fi
-      if [ "$release_downloader" = curl ]; then
-        curl -fsSL --connect-timeout 5 "$release_download_url" -o "$release_download_destination"
-      else
-        wget --quiet --timeout=5 --tries=1 -O "$release_download_destination" "$release_download_url"
-      fi
+      curl -fsSL --connect-timeout 5 "$release_download_url" -o "$release_download_destination"
       ;;
     file://*)
       if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then
