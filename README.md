@@ -49,16 +49,16 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 在 RDK X5、S100 或 S600 上执行：
 
 ```bash
-curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh | sh
+wget -qO- https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh | sh
 ```
 
-脚本只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。
+脚本自动使用系统已有的 `curl` 或 `wget`，只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。如果更习惯 `curl`，可将命令开头替换为 `curl -fsSL`。
 
 安装指定版本：
 
 ```bash
-curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.14.1
+wget -qO- https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
+  | sh -s -- --version 0.14.2
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -190,7 +190,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.14.1
+hobot update --version 0.14.2
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

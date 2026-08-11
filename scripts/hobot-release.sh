@@ -120,7 +120,16 @@ case $(printf '%s' "$board_model" | tr '[:upper:]' '[:lower:]') in
     ;;
 esac
 
-for command_name in curl tar awk sed mktemp cp; do
+if command -v curl >/dev/null 2>&1; then
+  release_downloader=curl
+elif command -v wget >/dev/null 2>&1; then
+  release_downloader=wget
+else
+  printf 'Downloading Hobot Code requires curl or wget.\n' >&2
+  exit 127
+fi
+
+for command_name in tar awk sed mktemp cp; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf 'Required command is not installed: %s\n' "$command_name" >&2
     exit 127
@@ -128,33 +137,53 @@ for command_name in curl tar awk sed mktemp cp; do
 done
 
 download() {
-  source_url=$1
-  destination=$2
-  maximum_bytes=$3
-  case "$source_url" in
-    https://*) curl --proto '=https' --tlsv1.2 -fL --connect-timeout 20 --retry 3 --retry-delay 2 --retry-all-errors --max-filesize "$maximum_bytes" "$source_url" -o "$destination" ;;
+  release_download_url=$1
+  release_download_destination=$2
+  release_download_maximum_bytes=$3
+  case "$release_download_url" in
+    https://*)
+      if [ "$release_downloader" = curl ]; then
+        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 \
+          --retry-all-errors --max-filesize "$release_download_maximum_bytes" \
+          "$release_download_url" -o "$release_download_destination"
+      else
+        release_download_block_limit=$(((release_download_maximum_bytes + 511) / 512))
+        if ! (
+          ulimit -f "$release_download_block_limit"
+          wget --quiet --https-only --secure-protocol=TLSv1_2 --timeout=20 --tries=4 --waitretry=2 \
+            -O "$release_download_destination" "$release_download_url"
+        ); then
+          printf 'Release download failed: %s\n' "$release_download_url" >&2
+          return 1
+        fi
+      fi
+      ;;
     http://127.0.0.1:*|http://localhost:*)
       if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then
-        printf 'Release downloads require HTTPS: %s\n' "$source_url" >&2
+        printf 'Release downloads require HTTPS: %s\n' "$release_download_url" >&2
         exit 1
       fi
-      curl -fL --connect-timeout 5 "$source_url" -o "$destination"
+      if [ "$release_downloader" = curl ]; then
+        curl -fsSL --connect-timeout 5 "$release_download_url" -o "$release_download_destination"
+      else
+        wget --quiet --timeout=5 --tries=1 -O "$release_download_destination" "$release_download_url"
+      fi
       ;;
     file://*)
       if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then
-        printf 'Release downloads require HTTPS: %s\n' "$source_url" >&2
+        printf 'Release downloads require HTTPS: %s\n' "$release_download_url" >&2
         exit 1
       fi
-      cp "${source_url#file://}" "$destination"
+      cp "${release_download_url#file://}" "$release_download_destination"
       ;;
     *)
-      printf 'Release downloads require HTTPS: %s\n' "$source_url" >&2
+      printf 'Release downloads require HTTPS: %s\n' "$release_download_url" >&2
       exit 1
       ;;
   esac
-  downloaded_bytes=$(wc -c < "$destination" | tr -d ' ')
-  if [ -z "$downloaded_bytes" ] || [ "$downloaded_bytes" -gt "$maximum_bytes" ]; then
-    printf 'Release download exceeds %s bytes: %s\n' "$maximum_bytes" "$source_url" >&2
+  release_downloaded_bytes=$(wc -c < "$release_download_destination" | tr -d ' ')
+  if [ -z "$release_downloaded_bytes" ] || [ "$release_downloaded_bytes" -gt "$release_download_maximum_bytes" ]; then
+    printf 'Release download exceeds %s bytes: %s\n' "$release_download_maximum_bytes" "$release_download_url" >&2
     exit 1
   fi
 }

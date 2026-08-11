@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.2
+
+- Support secure release installation and updates with either `curl` or GNU `wget`, covering stock S100 images that do not include `curl`.
+- Make the documented one-command installer use `wget`, while retaining `curl` as an equivalent option.
+
 ## 0.14.1
 
 - Fix clean-runner release builds by isolating POSIX Shell download and checksum state so first-time dependency downloads retain their final cache destinations.
