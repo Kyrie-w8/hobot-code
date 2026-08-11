@@ -121,11 +121,11 @@ acquire_package_lock() {
 acquire_package_lock
 
 checksum_file() {
-  checksum_path=$1
+  package_checksum_path=$1
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$checksum_path" | awk '{print $1}'
+    sha256sum "$package_checksum_path" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$checksum_path" | awk '{print $1}'
+    shasum -a 256 "$package_checksum_path" | awk '{print $1}'
   else
     printf 'A SHA256 utility (sha256sum or shasum) is required\n' >&2
     return 127
@@ -133,35 +133,38 @@ checksum_file() {
 }
 
 verify_file() {
-  destination=$1
-  expected=$2
-  label=$3
-  actual=$(checksum_file "$destination") || return
-  if [ "$actual" != "$expected" ]; then
-    printf '%s checksum mismatch: expected %s, got %s\n' "$label" "$expected" "$actual" >&2
+  package_verify_path=$1
+  package_verify_expected=$2
+  package_verify_label=$3
+  package_verify_actual=$(checksum_file "$package_verify_path") || return
+  if [ "$package_verify_actual" != "$package_verify_expected" ]; then
+    printf '%s checksum mismatch: expected %s, got %s\n' \
+      "$package_verify_label" "$package_verify_expected" "$package_verify_actual" >&2
     return 1
   fi
 }
 
 download_and_verify() {
-  url=$1
-  destination=$2
-  expected=$3
-  label=$4
-  if [ -f "$destination" ] && verify_file "$destination" "$expected" "$label"; then
+  package_download_url=$1
+  package_download_destination=$2
+  package_download_expected=$3
+  package_download_label=$4
+  if [ -f "$package_download_destination" ] && \
+     verify_file "$package_download_destination" "$package_download_expected" "$package_download_label"; then
     return
   fi
-  if [ -e "$destination" ]; then
-    printf 'Replacing invalid cached file: %s\n' "$destination" >&2
+  if [ -e "$package_download_destination" ]; then
+    printf 'Replacing invalid cached file: %s\n' "$package_download_destination" >&2
   fi
-  partial="$destination.part.$$"
-  rm -f "$partial"
-  curl --proto '=https' --tlsv1.2 -fL --connect-timeout 20 --retry 3 --retry-delay 2 --retry-all-errors "$url" -o "$partial"
-  if ! verify_file "$partial" "$expected" "$label"; then
-    rm -f "$partial"
+  package_download_partial="$package_download_destination.part.$$"
+  rm -f "$package_download_partial"
+  curl --proto '=https' --tlsv1.2 -fL --connect-timeout 20 --retry 3 --retry-delay 2 --retry-all-errors \
+    "$package_download_url" -o "$package_download_partial"
+  if ! verify_file "$package_download_partial" "$package_download_expected" "$package_download_label"; then
+    rm -f "$package_download_partial"
     return 1
   fi
-  mv -f "$partial" "$destination"
+  mv -f "$package_download_partial" "$package_download_destination"
 }
 
 download_and_verify "$PI_LINUX_ARM64_URL" "$archive" "$PI_LINUX_ARM64_SHA256" "Pi archive"

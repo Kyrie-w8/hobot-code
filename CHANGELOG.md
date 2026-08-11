@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1
+
+- Fix clean-runner release builds by isolating POSIX Shell download and checksum state so first-time dependency downloads retain their final cache destinations.
+
 ## 0.14.0
 
 - Add a release-hosted one-command installer with exact-version selection, RDK Linux ARM64 detection, HTTPS-only downloads, archive confinement, and strict SHA256 verification.

@@ -434,6 +434,9 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(packager, /release-metadata\.mjs" write/);
   assert.match(packager, /output_part=.*\.part\.\$\$/);
   assert.match(packager, /\.package-pi\.lock/);
+  assert.match(packager, /package_download_partial=.*package_download_destination\.part\.\$\$/);
+  assert.match(packager, /mv -f "\$package_download_partial" "\$package_download_destination"/);
+  assert.doesNotMatch(packager, /^\s*(?:destination|partial|expected|actual|label|url)=/m);
   assert.match(packager, /tar --no-recursion/);
   assert.match(packager, /gzip -n -9 -c/);
   assert.match(packager, /CONTRIBUTING\.md/);
