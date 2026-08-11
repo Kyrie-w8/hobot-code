@@ -14,7 +14,9 @@ import {
 } from "../extensions/rdk/drobotics-config.mjs";
 import { convertMessages } from "../extensions/rdk/drobotics-payload.mjs";
 import {
+  GatewayStreamError,
   IncompleteGatewayStreamError,
+  describeGatewayStreamError,
   validateBufferedGatewayResponse,
   validateGatewayContentBlock,
   validateGatewayUsage,
@@ -415,10 +417,22 @@ test("gateway stop reasons cover current Anthropic terminal states", () => {
 
 test("empty incomplete streams alone may retry through the buffered gateway", () => {
   const incomplete = new IncompleteGatewayStreamError("stream ended early");
+  const streamError = new GatewayStreamError("upstream disconnected");
   assert.equal(shouldRetryBufferedGatewayResponse(incomplete, 0), true);
+  assert.equal(shouldRetryBufferedGatewayResponse(streamError, 0), true);
+  assert.equal(shouldRetryBufferedGatewayResponse(streamError, 1), false);
   assert.equal(shouldRetryBufferedGatewayResponse(incomplete, 1), false);
   assert.equal(shouldRetryBufferedGatewayResponse(incomplete, 0, true), false);
   assert.equal(shouldRetryBufferedGatewayResponse(new Error("malformed event"), 0), false);
+});
+
+test("gateway stream errors preserve standard and compatibility messages", () => {
+  assert.equal(describeGatewayStreamError({ error: { message: "standard failure" } }), "standard failure");
+  assert.equal(describeGatewayStreamError({ error: "string failure" }), "string failure");
+  assert.equal(describeGatewayStreamError({ error: { error: { detail: "nested failure" } } }), "nested failure");
+  assert.equal(describeGatewayStreamError({ error: null, message: "top-level failure" }), "top-level failure");
+  assert.equal(describeGatewayStreamError({ error: null }), "unknown gateway error");
+  assert.equal(describeGatewayStreamError({ error: "x".repeat(5000) }).length, 4096);
 });
 
 test("D-Robotics provider fallback state machine", async (t) => {
@@ -471,6 +485,24 @@ test("D-Robotics provider fallback state machine", async (t) => {
     });
   });
 
+  await t.test("a non-standard empty stream error retries once through the buffered gateway", async () => {
+    const requests = [];
+    const fetch = fakeFetchSequence([
+      sseResponse([{ type: "error", error: "transient upstream disconnect" }]),
+      jsonResponse(bufferedMessage("buffered-after-stream-error")),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel(),
+      providerContext(),
+      providerOptions(fetch),
+    ));
+
+    assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
+    assert.equal(events.at(-1).type, "done");
+    assert.equal(events.at(-1).message.responseId, "buffered-after-stream-error");
+  });
+
   await t.test("partial SSE fails without a buffered retry", async () => {
     const requests = [];
     const fetch = fakeFetchSequence([
@@ -501,6 +533,32 @@ test("D-Robotics provider fallback state machine", async (t) => {
     assert.match(error.errorMessage, /stream ended before message_stop/);
     assert.equal(error.responseId, "stream-partial");
     assert.equal(error.content[0].text, "partial");
+  });
+
+  await t.test("a stream error after partial output keeps its message and never retries", async () => {
+    const requests = [];
+    const fetch = fakeFetchSequence([
+      sseResponse([
+        emptyMessageStart("stream-error-after-output", 23),
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "partial" },
+        },
+        { type: "error", error: "upstream failed after output" },
+      ]),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel(),
+      providerContext(),
+      providerOptions(fetch),
+    ));
+
+    assert.equal(requests.length, 1);
+    assert.equal(events.at(-1).type, "error");
+    assert.match(events.at(-1).error.errorMessage, /upstream failed after output/);
+    assert.doesNotMatch(events.at(-1).error.errorMessage, /expected a JSON object/);
   });
 
   await t.test("an aborted request never retries through the buffered gateway", async () => {

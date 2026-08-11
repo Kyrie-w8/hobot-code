@@ -12,10 +12,45 @@ export class IncompleteGatewayStreamError extends Error {
   }
 }
 
+export class GatewayStreamError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "GatewayStreamError";
+  }
+}
+
 export function shouldRetryBufferedGatewayResponse(error, emittedContentBlocks, aborted = false) {
-  return error instanceof IncompleteGatewayStreamError
+  return (error instanceof IncompleteGatewayStreamError || error instanceof GatewayStreamError)
     && emittedContentBlocks === 0
     && !aborted;
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function nestedGatewayErrorMessage(value, depth = 0) {
+  const direct = nonEmptyString(value);
+  if (direct || depth >= 2 || !value || typeof value !== "object" || Array.isArray(value)) return direct;
+
+  for (const field of ["message", "detail", "error_description"]) {
+    const message = nonEmptyString(value[field]);
+    if (message) return message;
+  }
+  for (const field of ["error", "cause"]) {
+    const message = nestedGatewayErrorMessage(value[field], depth + 1);
+    if (message) return message;
+  }
+  return undefined;
+}
+
+export function describeGatewayStreamError(event) {
+  const record = requireGatewayObject(event, "stream error event");
+  for (const value of [record.error, record.message, record.detail]) {
+    const message = nestedGatewayErrorMessage(value);
+    if (message) return message.slice(0, 4096);
+  }
+  return "unknown gateway error";
 }
 
 export function mapGatewayStopReason(reason) {

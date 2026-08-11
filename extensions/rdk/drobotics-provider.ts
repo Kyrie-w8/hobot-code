@@ -17,7 +17,9 @@ import { iterateAnthropicSse, readBoundedBody } from "./anthropic-sse.mjs";
 import { resolveGatewayTimeout } from "./drobotics-config.mjs";
 import { convertMessages, convertTools } from "./drobotics-payload.mjs";
 import {
+  GatewayStreamError,
   IncompleteGatewayStreamError,
+  describeGatewayStreamError,
   requireGatewayObject,
   requireGatewayString,
   requireGatewayStringAlternative,
@@ -213,9 +215,7 @@ async function consumeStreamingGatewayResponse(
     }
     const eventType = requireGatewayString(event, "type", "stream event", { required: true, nonEmpty: true });
     if (eventType === "error") {
-      const error = requireGatewayObject(event.error, "stream error") as JsonRecord;
-      const message = requireGatewayString(error, "message", "stream error", { required: true, nonEmpty: true });
-      throw new Error(`Model gateway stream error: ${message}`);
+      throw new GatewayStreamError(`Model gateway stream error: ${describeGatewayStreamError(event)}`);
     }
     if (eventType === "message_start") {
       const message = requireGatewayObject(event.message, "message_start.message") as JsonRecord;
