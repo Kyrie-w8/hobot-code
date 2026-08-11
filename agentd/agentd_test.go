@@ -301,6 +301,42 @@ func TestTaskRestartWithoutSession(t *testing.T) {
 	waitForStatus(t, current, statusStopped)
 }
 
+func TestLateWorkerEventsDoNotReviveStoppingOrTerminalTasks(t *testing.T) {
+	cfg := testConfig(t)
+	taskDir := filepath.Join(cfg.TasksRoot, "00112233445566778899aabb")
+	if err := os.Mkdir(taskDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	events := filepath.Join(taskDir, "events.jsonl")
+	if err := os.WriteFile(events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{
+		manager:     &taskManager{cfg: cfg},
+		dir:         taskDir,
+		events:      events,
+		metadata:    taskMetadata{ID: "00112233445566778899aabb", Status: statusStopping},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+
+	current.recordEvent(json.RawMessage(`{"type":"agent_settled"}`))
+	if state := current.snapshot(); state.Status != statusStopping {
+		t.Fatalf("late settled event changed stopping task state: %+v", state)
+	}
+	current.recordEvent(json.RawMessage(`{"type":"extension_ui_request","id":"late","method":"confirm"}`))
+	if state := current.snapshot(); state.Status != statusStopping || len(state.Approvals) != 0 {
+		t.Fatalf("late approval revived stopping task: %+v", state)
+	}
+
+	current.mu.Lock()
+	current.metadata.Status = statusStopped
+	current.mu.Unlock()
+	current.recordEvent(json.RawMessage(`{"type":"agent_start"}`))
+	if state := current.snapshot(); state.Status != statusStopped {
+		t.Fatalf("late start event revived stopped task: %+v", state)
+	}
+}
+
 func TestRecoveryRejectsSymlinkedState(t *testing.T) {
 	cfg := testConfig(t)
 	id := "00112233445566778899aabb"

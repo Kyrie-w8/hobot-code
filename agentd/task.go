@@ -485,13 +485,18 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	current.mu.Lock()
 	current.metadata.LastSequence++
 	current.metadata.UpdatedAt = time.Now().UTC()
+	acceptWorkerTransition := current.metadata.Status != statusStopping && isLiveStatus(current.metadata.Status)
 	switch header.Type {
 	case "agent_start":
-		current.metadata.Status = statusRunning
+		if acceptWorkerTransition {
+			current.metadata.Status = statusRunning
+		}
 	case "agent_settled":
-		current.metadata.Status = statusIdle
+		if acceptWorkerTransition {
+			current.metadata.Status = statusIdle
+		}
 	case "extension_ui_request":
-		if approval, ok := approvalFromEvent(raw); ok {
+		if approval, ok := approvalFromEvent(raw); ok && acceptWorkerTransition {
 			current.metadata.Status = statusWaiting
 			current.upsertApprovalLocked(approval)
 		}
