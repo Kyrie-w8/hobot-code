@@ -51,7 +51,6 @@ test('elapsed labels remain compact', () => {
   assert.equal(elapsedLabel(new Date(0).toISOString(), new Date(12_000).toISOString()), '12s');
   assert.equal(elapsedLabel(new Date(0).toISOString(), new Date(72_000).toISOString()), '1m 12s');
 });
-
 test('long conversations load a bounded window from the newest events', () => {
   assert.equal(recentEventsAfter(1933), 1533);
   assert.equal(recentEventsAfter(120), 0);

@@ -129,7 +129,6 @@ export function elapsedLabel(start, end) {
   const seconds = Math.round((milliseconds % 60_000) / 1000);
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
-
 export function recentEventsAfter(lastSequence, windowSize = 400) {
   const sequence = Number.isFinite(lastSequence) ? Math.max(0, Math.floor(lastSequence)) : 0;
   const window = Number.isFinite(windowSize) ? Math.max(1, Math.floor(windowSize)) : 400;

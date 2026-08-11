@@ -243,7 +243,6 @@ function App() {
     if (selectedTask?.id === task.id) setWatchRevision((revision) => revision + 1);
     else setSelectedTask(task);
   }
-
   function onTimelineScroll(event: UIEvent<HTMLDivElement>) {
     const target = event.currentTarget;
     const atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 80;
