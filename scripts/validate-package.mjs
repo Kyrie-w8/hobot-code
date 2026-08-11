@@ -40,6 +40,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "docs/architecture.md",
   "docs/configuration.md",
   "docs/prime-agent-crush-review.md",
+  "docs/releasing.md",
   "docs/user-directory-layout.md",
   "runtime/README.md",
   "runtime/CHANGELOG.md",
@@ -73,6 +74,8 @@ export const REQUIRED_PACKAGE_PATHS = [
   "hobot-launcher",
   "install.sh",
   "rollback.sh",
+  "release.sh",
+  "uninstall.sh",
 ];
 
 export const REQUIRED_EXECUTABLE_PATHS = [
@@ -82,6 +85,8 @@ export const REQUIRED_EXECUTABLE_PATHS = [
   "hobot-launcher",
   "install.sh",
   "rollback.sh",
+  "release.sh",
+  "uninstall.sh",
 ];
 
 async function walkFiles(directory) {

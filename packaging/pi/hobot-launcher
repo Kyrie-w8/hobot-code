@@ -118,6 +118,21 @@ The default name is "main". Detach with Ctrl+B, then D.
 EOF
 }
 
+handle_product_command() {
+  case "${1:-}" in
+    update)
+      if [ "${2:-}" = --extensions ]; then return 1; fi
+      shift
+      exec /usr/local/lib/hobot-code/release.sh update "$@"
+      ;;
+    uninstall)
+      shift
+      exec /usr/local/lib/hobot-code/uninstall.sh "$@"
+      ;;
+  esac
+  return 1
+}
+
 require_tmux() {
   if ! command -v tmux >/dev/null 2>&1; then
     printf 'Persistent Hobot Code sessions require tmux. Install it with: sudo apt-get install tmux\n' >&2
@@ -272,6 +287,8 @@ hobot_tmux_config=/usr/local/lib/hobot-code/tmux.conf
 require_absolute_path XDG_CONFIG_HOME "$hobot_config_home"
 require_absolute_path XDG_STATE_HOME "$hobot_state_home"
 require_absolute_path HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
+
+handle_product_command "$@" || :
 
 reject_symlink "$hobot_config_root"
 reject_symlink "$hobot_config_root/agent"

@@ -44,34 +44,24 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 
 ## 快速开始
 
-### 1. 构建发行包
+### 1. 一条命令安装
 
-构建机需要 Git、`make`、Node.js 22.13 或更新版本、POSIX Shell、`curl`、`tar`、`gzip`，以及 `sha256sum` 或 `shasum`：
-
-```bash
-git clone https://github.com/Kyrie-w8/hobot-code.git
-cd hobot-code
-make release
-```
-
-产物位于 `dist/hobot-code-<version>-linux-arm64.tar.gz`，并附带同名 `.sha256` 校验文件。发行流程会按锁文件下载并校验 Pi、`fd` 和 `ripgrep` 的 Linux ARM64 产物。
-
-### 2. 安装到板卡
-
-安装器必须以 root 权限运行，但配置和状态属于“安装目标用户”。推荐从日常开发用户执行：
-
-在构建机上设置实际的板卡用户和地址，并传输归档与校验文件：
+在 RDK X5、S100 或 S600 上执行：
 
 ```bash
-RDK_USER=your-user
-RDK_HOST=your-board-address
-release=$(sed -n '1p' VERSION)
-package="dist/hobot-code-$release-linux-arm64.tar.gz"
-scp "$package" "$package.sha256" "$RDK_USER@$RDK_HOST:/tmp/"
-ssh "$RDK_USER@$RDK_HOST"
+curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh | sh
 ```
 
-在板卡上安装：
+脚本只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。
+
+安装指定版本：
+
+```bash
+curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
+  | sh -s -- --version 0.14.0
+```
+
+无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
 
 ```bash
 cd /tmp
@@ -84,11 +74,9 @@ cd "${package%.tar.gz}"
 sudo ./install.sh  # root 直接登录时使用 ./install.sh
 ```
 
-此时安装器使用 `SUDO_USER` 作为目标用户。root 直接安装时目标用户默认为 root，无需 `sudo`，运行 `./install.sh` 即可；也可用 `HOBOT_CODE_INSTALL_USER` 显式指定其他目标用户，例如 `HOBOT_CODE_INSTALL_USER=developer ./install.sh`。
-
 目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。权限文件会在每次工具调用前重新读取，因此设置会立即同步到同一用户已打开的其他会话。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
-### 3. 配置模型
+### 2. 配置模型
 
 以安装目标用户编辑 `~/.config/hobot-code/hobot.env`：
 
@@ -101,7 +89,7 @@ API_TIMEOUT_MS=3000000
 
 安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。D-Robotics Provider 优先请求 Anthropic SSE 流；若端点明确不支持流式格式或返回普通 JSON，则回退到有大小上限的缓冲响应。
 
-### 4. 启动
+### 3. 启动
 
 ```bash
 hobot
@@ -199,6 +187,19 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 
 安装器会在替换运行时前检查空间、备份已有安装，并拒绝覆盖正在运行的 Hobot Code。用户配置、会话、记忆和目标会保留；默认配置只在缺失时创建。
 
+```bash
+hobot update --check       # 只检查最新稳定版本
+hobot update               # 下载、校验并升级
+hobot update --version 0.14.0
+```
+
+`hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：
+
+```bash
+hobot uninstall
+hobot uninstall --purge    # 永久删除当前安装用户的数据与备份
+```
+
 回滚必须以 root 权限执行，并且只在存在完整的前一版本备份时可用，因此首次安装后通常没有可回滚版本：
 
 ```bash
@@ -224,6 +225,7 @@ make release
 | [系统架构](docs/architecture.md) | 运行路径、适配层、数据边界与部署模型 |
 | [用户目录布局](docs/user-directory-layout.md) | 配置、状态、迁移与安装目标用户 |
 | [设计调研](docs/prime-agent-crush-review.md) | Prime Agent 与 Crush 的可借鉴设计 |
+| [发布流程](docs/releasing.md) | 版本、GitHub Release、来源证明与实机检查 |
 | [安全说明](SECURITY.md) | 权限边界、密钥、第三方代码与漏洞报告 |
 | [贡献指南](CONTRIBUTING.md) | 本地验证、变更要求与提交检查表 |
 | [变更记录](CHANGELOG.md) | 各版本行为变化 |

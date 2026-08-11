@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -137,12 +138,14 @@ test("release layout covers installer inputs and linked documentation", async (t
     "hobot-launcher",
     "install.sh",
     "rollback.sh",
+    "release.sh",
+    "uninstall.sh",
   ];
   for (const name of installerInputs) assert.ok(REQUIRED_PACKAGE_PATHS.includes(name), `missing package contract: ${name}`);
   for (const name of ["extensions", "skills", "knowledge", "prompts", "licenses"]) {
     assert.ok(REQUIRED_PACKAGE_DIRECTORIES.includes(name), `missing package directory contract: ${name}`);
   }
-  for (const name of ["architecture.md", "configuration.md", "prime-agent-crush-review.md", "user-directory-layout.md"]) {
+  for (const name of ["architecture.md", "configuration.md", "prime-agent-crush-review.md", "releasing.md", "user-directory-layout.md"]) {
     assert.ok(REQUIRED_PACKAGE_PATHS.includes(`docs/${name}`), `missing packaged documentation: ${name}`);
   }
 
@@ -231,14 +234,105 @@ async function launcherFixture(t) {
     await copyFile(new URL(`../packaging/pi/${name}`, import.meta.url), join(defaults, name));
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
-  await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf 'umask=%s\\nliteral=%s\\n' \"$(umask)\" \"${LITERAL_VALUE:-}\"\n");
-  await chmod(join(runtime, "hobot"), 0o755);
+  await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf 'umask=%s\\nliteral=%s\\nargs=%s\\n' \"$(umask)\" \"${LITERAL_VALUE:-}\" \"$*\"\n");
+  await writeFile(join(runtime, "release.sh"), "#!/bin/sh\nprintf 'release:%s\\n' \"$*\"\n");
+  await writeFile(join(runtime, "uninstall.sh"), "#!/bin/sh\nprintf 'uninstall:%s\\n' \"$*\"\n");
+  await Promise.all(["hobot", "release.sh", "uninstall.sh"].map((name) => chmod(join(runtime, name), 0o755)));
   const launcherSource = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
   const launcher = join(root, "hobot-launcher");
   await writeFile(launcher, launcherSource.replaceAll("/usr/local/lib/hobot-code", runtime));
   await chmod(launcher, 0o755);
   return { root, runtime, home, launcher };
 }
+
+test("launcher routes product lifecycle commands without taking Pi extension updates", async (t) => {
+  const fixture = await launcherFixture(t);
+  const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  const update = await execFileAsync(fixture.launcher, ["update", "--check"], { env: environment });
+  assert.equal(update.stdout.trim(), "release:update --check");
+  const uninstall = await execFileAsync(fixture.launcher, ["uninstall", "--yes"], { env: environment });
+  assert.equal(uninstall.stdout.trim(), "uninstall:--yes");
+  const extensions = await execFileAsync(fixture.launcher, ["update", "--extensions"], { env: environment });
+  assert.match(extensions.stdout, /^args=update --extensions$/m);
+});
+
+async function releaseFixture(t, responses) {
+  const root = await mkdtemp(join(tmpdir(), "hobot-public-release-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [name, body] of responses) {
+    const path = join(root, name.replace(/^\/releases\//u, ""));
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, body);
+  }
+  return `file://${root}`;
+}
+
+test("release installer resolves the latest stable version without downloading the archive", async (t) => {
+  const base = await releaseFixture(t, new Map([
+    ["/releases/latest/download/hobot-code-version.txt", "9.8.7\n"],
+  ]));
+  const script = join(repository, "scripts/hobot-release.sh");
+  const { stdout } = await execFileAsync("/bin/sh", [script, "update", "--check"], {
+    env: {
+      ...process.env,
+      HOBOT_CODE_ALLOW_UNSUPPORTED: "1",
+      HOBOT_CODE_RELEASE_BASE_URL: base,
+      HOBOT_CODE_TESTING: "1",
+    },
+  });
+  assert.match(stdout, /Hobot Code 9\.8\.7 is available/);
+});
+
+test("release installer rejects non-strict versions, repositories, and checksum records", async (t) => {
+  const script = join(repository, "scripts/hobot-release.sh");
+  const commonEnvironment = { ...process.env, HOBOT_CODE_ALLOW_UNSUPPORTED: "1" };
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [script, "update", "--version", "01.2.3", "--check"], { env: commonEnvironment }),
+    /not valid SemVer/,
+  );
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [script, "update", "--version", "1.2.3", "--check"], {
+      env: { ...commonEnvironment, HOBOT_CODE_REPOSITORY: "owner/nested/repository" },
+    }),
+    /exactly one slash/,
+  );
+
+  const version = "9.8.7";
+  const archiveName = `hobot-code-${version}-linux-arm64.tar.gz`;
+  const base = await releaseFixture(t, new Map([
+    [`/releases/download/v${version}/${archiveName}`, "not-an-archive"],
+    [`/releases/download/v${version}/${archiveName}.sha256`, `${"0".repeat(64)}  another-file\n`],
+  ]));
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [script, "install", "--version", version], {
+      env: {
+        ...commonEnvironment,
+        HOBOT_CODE_RELEASE_BASE_URL: base,
+        HOBOT_CODE_TESTING: "1",
+      },
+    }),
+    /exactly one SHA256 record/,
+  );
+
+  const escapedVersion = "9.8.6";
+  const escapedArchiveName = `hobot-code-${escapedVersion}-linux-arm64.tar.gz`;
+  const escapedArchive = tarArchiveWithEntry("outside/file");
+  const escapedDigest = createHash("sha256").update(escapedArchive).digest("hex");
+  const escapedBase = await releaseFixture(t, new Map([
+    [`/releases/download/v${escapedVersion}/${escapedArchiveName}`, escapedArchive],
+    [`/releases/download/v${escapedVersion}/${escapedArchiveName}.sha256`, `${escapedDigest}  ${escapedArchiveName}\n`],
+  ]));
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [script, "install", "--version", escapedVersion], {
+      env: {
+        ...commonEnvironment,
+        HOBOT_CODE_RELEASE_BASE_URL: escapedBase,
+        HOBOT_CODE_TESTING: "1",
+      },
+    }),
+    /outside hobot-code-9\.8\.6-linux-arm64/,
+  );
+});
 
 test("launcher treats environment values literally and restores the caller umask", async (t) => {
   const fixture = await launcherFixture(t);
@@ -323,12 +417,15 @@ test("launcher rejects non-regular managed configuration files", async (t) => {
 });
 
 test("release scripts preserve transaction and provenance invariants", async () => {
-  const [makefile, packager, installer, rollback, launcher] = await Promise.all([
+  const [makefile, packager, installer, rollback, launcher, releaseInstaller, uninstaller, workflow] = await Promise.all([
     readFile(join(repository, "Makefile"), "utf8"),
     readFile(join(repository, "scripts/package-pi.sh"), "utf8"),
     readFile(join(repository, "scripts/install-pi.sh"), "utf8"),
     readFile(join(repository, "scripts/rollback-pi.sh"), "utf8"),
     readFile(join(repository, "packaging/pi/hobot-launcher"), "utf8"),
+    readFile(join(repository, "scripts/hobot-release.sh"), "utf8"),
+    readFile(join(repository, "scripts/uninstall-pi.sh"), "utf8"),
+    readFile(join(repository, ".github/workflows/release.yml"), "utf8"),
   ]);
   assert.doesNotMatch(makefile, /package-pi\.sh\s+\$\(VERSION\)/);
   assert.doesNotMatch(packager, /^\.\s+.*\.lock/m);
@@ -352,6 +449,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /Expected a managed command file or an absent path/);
   assert.match(installer, /Installed command validation failed/);
   assert.match(installer, /TOOLS_RUNTIME/);
+  assert.match(installer, /HOBOT_CODE_INSTALL_CHANNEL/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
   assert.doesNotMatch(installer, /\/usr\/local\/bin\/hobot --version/);
   assert.match(rollback, /LAST_BACKUP/);
@@ -368,6 +466,16 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(rollback, /check_available_space "\$runtime_required_kib" \/usr\/local\/lib 'rollback'/);
   assert.doesNotMatch(launcher, /^\s*\.\s+.*hobot\.env/m);
   assert.match(launcher, /umask "\$original_umask"/);
+  assert.match(launcher, /release\.sh update/);
+  assert.match(launcher, /uninstall\.sh/);
+  assert.match(releaseInstaller, /curl --proto '=https' --tlsv1\.2/);
+  assert.match(releaseInstaller, /--max-filesize/);
+  assert.match(releaseInstaller, /checksum_target/);
+  assert.match(releaseInstaller, /unsupported entry type/);
+  assert.match(uninstaller, /--purge/);
+  assert.match(uninstaller, /Stop active Hobot Code processes/);
+  assert.match(workflow, /attest-build-provenance@v2/);
+  assert.match(workflow, /test "\$\{GITHUB_REF_NAME\}" = "v\$\{version\}"/);
 });
 
 test("packager rejects command-line version overrides before doing release work", async () => {

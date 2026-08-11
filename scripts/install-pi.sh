@@ -8,6 +8,14 @@ fi
 
 package_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 version=$(cat "$package_dir/VERSION")
+install_channel=${HOBOT_CODE_INSTALL_CHANNEL:-stable}
+case "$install_channel" in
+  stable) ;;
+  *)
+    printf 'Unsupported Hobot Code release channel: %s\n' "$install_channel" >&2
+    exit 1
+    ;;
+esac
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir=
 new_runtime=
@@ -368,6 +376,8 @@ if [ -d "$config_root" ]; then
 fi
 install -d -m 0755 "$new_runtime/bin" "$new_runtime/default-config" "$new_runtime/licenses"
 cp -R "$package_dir/runtime/." "$new_runtime/"
+install -m 0755 "$package_dir/release.sh" "$new_runtime/release.sh"
+install -m 0755 "$package_dir/uninstall.sh" "$new_runtime/uninstall.sh"
 install -d -m 0755 "$new_runtime/extensions" "$new_runtime/skills" "$new_runtime/knowledge" "$new_runtime/prompts"
 cp -R "$package_dir/extensions/." "$new_runtime/extensions/"
 cp -R "$package_dir/skills/." "$new_runtime/skills/"
@@ -377,6 +387,8 @@ install -m 0644 "$package_dir/PI_RUNTIME" "$new_runtime/PI_RUNTIME"
 install -m 0644 "$package_dir/TOOLS_RUNTIME" "$new_runtime/TOOLS_RUNTIME"
 install -m 0644 "$package_dir/BUILD_INFO.json" "$new_runtime/BUILD_INFO.json"
 install -m 0644 "$package_dir/VERSION" "$new_runtime/VERSION"
+printf '%s\n' "$install_channel" > "$new_runtime/CHANNEL"
+chmod 0644 "$new_runtime/CHANNEL"
 cp -R "$package_dir/licenses/." "$new_runtime/licenses/"
 install -m 0755 "$package_dir/managed-bin/fd" "$new_runtime/bin/fd"
 install -m 0755 "$package_dir/managed-bin/rg" "$new_runtime/bin/rg"

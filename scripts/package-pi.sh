@@ -218,6 +218,8 @@ install -m 0644 "$root_dir/packaging/pi/tmux.conf" "$stage_dir/config/tmux.conf"
 install -m 0755 "$root_dir/packaging/pi/hobot-launcher" "$stage_dir/hobot-launcher"
 install -m 0755 "$root_dir/scripts/install-pi.sh" "$stage_dir/install.sh"
 install -m 0755 "$root_dir/scripts/rollback-pi.sh" "$stage_dir/rollback.sh"
+install -m 0755 "$root_dir/scripts/hobot-release.sh" "$stage_dir/release.sh"
+install -m 0755 "$root_dir/scripts/uninstall-pi.sh" "$stage_dir/uninstall.sh"
 install -m 0644 "$root_dir/LICENSES/pi-mono-MIT.txt" "$stage_dir/licenses/pi-mono-MIT.txt"
 install -m 0644 "$root_dir/LICENSE" "$stage_dir/licenses/hobot-code-MIT.txt"
 

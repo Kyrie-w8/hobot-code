@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.0
+
+- Add a release-hosted one-command installer with exact-version selection, RDK Linux ARM64 detection, HTTPS-only downloads, archive confinement, and strict SHA256 verification.
+- Add `hobot update`, `hobot update --check`, and `hobot uninstall`, while preserving Pi's `hobot update --extensions` behavior.
+- Preserve user configuration, sessions, memory, goals, and backups during normal uninstall; require explicit `--purge --yes` for unattended data removal.
+- Publish tag-matched Linux ARM64 GitHub Releases with build provenance attestations, installer metadata, checksums, and immutable versioned archives.
+
 ## 0.13.5
 
 - Add `/detach` to leave the current persistent TUI while keeping its Agent and tools running.

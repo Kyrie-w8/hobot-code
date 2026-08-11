@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate tag and source version
+        run: |
+          version=$(sed -n '1p' VERSION)
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          node scripts/validate-version.mjs
+
+      - name: Build release
+        run: make release
+
+      - name: Prepare public installer metadata
+        run: |
+          install -m 0755 scripts/hobot-release.sh dist/hobot-install.sh
+          install -m 0644 VERSION dist/hobot-code-version.txt
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/hobot-code-*-linux-arm64.tar.gz
+            dist/hobot-install.sh
+            dist/hobot-code-version.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n '1p' VERSION)
+          prerelease=
+          case "$version" in *-*) prerelease=--prerelease ;; esac
+          gh release create "v$version" \
+            dist/hobot-code-$version-linux-arm64.tar.gz \
+            dist/hobot-code-$version-linux-arm64.tar.gz.sha256 \
+            dist/hobot-install.sh \
+            dist/hobot-code-version.txt \
+            --verify-tag \
+            --title "Hobot Code $version" \
+            --generate-notes \
+            $prerelease

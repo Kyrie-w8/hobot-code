@@ -97,6 +97,8 @@ Pi JSONL 会话位于 `~/.local/state/hobot-code/sessions`。Hobot Code 在同�
 
 发行包包含按锁文件校验的 Pi、`fd`、`ripgrep` Linux ARM64 二进制及许可证。程序安装在 `/usr/local/lib/hobot-code`，启动器位于 `/usr/local/bin/hobot`，回滚命令位于 `/usr/local/sbin/hobot-rollback`。
 
+公开安装入口从 GitHub Release 读取不可变版本号，下载同版本归档和 SHA256，并在解压前限制归档根目录、规范路径与文件类型。`hobot update` 复用相同入口；`hobot update --extensions` 保留给 Pi 扩展管理。Git tag 发布工作流重新构建发行包，并使用 GitHub OIDC 为归档、安装脚本和版本文件生成 provenance attestation。
+
 安装器必须以 root 运行，并把用户配置与状态写入安装目标用户的 home。通过 `sudo` 调用时目标用户默认取 `SUDO_USER`；直接由 root 调用时默认为 root，也可用 `HOBOT_CODE_INSTALL_USER` 显式指定。升级只补充缺失的默认配置，不覆盖现有用户设置。
 
 升级前，旧命令与运行时会写入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`。回滚同样需要 root，并且只接受同时包含旧运行时与旧启动命令的完整备份；首次安装没有前一版本时不可回滚。成功恢复的备份会以 `.hobot-restored` 标记并拒绝再次使用，避免同一备份重复切换运行时。回滚不删除当前用户的配置、会话、记忆或目标。
