@@ -60,7 +60,7 @@ curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.20.0
+  | sh -s -- --version 0.21.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -84,9 +84,9 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。左侧项目可以折叠，每个项目可创建多个对话；新对话会从首条指令生成可修改标题。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
-输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 放行日常 Shell 与工作区编辑。三档模式都不能绕过破坏性命令、受保护系统路径、持久状态和未知工具的板端保护；切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
+输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 放行日常 Shell 与工作区编辑。审批时可选择仅放行一次、在当前任务内记住该工具，或拒绝；任务级放行仍不能绕过破坏性命令、工作区外写入和受保护系统路径的逐次确认。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
 
-当前桌面端尚未支持图片或文档附件。底层模型适配可以表达图片内容，但仍需补齐 Mac 文件选择、经 SSH 的受控上传、MIME/大小校验、板端暂存和会话重放后，才能作为可靠产品能力开放；文档同样不会被静默当作纯文本发送。
+桌面端支持在新任务和后续消息中附加 JPEG、PNG、WebP 或 GIF 图片。大图会在 Mac 本地缩放压缩，每条消息最多 4 张、编码前合计不超过 1 MiB；图片通过既有 SSH/RPC 通道直接写入板端会话，不创建公开上传地址，事件日志只保留文件名和 MIME 摘要。PDF、Word 等文档附件尚未开放，也不会被静默当作纯文本发送。
 
 ### 2. 配置模型
 
@@ -229,7 +229,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.20.0
+hobot update --version 0.21.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

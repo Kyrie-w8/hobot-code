@@ -6,7 +6,7 @@ import {
   Activity, ArrowDown, ArrowLeft, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   FolderOpen, GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
-  MoreHorizontal, PanelRight, Plus, RefreshCw, Search, Server, ShieldCheck,
+  MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
@@ -14,7 +14,7 @@ import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses}
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, ModelOption, Task, TaskEvent, WorkspaceListing} from './types';
+import type {Approval, Board, Connection, ImageContent, ModelOption, Task, TaskEvent, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -23,6 +23,12 @@ const statusLabel: Record<string, string> = {
   starting: 'Starting', idle: 'Ready', running: 'Working', waiting: 'Approval needed',
   stopping: 'Stopping', stopped: 'Stopped', failed: 'Failed', interrupted: 'Interrupted',
 };
+
+const boardPresets: Array<Omit<Board, 'id'>> = [
+  {name: 'RDK S100', host: '10.112.10.98', user: 'root', port: 22},
+  {name: 'RDK S600', host: '10.112.10.106', user: 'root', port: 22},
+  {name: 'RDK X5', host: '10.112.10.100', user: 'root', port: 22},
+];
 
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
@@ -34,7 +40,8 @@ function App() {
   const [composer, setComposer] = useState('');
   const [editingMessage, setEditingMessage] = useState<number | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string} | null>(null);
+  const [attachments, setAttachments] = useState<ImageContent[]>([]);
+  const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
   const [showSideTask, setShowSideTask] = useState(false);
   const [activityClock, setActivityClock] = useState(Date.now());
   const [busy, setBusy] = useState(false);
@@ -55,7 +62,7 @@ function App() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const followsOutput = useRef(true);
-  const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null}>());
+  const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null; attachments: ImageContent[]}>());
   const previousTaskId = useRef('');
   const activeBoardId = useRef('');
 
@@ -67,14 +74,16 @@ function App() {
       const page = await api.tasks(targetBoard);
       if (targetBoard !== activeBoardId.current) return;
       setTasks(page.tasks ?? []);
-      setSelectedTask((current) => {
-        if (!current) return page.tasks?.[0] ?? null;
-        return page.tasks?.find((task) => task.id === current.id) ?? page.tasks?.[0] ?? null;
-      });
+      const summary = page.tasks?.find((task) => task.id === selectedTask?.id) ?? page.tasks?.[0] ?? null;
+      setSelectedTask(summary);
+      if (summary) {
+        const detail = await api.task(targetBoard, summary.id);
+        if (targetBoard === activeBoardId.current) setSelectedTask(detail);
+      }
     } catch (reason) {
       setError(String(reason));
     }
-  }, [boardId]);
+  }, [boardId, selectedTask?.id]);
 
   const connect = useCallback(async (board: Board) => {
     setBusy(true);
@@ -91,7 +100,9 @@ function App() {
       setConnection(next);
       setModels(pageModels ?? []);
       setTasks(page.tasks ?? []);
-      setSelectedTask(page.tasks?.[0] ?? null);
+      const initialTask = page.tasks?.[0] ?? null;
+      setSelectedTask(initialTask);
+      if (initialTask) setSelectedTask(await api.task(board.id, initialTask.id));
       setEvents([]);
       setOptimisticPrompt(null);
       setError('');
@@ -170,13 +181,14 @@ function App() {
     const nextTaskId = selectedTask?.id ?? '';
     const previous = previousTaskId.current;
     if (previous && previous !== nextTaskId) {
-      if (composer) taskDrafts.current.set(previous, {text: composer, editingMessage});
+      if (composer || attachments.length) taskDrafts.current.set(previous, {text: composer, editingMessage, attachments});
       else taskDrafts.current.delete(previous);
     }
     if (previous !== nextTaskId) {
       const draft = taskDrafts.current.get(nextTaskId);
       setComposer(draft?.text ?? '');
       setEditingMessage(draft?.editingMessage ?? null);
+      setAttachments(draft?.attachments ?? []);
       previousTaskId.current = nextTaskId;
     }
   }, [selectedTask?.id]);
@@ -246,26 +258,29 @@ function App() {
     setBusy(true);
     setError('');
     const submittedAt = new Date().toISOString();
-    setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt});
+    const submittedImages = attachments;
+    setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
     setSelectedTask((current) => current?.id === selectedTask.id ? {...current, status: 'running', updatedAt: submittedAt} : current);
     setComposer('');
+    setAttachments([]);
     followsOutput.current = true;
     try {
       let nextTask: Task | undefined;
-      if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, kind: 'edit', model: selectedModel});
-      else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt);
-      else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt);
-      else await api.sendPrompt(boardId, selectedTask.id, prompt);
+      if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, images: submittedImages, kind: 'edit', model: selectedModel});
+      else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
+      else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt, submittedImages);
+      else await api.sendPrompt(boardId, selectedTask.id, prompt, submittedImages);
       setEditingMessage(null);
       taskDrafts.current.delete(selectedTask.id);
       await refreshTasks();
       if (nextTask) {
-        setOptimisticPrompt({taskId: nextTask.id, text: prompt, time: submittedAt});
+        setOptimisticPrompt({taskId: nextTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
         setSelectedTask(nextTask);
         setWatchRevision((revision) => revision + 1);
       }
     } catch (reason) {
       setComposer(prompt);
+      setAttachments(submittedImages);
       setOptimisticPrompt(null);
       setSelectedTask(selectedTask);
       setError(String(reason));
@@ -304,6 +319,7 @@ function App() {
 
   function editMessage(item: UserConversationItem) {
     setComposer(item.text);
+    setAttachments([]);
     setEditingMessage(item.sequence);
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
@@ -377,7 +393,7 @@ function App() {
       const task = await api.forkTask(boardId, {taskId: selectedTask.id, prompt, name, kind: 'side', model: selectedModel});
       await refreshTasks();
       setSelectedTask(task);
-      setOptimisticPrompt({taskId: task.id, text: prompt, time: new Date().toISOString()});
+      setOptimisticPrompt({taskId: task.id, text: prompt, time: new Date().toISOString(), attachments: []});
       setShowSideTask(false);
     } catch (reason) {
       setError(String(reason));
@@ -497,7 +513,7 @@ function App() {
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} />)}
-              {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text}} />}
+              {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)}))}} />}
               {['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
             </div>
           </div>
@@ -507,6 +523,7 @@ function App() {
             {activeApproval && <ApprovalBar approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
             <form className="composer" onSubmit={submitPrompt}>
               {editingMessage !== null && <div className="editing-banner"><GitBranch size={14} /><span>Continue from this message in a new branch</span><button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setComposer('');}}><X size={14} /></button></div>}
+              {attachments.length > 0 && <div className="attachment-tray">{attachments.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}><img src={imageDataURL(image)} alt="" /><span>{image.name || `Image ${index + 1}`}</span><button type="button" title="Remove image" onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={13} /></button></div>)}</div>}
               <textarea
                 ref={composerRef}
                 id="composer"
@@ -522,6 +539,7 @@ function App() {
                 rows={1}
               />
               <div className="composer-footer">
+                <ImagePickerButton disabled={composerBlocked || attachments.length >= 4} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
                 <span className="composer-state">{editingMessage !== null ? 'Creates a branch' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
@@ -548,7 +566,7 @@ function App() {
 }
 
 function UserMessage({item, onEdit}: {item: UserConversationItem; onEdit?: (item: UserConversationItem) => void}) {
-  return <article className="user-message"><div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
+  return <article className="user-message">{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
 }
 
 function AssistantTurn({item, running}: {item: AssistantConversationItem; running: boolean}) {
@@ -600,18 +618,83 @@ function MarkdownContent({value}: {value: string}) {
   }}>{value}</ReactMarkdown></div>;
 }
 
+function ImagePickerButton({disabled, onPick, onError}: {disabled: boolean; onPick: (images: ImageContent[]) => void; onError: (message: string) => void}) {
+  const input = useRef<HTMLInputElement>(null);
+  return <><button className="icon-button compact attach-button" type="button" title="Attach images" disabled={disabled} onClick={() => input.current?.click()}><Paperclip size={15} /></button><input ref={input} className="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(event) => {const files = [...(event.target.files ?? [])]; event.target.value = ''; void Promise.all(files.map(prepareImage)).then(onPick).catch((reason) => onError(friendlyError(String(reason))));}} /></>;
+}
+
+function appendImages(current: ImageContent[], next: ImageContent[]): ImageContent[] {
+  const combined = [...current, ...next];
+  if (combined.length > 4) throw new Error('A message can contain at most 4 images.');
+  const bytes = combined.reduce((total, image) => total + Math.floor(image.data.length * 3 / 4), 0);
+  if (bytes > 900 * 1024) throw new Error('Attached images are too large. Remove an image and try again.');
+  return combined;
+}
+
+async function prepareImage(file: File): Promise<ImageContent> {
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) throw new Error(`${file.name} is not a supported image.`);
+  if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} exceeds the 20 MB source limit.`);
+  if (file.type === 'image/gif' && file.size <= 800 * 1024) return imageFromDataURL(file.name, file.type, await readFileAsDataURL(file));
+  if (file.size <= 700 * 1024) return imageFromDataURL(file.name, file.type, await readFileAsDataURL(file));
+
+  const source = await loadBrowserImage(file);
+  const scale = Math.min(1, 1600 / Math.max(source.naturalWidth, source.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error(`Could not prepare ${file.name}.`);
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  for (const quality of [0.86, 0.72, 0.58, 0.44]) {
+    const dataURL = canvas.toDataURL('image/jpeg', quality);
+    const image = imageFromDataURL(file.name.replace(/\.[^.]+$/, '') + '.jpg', 'image/jpeg', dataURL);
+    if (Math.floor(image.data.length * 3 / 4) <= 800 * 1024) return image;
+  }
+  throw new Error(`${file.name} could not be reduced below the upload limit.`);
+}
+
+function readFileAsDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadBrowserImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`Could not decode ${file.name}.`)); };
+    image.src = url;
+  });
+}
+
+function imageFromDataURL(name: string, mimeType: string, value: string): ImageContent {
+  const marker = value.indexOf(',');
+  if (marker < 0) throw new Error(`Could not encode ${name}.`);
+  return {type: 'image', data: value.slice(marker + 1), mimeType, name};
+}
+
+function imageDataURL(image: ImageContent): string { return `data:${image.mimeType};base64,${image.data}`; }
+
 function ApprovalBar({approval, busy, respond}: {approval: Approval; busy: boolean; respond: (response: Record<string, unknown>) => void}) {
-  return <div className="approval-bar"><div className="approval-icon"><ShieldCheck size={17} /></div><div className="approval-copy"><strong>{approval.title ?? 'Approval required'}</strong><span>{approval.message}</span></div><div className="approval-actions">{approval.method === 'select' ? approval.options?.map((option) => <button key={option} className="secondary-button" disabled={busy} onClick={() => respond({value: option})}>{option}</button>) : <><button className="secondary-button" disabled={busy} onClick={() => respond({confirmed: false})}>Deny</button><button className="primary-button" disabled={busy} onClick={() => respond({confirmed: true})}>Allow</button></>}</div></div>;
+  const [title, ...detail] = (approval.title ?? 'Approval required').split('\n');
+  const message = approval.message || detail.join('\n').trim();
+  return <div className="approval-bar"><div className="approval-icon"><ShieldCheck size={17} /></div><div className="approval-copy"><strong>{title}</strong><span title={message}>{message}</span></div><div className="approval-actions">{approval.method === 'select' ? approval.options?.map((option) => <button key={option} className={option.startsWith('Allow') ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond({value: option})}>{option}</button>) : <><button className="secondary-button" disabled={busy} onClick={() => respond({confirmed: false})}>Deny</button><button className="primary-button" disabled={busy} onClick={() => respond({confirmed: true})}>Allow once</button></>}</div></div>;
 }
 
 function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[]; busy: boolean; onClose: () => void; onConnect: (board: Board) => void; onSave: (board: Board) => Promise<void>}) {
   const [editing, setEditing] = useState(boards.length === 0);
   const [form, setForm] = useState<Board>({id: '', name: 'RDK S100', host: '10.112.10.98', user: 'root', port: 22, identityFile: ''});
-  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid"><label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
+  const availablePresets = boardPresets.filter((preset) => !boards.some((board) => board.host === preset.host));
+  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid">{availablePresets.length > 0 && <div className="board-presets">{availablePresets.map((preset) => <button type="button" key={preset.host} className={form.host === preset.host ? 'selected' : ''} onClick={() => setForm({id: '', ...preset, identityFile: form.identityFile})}><Server size={14} /><span>{preset.name}</span></button>)}</div>}<label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
 }
 
-function NewTaskDialog({boardId, initialCwd, busy, onClose, onCreate}: {boardId: string; initialCwd: string; busy: boolean; onClose: () => void; onCreate: (request: {name: string; cwd: string; prompt: string; approve: boolean; model?: string; permissionMode?: string}) => void}) {
-  const [request, setRequest] = useState({name: '', cwd: initialCwd, prompt: '', approve: false, permissionMode: 'developer'});
+function NewTaskDialog({boardId, initialCwd, busy, onClose, onCreate}: {boardId: string; initialCwd: string; busy: boolean; onClose: () => void; onCreate: (request: {name: string; cwd: string; prompt: string; images?: ImageContent[]; approve: boolean; model?: string; permissionMode?: string}) => void}) {
+  const [request, setRequest] = useState<{name: string; cwd: string; prompt: string; images: ImageContent[]; approve: boolean; permissionMode: string}>({name: '', cwd: initialCwd, prompt: '', images: [], approve: false, permissionMode: 'developer'});
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
   const [folderMode, setFolderMode] = useState(false);
   const [newFolder, setNewFolder] = useState('');
@@ -628,7 +711,7 @@ function NewTaskDialog({boardId, initialCwd, busy, onClose, onCreate}: {boardId:
     }
   }, [request.cwd]);
   useEffect(() => { void browse(initialCwd); }, []);
-  return <div className="modal-backdrop"><form className="modal task-modal" onSubmit={(event) => {event.preventDefault(); if (request.cwd) onCreate(request);}}><div className="modal-header"><div><span className="modal-eyebrow">New conversation</span><h2>{initialCwd ? `New task in ${basename(initialCwd)}` : 'Start a task'}</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="form-grid"><label><span>Title</span><input value={request.name} maxLength={64} onChange={(event) => setRequest({...request, name: event.target.value})} placeholder="Automatically generated from your instruction" /></label><div className="workspace-chooser"><span>Project</span><button type="button" className="workspace-selection" onClick={() => setFolderMode(true)}><FolderOpen size={16} /><span><strong>{request.cwd === listing?.home ? 'No project folder' : basename(request.cwd) || 'Choose a folder'}</strong><small>{request.cwd || 'Select an existing or new folder'}</small></span><ChevronRight size={15} /></button></div><label><span>Instruction</span><textarea rows={5} value={request.prompt} onChange={(event) => setRequest({...request, prompt: event.target.value})} required autoFocus /></label><label><span>Approval mode</span><select value={request.permissionMode} onChange={(event) => setRequest({...request, permissionMode: event.target.value})}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select></label><label className="checkbox-row"><input type="checkbox" checked={request.approve} onChange={(event) => setRequest({...request, approve: event.target.checked})} /><span>Trust project resources</span></label>{dialogError && <div className="inline-error">{dialogError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !request.prompt.trim() || !request.cwd}><Plus size={15} />Create task</button></div></div>{folderMode && listing && <div className="folder-panel"><div className="folder-panel-header"><button type="button" className="icon-button compact" title="Back" onClick={() => setFolderMode(false)}><ArrowLeft size={16} /></button><div><strong>Choose project folder</strong><small>{listing.path}</small></div></div><button type="button" className="folder-choice special" onClick={() => {setRequest({...request, cwd: listing.home}); setFolderMode(false);}}><MessageSquare size={16} /><span><strong>No project folder</strong><small>Use {listing.home} as a neutral workspace</small></span></button>{listing.parent && <button type="button" className="folder-choice" onClick={() => void browse(listing.parent)}><ArrowLeft size={15} /><span><strong>Parent folder</strong><small>{listing.parent}</small></span></button>}<div className="folder-list">{listing.directories.map((entry) => <button type="button" className="folder-choice" key={entry.path} onDoubleClick={() => {setRequest({...request, cwd: entry.path}); setFolderMode(false);}} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong><small>{entry.path}</small></span><ChevronRight size={14} /></button>)}</div><div className="new-folder-row"><input value={newFolder} onChange={(event) => setNewFolder(event.target.value)} placeholder="New folder name" /><button type="button" className="secondary-button" disabled={!newFolder.trim()} onClick={() => void api.createWorkspace(activeBoard.current || boardId, listing.path, newFolder.trim()).then((next) => {setListing(next); setRequest({...request, cwd: next.path}); setNewFolder(''); setFolderMode(false);}).catch((reason) => setDialogError(friendlyError(String(reason))))}>Create</button></div><div className="folder-panel-actions"><button type="button" className="primary-button" onClick={() => {setRequest({...request, cwd: listing.path}); setFolderMode(false);}}>Choose this folder</button></div></div>}</form></div>;
+  return <div className="modal-backdrop"><form className="modal task-modal" onSubmit={(event) => {event.preventDefault(); if (request.cwd) onCreate(request);}}><div className="modal-header"><div><span className="modal-eyebrow">New conversation</span><h2>{initialCwd ? `New task in ${basename(initialCwd)}` : 'Start a task'}</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="form-grid"><label><span>Title</span><input value={request.name} maxLength={64} onChange={(event) => setRequest({...request, name: event.target.value})} placeholder="Automatically generated from your instruction" /></label><div className="workspace-chooser"><span>Project</span><button type="button" className="workspace-selection" onClick={() => setFolderMode(true)}><FolderOpen size={16} /><span><strong>{request.cwd === listing?.home ? 'No project folder' : basename(request.cwd) || 'Choose a folder'}</strong><small>{request.cwd || 'Select an existing or new folder'}</small></span><ChevronRight size={15} /></button></div><label><span>Instruction</span><textarea rows={5} value={request.prompt} onChange={(event) => setRequest({...request, prompt: event.target.value})} required autoFocus /></label>{request.images.length > 0 && <div className="attachment-tray modal-attachments">{request.images.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}><img src={imageDataURL(image)} alt="" /><span>{image.name}</span><button type="button" title="Remove image" onClick={() => setRequest({...request, images: request.images.filter((_, itemIndex) => itemIndex !== index)})}><X size={13} /></button></div>)}</div>}<div className="new-task-tools"><ImagePickerButton disabled={busy || request.images.length >= 4} onPick={(images) => {try {setRequest({...request, images: appendImages(request.images, images)});} catch (reason) {setDialogError(friendlyError(String(reason)));}}} onError={(message) => setDialogError(friendlyError(message))} /><span>Images</span></div><label><span>Approval mode</span><select value={request.permissionMode} onChange={(event) => setRequest({...request, permissionMode: event.target.value})}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select></label><label className="checkbox-row"><input type="checkbox" checked={request.approve} onChange={(event) => setRequest({...request, approve: event.target.checked})} /><span>Trust project resources</span></label>{dialogError && <div className="inline-error">{dialogError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !request.prompt.trim() || !request.cwd}><Plus size={15} />Create task</button></div></div>{folderMode && listing && <div className="folder-panel"><div className="folder-panel-header"><button type="button" className="icon-button compact" title="Back" onClick={() => setFolderMode(false)}><ArrowLeft size={16} /></button><div><strong>Choose project folder</strong><small>{listing.path}</small></div></div><button type="button" className="folder-choice special" onClick={() => {setRequest({...request, cwd: listing.home}); setFolderMode(false);}}><MessageSquare size={16} /><span><strong>No project folder</strong><small>Use {listing.home} as a neutral workspace</small></span></button>{listing.parent && <button type="button" className="folder-choice" onClick={() => void browse(listing.parent)}><ArrowLeft size={15} /><span><strong>Parent folder</strong><small>{listing.parent}</small></span></button>}<div className="folder-list">{listing.directories.map((entry) => <button type="button" className="folder-choice" key={entry.path} onDoubleClick={() => {setRequest({...request, cwd: entry.path}); setFolderMode(false);}} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong><small>{entry.path}</small></span><ChevronRight size={14} /></button>)}</div><div className="new-folder-row"><input value={newFolder} onChange={(event) => setNewFolder(event.target.value)} placeholder="New folder name" /><button type="button" className="secondary-button" disabled={!newFolder.trim()} onClick={() => void api.createWorkspace(activeBoard.current || boardId, listing.path, newFolder.trim()).then((next) => {setListing(next); setRequest({...request, cwd: next.path}); setNewFolder(''); setFolderMode(false);}).catch((reason) => setDialogError(friendlyError(String(reason))))}>Create</button></div><div className="folder-panel-actions"><button type="button" className="primary-button" onClick={() => {setRequest({...request, cwd: listing.path}); setFolderMode(false);}}>Choose this folder</button></div></div>}</form></div>;
 }
 
 function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: boolean; onClose: () => void; onCreate: (prompt: string, name: string) => void}) {

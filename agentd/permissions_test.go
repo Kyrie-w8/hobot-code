@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -20,6 +21,22 @@ func TestTaskTitlesSupportUnicodeAndDeriveFromPrompt(t *testing.T) {
 	for _, invalid := range []string{"", "bad/name", "bad\\name", "bad\nname"} {
 		if _, err := validateTaskName(invalid); err == nil {
 			t.Fatalf("invalid title was accepted: %q", invalid)
+		}
+	}
+}
+
+func TestImagePromptsAreBoundedAndValidated(t *testing.T) {
+	valid := imageContent{Type: "image", MimeType: "image/png", Data: base64.StdEncoding.EncodeToString([]byte("png")), Name: "board.png"}
+	if err := validateImages([]imageContent{valid}); err != nil {
+		t.Fatal(err)
+	}
+	for _, images := range [][]imageContent{
+		{{Type: "image", MimeType: "application/pdf", Data: valid.Data}},
+		{{Type: "image", MimeType: "image/png", Data: "not-base64"}},
+		{{Type: "image", MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, 1024*1024+1))}},
+	} {
+		if err := validateImages(images); err == nil {
+			t.Fatalf("invalid images were accepted: %+v", images[0].MimeType)
 		}
 	}
 }
@@ -79,6 +96,17 @@ func TestSetPermissionModePersistsPrivateTaskPolicy(t *testing.T) {
 	var policy taskPermissionPolicy
 	if json.Unmarshal(content, &policy) != nil || permissionAction(policy, "bash") != "allow" {
 		t.Fatalf("unexpected persisted policy: %s", content)
+	}
+	remembered := []byte(`{"schemaVersion":2,"rootMode":"policy","default":"ask","rules":[{"tool":"bash","action":"allow"}]}`)
+	if err := os.WriteFile(current.permissionPolicyPath(), remembered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.ensurePermissionPolicy("ask"); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(current.permissionPolicyPath())
+	if err != nil || string(content) != string(remembered) {
+		t.Fatalf("remembered task policy was replaced: %q, %v", content, err)
 	}
 }
 

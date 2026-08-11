@@ -10,7 +10,7 @@ const event = (sequence, type, data = {}, raw = {}) => ({
 
 test('conversation groups thinking, tools, and text into one assistant turn', () => {
   const result = buildConversation([
-    event(1, 'user.message', {text: 'Check the board'}),
+    event(1, 'user.message', {text: 'Check the board', attachments: [{name: 'board.png', mimeType: 'image/png'}]}),
     event(2, 'task.running'),
     event(3, 'assistant.thinking.delta', {delta: 'Inspecting '}),
     event(4, 'tool.started', {toolCallId: 'one', toolName: 'bash'}, {args: {command: 'uname -a'}}),
@@ -23,6 +23,7 @@ test('conversation groups thinking, tools, and text into one assistant turn', ()
   assert.equal(result.length, 2);
   assert.equal(result[0].kind, 'user');
   assert.equal(result[0].text, 'Check the board');
+  assert.deepEqual(result[0].attachments, [{name: 'board.png', mimeType: 'image/png'}]);
   assert.equal(result[1].kind, 'assistant');
   assert.equal(result[1].thinking, 'Inspecting results.');
   assert.equal(result[1].text, 'Board is healthy.');

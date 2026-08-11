@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -100,4 +102,15 @@ func (current *task) writePermissionPolicy(mode string) error {
 		return err
 	}
 	return writePrivateFile(current.permissionPolicyPath(), append(content, '\n'))
+}
+
+func (current *task) ensurePermissionPolicy(mode string) error {
+	_, err := privateRegularFileInfo(current.permissionPolicyPath(), maxRequestBytes)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return current.writePermissionPolicy(mode)
 }

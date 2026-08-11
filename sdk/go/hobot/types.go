@@ -128,22 +128,31 @@ type EventPage struct {
 }
 
 type StartTaskRequest struct {
-	Name           string `json:"name,omitempty"`
-	Cwd            string `json:"cwd"`
-	Prompt         string `json:"prompt"`
-	Approve        bool   `json:"approve,omitempty"`
-	Model          string `json:"model,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
+	Name           string         `json:"name,omitempty"`
+	Cwd            string         `json:"cwd"`
+	Prompt         string         `json:"prompt"`
+	Images         []ImageContent `json:"images,omitempty"`
+	Approve        bool           `json:"approve,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	PermissionMode string         `json:"permissionMode,omitempty"`
 }
 
 type ForkTaskRequest struct {
-	TaskID         string `json:"taskId"`
-	Sequence       uint64 `json:"sequence,omitempty"`
-	Prompt         string `json:"prompt"`
-	Name           string `json:"name,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	Model          string `json:"model,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
+	TaskID         string         `json:"taskId"`
+	Sequence       uint64         `json:"sequence,omitempty"`
+	Prompt         string         `json:"prompt"`
+	Images         []ImageContent `json:"images,omitempty"`
+	Name           string         `json:"name,omitempty"`
+	Kind           string         `json:"kind,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	PermissionMode string         `json:"permissionMode,omitempty"`
+}
+
+type ImageContent struct {
+	Type     string `json:"type"`
+	Data     string `json:"data"`
+	MimeType string `json:"mimeType"`
+	Name     string `json:"name,omitempty"`
 }
 
 type ModelOption struct {

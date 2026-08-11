@@ -26,6 +26,7 @@ var protocolCapabilities = []string{
 	"tasks.fork",
 	"tasks.models",
 	"tasks.permissions",
+	"tasks.images",
 	"workspaces.browse",
 	"bridge.stdio",
 }

@@ -54,7 +54,13 @@ export function buildConversation(events) {
       finishAssistant(event.time);
       const text = String(data.text ?? '');
       if (text) {
-        items.push({kind: 'user', key: `user-${event.sequence}`, sequence: event.sequence, time: event.time, text});
+        const attachments = Array.isArray(data.attachments)
+          ? data.attachments.filter((item) => item && typeof item === 'object').map((item) => ({
+            name: typeof item.name === 'string' ? item.name : '',
+            mimeType: typeof item.mimeType === 'string' ? item.mimeType : 'image',
+          }))
+          : [];
+        items.push({kind: 'user', key: `user-${event.sequence}`, sequence: event.sequence, time: event.time, text, attachments});
       }
       continue;
     }

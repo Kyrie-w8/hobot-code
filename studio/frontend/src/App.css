@@ -331,6 +331,17 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .composer:focus-within { border-color: rgba(101, 191, 167, 0.5); box-shadow: 0 0 0 3px rgba(101, 191, 167, 0.055), 0 12px 34px rgba(0, 0, 0, 0.17); }
 .composer textarea { display: block; width: 100%; min-height: 44px; max-height: 180px; resize: none; padding: 12px 14px 3px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 14.5px; line-height: 1.48; }
 .composer textarea::placeholder { color: var(--text-dim); }
+.attachment-tray { display: flex; gap: 7px; overflow-x: auto; padding: 9px 10px 2px; }
+.attachment-chip { position: relative; display: grid; grid-template-columns: 34px minmax(0, 108px) 22px; height: 38px; align-items: center; gap: 7px; padding: 2px 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--chrome); }
+.attachment-chip img { width: 34px; height: 32px; object-fit: cover; border-radius: var(--radius-sm); }
+.attachment-chip span { overflow: hidden; color: var(--text-soft); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip button { display: grid; width: 22px; height: 22px; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); cursor: pointer; }
+.attachment-chip button:hover { background: var(--surface-hover); color: var(--text); }
+.file-input { display: none; }
+.attach-button { margin-right: 2px; }
+.message-attachments { display: flex; max-width: 560px; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin: 0 0 6px auto; }
+.message-attachments img { max-width: min(420px, 100%); max-height: 300px; border: 1px solid var(--line); border-radius: var(--radius); object-fit: contain; }
+.message-attachments span { display: flex; min-height: 25px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-muted); font-size: 10px; }
 .composer-footer { display: flex; min-height: 36px; align-items: center; padding: 1px 7px 6px 10px; color: var(--text-dim); font-size: 10px; }
 .model-picker, .permission-picker { position: relative; display: inline-flex; height: 28px; max-width: 190px; align-items: center; color: var(--text-muted); }
 .model-picker select, .permission-picker select { height: 28px; max-width: 100%; padding: 0 24px 0 8px; appearance: none; border: 0; border-radius: var(--radius-sm); outline: 0; background: transparent; color: inherit; font-size: 10px; cursor: pointer; }
@@ -351,8 +362,9 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .approval-icon { display: grid; width: 28px; height: 28px; place-items: center; color: var(--amber); }
 .approval-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .approval-copy strong { font-size: 11px; }
-.approval-copy span { overflow: hidden; color: var(--text-muted); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.approval-actions { display: flex; align-items: center; gap: 6px; }
+.approval-copy span { overflow: hidden; max-width: 460px; color: var(--text-muted); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.approval-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.approval-actions button { white-space: nowrap; }
 
 .inspector { grid-column: 3; grid-row: 2; min-width: 0; overflow-y: auto; border-left: 1px solid var(--line); background: var(--chrome); }
 .inspector-header { display: flex; height: 48px; align-items: center; justify-content: space-between; padding: 0 11px 0 15px; border-bottom: 1px solid var(--line); color: var(--text-soft); font-size: 12px; font-weight: 640; }
@@ -405,6 +417,12 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .form-grid input, .form-grid textarea, .form-grid select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); outline: 0; background: var(--chrome); color: var(--text); font-size: 11px; line-height: 1.4; }
 .form-grid input:focus, .form-grid textarea:focus, .form-grid select:focus { border-color: rgba(101, 191, 167, 0.56); }
 .form-grid textarea { resize: vertical; }
+.modal-attachments { padding: 0; }
+.new-task-tools { display: flex; height: 28px; align-items: center; gap: 5px; color: var(--text-muted); font-size: 10px; }
+.board-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.board-presets button { display: flex; min-width: 0; height: 34px; align-items: center; justify-content: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--chrome); color: var(--text-muted); cursor: pointer; }
+.board-presets button:hover, .board-presets button.selected { border-color: rgba(101, 191, 167, 0.46); background: var(--accent-soft); color: var(--accent-strong); }
+.board-presets span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .form-row { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 10px; }
 .checkbox-row { display: flex !important; align-items: center; gap: 8px !important; }
 .checkbox-row input { width: 14px; height: 14px; accent-color: var(--accent); }

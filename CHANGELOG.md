@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.21.0
+
+- Studio sends and stops from one stateful composer button, limits its model picker to the three D-Robotics gateway models, and offers S100, S600, and X5 board presets.
+- Projects support multiple tasks with prompt-derived editable titles, and Studio refreshes full task state so pending approvals remain actionable.
+- Tool approvals now offer allow once, allow for this task, and deny while retaining mandatory confirmation for destructive commands, protected paths, and out-of-workspace writes.
+- Studio image prompts support bounded local compression and validated JPEG, PNG, WebP, and GIF content over the existing SSH/RPC channel. Document attachments remain unsupported.
+
 ## 0.20.0
 
 - Make the Studio composer send and stop actions share one stable button position, and restrict the desktop model picker to D-Robotics models.

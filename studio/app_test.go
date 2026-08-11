@@ -112,10 +112,12 @@ func TestStudioTaskIsLive(t *testing.T) {
 func TestStudioModelsOnlyExposeDRobotics(t *testing.T) {
 	models := studioModels([]hobot.ModelOption{
 		{Provider: "anthropic", ID: "claude-sonnet", Name: "Claude Sonnet"},
+		{Provider: "drobotics", ID: "claude-sonnet", Name: "Claude via gateway"},
+		{Provider: "drobotics", ID: "kimi-k3", Name: "kimi-k3"},
 		{Provider: "drobotics", ID: "qwen3.8-max", Name: "qwen3.8-max"},
 		{Provider: "drobotics", ID: "glm-5.2", Name: "glm-5.2"},
 	})
-	if len(models) != 2 || models[0].ID != "glm-5.2" || models[1].ID != "qwen3.8-max" {
+	if len(models) != 3 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" {
 		t.Fatalf("unexpected Studio models: %+v", models)
 	}
 }

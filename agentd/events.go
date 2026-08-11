@@ -41,6 +41,7 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 		}
 		normalizedType = "user.message"
 		data["text"] = message
+		copyEventFields(data, event, "attachments")
 	case "agent_start":
 		normalizedType = "task.running"
 	case "agent_settled":

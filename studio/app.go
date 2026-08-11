@@ -276,14 +276,14 @@ func (app *App) StartTask(boardID string, request hobot.StartTaskRequest) (hobot
 	return client.StartTask(ctx, request)
 }
 
-func (app *App) SendPrompt(boardID, taskID, prompt string) error {
+func (app *App) SendPrompt(boardID, taskID, prompt string, images []hobot.ImageContent) error {
 	client, err := app.client(boardID)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
-	return client.SendPrompt(ctx, taskID, prompt)
+	return client.SendPromptWithImages(ctx, taskID, prompt, images)
 }
 
 func (app *App) SetTaskModel(boardID, taskID, provider, modelID string) error {
@@ -351,13 +351,17 @@ func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
 }
 
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
+	allowed := map[string]int{"kimi-k3": 0, "qwen3.8-max": 1, "glm-5.2": 2}
 	filtered := make([]hobot.ModelOption, 0, len(models))
 	for _, model := range models {
 		if model.Provider == "drobotics" {
+			if _, ok := allowed[model.ID]; !ok {
+				continue
+			}
 			filtered = append(filtered, model)
 		}
 	}
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+	sort.Slice(filtered, func(i, j int) bool { return allowed[filtered[i].ID] < allowed[filtered[j].ID] })
 	return filtered
 }
 
@@ -466,24 +470,24 @@ func studioTaskIsLive(status string) bool {
 	}
 }
 
-func (app *App) ResumeTask(boardID, taskID, prompt string) (hobot.Task, error) {
+func (app *App) ResumeTask(boardID, taskID, prompt string, images []hobot.ImageContent) (hobot.Task, error) {
 	client, err := app.client(boardID)
 	if err != nil {
 		return hobot.Task{}, err
 	}
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
-	return client.ResumeTask(ctx, taskID, prompt)
+	return client.ResumeTaskWithImages(ctx, taskID, prompt, images)
 }
 
-func (app *App) RestartTask(boardID, taskID, prompt string) (hobot.Task, error) {
+func (app *App) RestartTask(boardID, taskID, prompt string, images []hobot.ImageContent) (hobot.Task, error) {
 	client, err := app.client(boardID)
 	if err != nil {
 		return hobot.Task{}, err
 	}
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
-	return client.RestartTask(ctx, taskID, prompt)
+	return client.RestartTaskWithImages(ctx, taskID, prompt, images)
 }
 
 func (app *App) RespondApproval(boardID, taskID, approvalID string, response map[string]any) error {

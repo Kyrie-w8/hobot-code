@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,6 +34,49 @@ func testConfig(t *testing.T) config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestImagePromptPersistsOnlyAttachmentMetadata(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretPayload := []byte("private-image-payload")
+	metadata, err := manager.start(startTaskParams{
+		Name: "image", Cwd: cfg.StateRoot, Prompt: "inspect this image",
+		Images: []imageContent{{Type: "image", MimeType: "image/png", Name: "board.png", Data: base64.StdEncoding.EncodeToString(secretPayload)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := manager.get(metadata.ID)
+	waitForStatus(t, current, statusIdle)
+	events, _, cancel, err := current.subscribe(0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	found := false
+	for _, event := range events {
+		if event.Normalized == nil || event.Normalized.Type != "user.message" {
+			continue
+		}
+		found = true
+		if bytes.Contains(event.Event, secretPayload) || bytes.Contains(event.Event, []byte(base64.StdEncoding.EncodeToString(secretPayload))) {
+			t.Fatal("image payload leaked into the event log")
+		}
+		attachments, ok := event.Normalized.Data["attachments"].([]any)
+		if !ok || len(attachments) != 1 {
+			t.Fatalf("attachment metadata missing: %+v", event.Normalized.Data)
+		}
+	}
+	if !found {
+		t.Fatal("image prompt did not create a user message event")
+	}
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitForStatus(t *testing.T, current *task, expected taskStatus) taskMetadata {

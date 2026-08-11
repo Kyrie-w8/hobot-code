@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -88,27 +89,37 @@ type taskManager struct {
 }
 
 type startTaskParams struct {
-	Name           string `json:"name,omitempty"`
-	Cwd            string `json:"cwd"`
-	Prompt         string `json:"prompt"`
-	Approve        bool   `json:"approve,omitempty"`
-	Model          string `json:"model,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
+	Name           string         `json:"name,omitempty"`
+	Cwd            string         `json:"cwd"`
+	Prompt         string         `json:"prompt"`
+	Images         []imageContent `json:"images,omitempty"`
+	Approve        bool           `json:"approve,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	PermissionMode string         `json:"permissionMode,omitempty"`
 }
 
 type forkTaskParams struct {
-	TaskID         string `json:"taskId"`
-	Sequence       uint64 `json:"sequence,omitempty"`
-	Prompt         string `json:"prompt"`
-	Name           string `json:"name,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	Model          string `json:"model,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
+	TaskID         string         `json:"taskId"`
+	Sequence       uint64         `json:"sequence,omitempty"`
+	Prompt         string         `json:"prompt"`
+	Images         []imageContent `json:"images,omitempty"`
+	Name           string         `json:"name,omitempty"`
+	Kind           string         `json:"kind,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	PermissionMode string         `json:"permissionMode,omitempty"`
 }
 
 type resumeTaskParams struct {
-	TaskID string `json:"taskId"`
-	Prompt string `json:"prompt,omitempty"`
+	TaskID string         `json:"taskId"`
+	Prompt string         `json:"prompt,omitempty"`
+	Images []imageContent `json:"images,omitempty"`
+}
+
+type imageContent struct {
+	Type     string `json:"type"`
+	Data     string `json:"data"`
+	MimeType string `json:"mimeType"`
+	Name     string `json:"name,omitempty"`
 }
 
 type renameTaskParams struct {
@@ -313,6 +324,40 @@ func validateTaskName(value string) (string, error) {
 	return value, nil
 }
 
+func validateImages(images []imageContent) error {
+	const maximumImageBytes = 1024 * 1024
+	if len(images) > 4 {
+		return fmt.Errorf("a prompt can contain at most 4 images")
+	}
+	total := 0
+	allowed := map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true, "image/gif": true}
+	for index, image := range images {
+		if image.Type != "image" || !allowed[image.MimeType] || image.Data == "" {
+			return fmt.Errorf("image %d must be a supported image content block", index+1)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(image.Data)
+		if err != nil {
+			return fmt.Errorf("image %d contains invalid base64 data", index+1)
+		}
+		total += len(decoded)
+		if total > maximumImageBytes {
+			return fmt.Errorf("prompt images exceed the %d byte limit", maximumImageBytes)
+		}
+		if len([]rune(image.Name)) > 128 || strings.ContainsAny(image.Name, "\r\n") {
+			return fmt.Errorf("image %d has an invalid name", index+1)
+		}
+	}
+	return nil
+}
+
+func imagePayload(images []imageContent) []map[string]string {
+	result := make([]map[string]string, 0, len(images))
+	for _, image := range images {
+		result = append(result, map[string]string{"type": image.Type, "data": image.Data, "mimeType": image.MimeType})
+	}
+	return result
+}
+
 func deriveTaskTitle(prompt string) string {
 	value := strings.Join(strings.Fields(prompt), " ")
 	value = strings.TrimLeft(value, "#>*-` ")
@@ -377,6 +422,9 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	defer manager.startMu.Unlock()
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	}
+	if err := validateImages(params.Images); err != nil {
+		return taskMetadata{}, err
 	}
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
@@ -447,7 +495,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	manager.tasks[id] = current
 	manager.mu.Unlock()
 	keepDirectory = true
-	if err := current.launch(params.Prompt, params.Approve, ""); err != nil {
+	if err := current.launch(params.Prompt, params.Images, params.Approve, ""); err != nil {
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
@@ -459,6 +507,9 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	defer manager.startMu.Unlock()
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	}
+	if err := validateImages(params.Images); err != nil {
+		return taskMetadata{}, err
 	}
 	if params.Kind == "" {
 		params.Kind = "side"
@@ -586,7 +637,7 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	manager.mu.Unlock()
 	keepDirectory = true
 	keepSession = true
-	if err := current.launch(params.Prompt, parent.Approved, forkFile); err != nil {
+	if err := current.launch(params.Prompt, params.Images, parent.Approved, forkFile); err != nil {
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
@@ -631,8 +682,8 @@ func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLin
 	return parentID, nil
 }
 
-func (current *task) launch(prompt string, approve bool, sessionFile string) error {
-	if err := current.writePermissionPolicy(current.metadata.PermissionMode); err != nil {
+func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string) error {
+	if err := current.ensurePermissionPolicy(current.metadata.PermissionMode); err != nil {
 		return fmt.Errorf("write task permission policy: %w", err)
 	}
 	args := []string{"--mode", "rpc", "--session-dir", current.manager.cfg.SessionDir, "--name", current.metadata.Name}
@@ -695,7 +746,7 @@ func (current *task) launch(prompt string, approve bool, sessionFile string) err
 	}
 	if prompt != "" {
 		startCommand, _ := json.Marshal(map[string]any{
-			"id": "agentd-start", "type": "prompt", "message": prompt,
+			"id": "agentd-start", "type": "prompt", "message": prompt, "images": images,
 		})
 		if err := current.sendCommand(startCommand); err != nil {
 			_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
@@ -903,11 +954,12 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		return fmt.Errorf("worker command must be valid JSON no larger than %d bytes", maxRequestBytes)
 	}
 	var header struct {
-		Type     string `json:"type"`
-		ID       string `json:"id"`
-		Message  string `json:"message"`
-		Provider string `json:"provider"`
-		ModelID  string `json:"modelId"`
+		Type     string         `json:"type"`
+		ID       string         `json:"id"`
+		Message  string         `json:"message"`
+		Provider string         `json:"provider"`
+		ModelID  string         `json:"modelId"`
+		Images   []imageContent `json:"images"`
 	}
 	if err := json.Unmarshal(command, &header); err != nil || header.Type == "" {
 		return fmt.Errorf("worker command must contain a type")
@@ -926,6 +978,9 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		}
 		if status != statusStarting && status != statusIdle {
 			return fmt.Errorf("task must be idle before accepting another prompt")
+		}
+		if err := validateImages(header.Images); err != nil {
+			return err
 		}
 	case "abort":
 	case "set_model":
@@ -952,8 +1007,18 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		current.metadata.UpdatedAt = time.Now().UTC()
 		current.mu.Unlock()
 		_ = current.saveMetadata()
-		promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message})
+		attachments := make([]map[string]string, 0, len(header.Images))
+		for _, image := range header.Images {
+			attachments = append(attachments, map[string]string{"name": image.Name, "mimeType": image.MimeType})
+		}
+		promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message, "attachments": attachments})
 		current.recordEvent(promptEvent)
+		workerCommand := map[string]any{}
+		if err := json.Unmarshal(command, &workerCommand); err != nil {
+			return fmt.Errorf("decode prompt command: %w", err)
+		}
+		workerCommand["images"] = imagePayload(header.Images)
+		command, _ = json.Marshal(workerCommand)
 	}
 	if err := current.writeWorkerCommand(command); err != nil {
 		if header.Type == "prompt" {
@@ -1430,6 +1495,9 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	if len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain at most %d bytes", maxPromptBytes)
 	}
+	if err := validateImages(params.Images); err != nil {
+		return taskMetadata{}, err
+	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
@@ -1461,7 +1529,7 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	if err := current.saveMetadata(); err != nil {
 		return taskMetadata{}, err
 	}
-	if err := current.launch(params.Prompt, metadata.Approved, sessionFile); err != nil {
+	if err := current.launch(params.Prompt, params.Images, metadata.Approved, sessionFile); err != nil {
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
@@ -1473,6 +1541,9 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	defer manager.startMu.Unlock()
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	}
+	if err := validateImages(params.Images); err != nil {
+		return taskMetadata{}, err
 	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
@@ -1503,7 +1574,7 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	if err := current.saveMetadata(); err != nil {
 		return taskMetadata{}, err
 	}
-	if err := current.launch(params.Prompt, metadata.Approved, ""); err != nil {
+	if err := current.launch(params.Prompt, params.Images, metadata.Approved, ""); err != nil {
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}

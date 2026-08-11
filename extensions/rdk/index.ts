@@ -57,6 +57,9 @@ const DEFAULT_MODEL = "kimi-k3";
 const BUILTIN_DROBOTICS_MODELS = [DEFAULT_MODEL, "qwen3.8-max", "glm-5.2"] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
+const APPROVAL_ALLOW_ONCE = "Allow once";
+const APPROVAL_ALLOW_TASK = "Allow for this task";
+const APPROVAL_DENY = "Deny";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1523,12 +1526,25 @@ export default function rdkExtension(pi: ExtensionAPI) {
         describeToolCall(event.toolName, event.input, qualityGateState.commands),
         `Reason: ${approvalReasons.join("; ")}`,
       ].join("\n");
-      const approved = await ctx.ui.confirm(
-        `Allow ${event.toolName}?`,
-        detail,
+      const canRemember = action === "ask"
+        || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName);
+      const choice = await ctx.ui.select(
+        `Allow ${event.toolName}?\n\n${detail}`,
+        canRemember
+          ? [APPROVAL_ALLOW_ONCE, APPROVAL_ALLOW_TASK, APPROVAL_DENY]
+          : [APPROVAL_ALLOW_ONCE, APPROVAL_DENY],
         sideAgentMode ? { timeout: SIDE_AGENT_APPROVAL_TIMEOUT_MS } : undefined,
       );
-      if (!approved) return { block: true, reason: `${event.toolName} was cancelled by the user` };
+      if (choice === APPROVAL_ALLOW_TASK) {
+        let next = setPolicyRule(permissionPolicy, event.toolName, "allow") as PermissionPolicy;
+        if (runningAsRoot && ["bash", "write", "edit"].includes(event.toolName)) {
+          next = parsePolicy({ ...next, rootMode: "policy" }) as PermissionPolicy;
+        }
+        permissionPolicy = await writePolicy(permissionPolicyPath(), next) as PermissionPolicy;
+        permissionPolicyError = undefined;
+      } else if (choice !== APPROVAL_ALLOW_ONCE) {
+        return { block: true, reason: `${event.toolName} was cancelled by the user` };
+      }
     }
 
     const hookResult = await runHooks({

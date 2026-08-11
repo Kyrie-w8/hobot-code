@@ -42,9 +42,13 @@ func (client *Client) StartTask(ctx context.Context, request StartTaskRequest) (
 }
 
 func (client *Client) SendPrompt(ctx context.Context, taskID, message string) error {
+	return client.SendPromptWithImages(ctx, taskID, message, nil)
+}
+
+func (client *Client) SendPromptWithImages(ctx context.Context, taskID, message string, images []ImageContent) error {
 	return client.Call(ctx, "task.command", map[string]any{
 		"taskId":  taskID,
-		"command": map[string]any{"id": nextCommandID(), "type": "prompt", "message": message},
+		"command": map[string]any{"id": nextCommandID(), "type": "prompt", "message": message, "images": images},
 	}, nil)
 }
 
@@ -112,14 +116,22 @@ func (client *Client) DeleteTask(ctx context.Context, taskID string) error {
 }
 
 func (client *Client) ResumeTask(ctx context.Context, taskID, prompt string) (Task, error) {
+	return client.ResumeTaskWithImages(ctx, taskID, prompt, nil)
+}
+
+func (client *Client) ResumeTaskWithImages(ctx context.Context, taskID, prompt string, images []ImageContent) (Task, error) {
 	var task Task
-	err := client.Call(ctx, "task.resume", map[string]any{"taskId": taskID, "prompt": prompt}, &task)
+	err := client.Call(ctx, "task.resume", map[string]any{"taskId": taskID, "prompt": prompt, "images": images}, &task)
 	return task, err
 }
 
 func (client *Client) RestartTask(ctx context.Context, taskID, prompt string) (Task, error) {
+	return client.RestartTaskWithImages(ctx, taskID, prompt, nil)
+}
+
+func (client *Client) RestartTaskWithImages(ctx context.Context, taskID, prompt string, images []ImageContent) (Task, error) {
 	var task Task
-	err := client.Call(ctx, "task.restart", map[string]any{"taskId": taskID, "prompt": prompt}, &task)
+	err := client.Call(ctx, "task.restart", map[string]any{"taskId": taskID, "prompt": prompt, "images": images}, &task)
 	return task, err
 }
 
