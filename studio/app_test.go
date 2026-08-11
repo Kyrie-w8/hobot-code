@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Kyrie-w8/hobot-code/sdk/go/hobot"
 )
 
 func TestBoardStoreRoundTrip(t *testing.T) {
@@ -104,5 +106,16 @@ func TestStudioTaskIsLive(t *testing.T) {
 		if studioTaskIsLive(status) {
 			t.Fatalf("status %q should be terminal", status)
 		}
+	}
+}
+
+func TestStudioModelsOnlyExposeDRobotics(t *testing.T) {
+	models := studioModels([]hobot.ModelOption{
+		{Provider: "anthropic", ID: "claude-sonnet", Name: "Claude Sonnet"},
+		{Provider: "drobotics", ID: "qwen3.8-max", Name: "qwen3.8-max"},
+		{Provider: "drobotics", ID: "glm-5.2", Name: "glm-5.2"},
+	})
+	if len(models) != 2 || models[0].ID != "glm-5.2" || models[1].ID != "qwen3.8-max" {
+		t.Fatalf("unexpected Studio models: %+v", models)
 	}
 }

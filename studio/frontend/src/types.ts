@@ -60,6 +60,7 @@ export type Task = {
   resumeCount?: number;
   restartCount?: number;
   model?: string;
+  permissionMode?: 'review' | 'ask' | 'developer';
   parentTaskId?: string;
   forkSequence?: number;
   branchKind?: 'side' | 'edit';
@@ -89,4 +90,4 @@ export type EventEnvelope = { boardId: string; event: TaskEvent };
 export type ModelOption = {provider: string; id: string; name: string};
 export type WorkspaceEntry = {name: string; path: string};
 export type WorkspaceListing = {path: string; parent?: string; home: string; directories: WorkspaceEntry[]};
-export type ForkTaskRequest = {taskId: string; sequence?: number; prompt: string; name?: string; kind: 'side' | 'edit'; model?: string};
+export type ForkTaskRequest = {taskId: string; sequence?: number; prompt: string; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string};

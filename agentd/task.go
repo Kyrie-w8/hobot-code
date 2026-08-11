@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type taskStatus string
@@ -33,31 +35,31 @@ const (
 	statusInterrupted taskStatus = "interrupted"
 )
 
-var taskNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 var taskIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
 
 type taskMetadata struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Cwd          string            `json:"cwd"`
-	Status       taskStatus        `json:"status"`
-	PID          int               `json:"pid,omitempty"`
-	CreatedAt    time.Time         `json:"createdAt"`
-	UpdatedAt    time.Time         `json:"updatedAt"`
-	LastSequence uint64            `json:"lastSequence"`
-	LogTruncated bool              `json:"logTruncated,omitempty"`
-	LastError    string            `json:"lastError,omitempty"`
-	SessionFile  string            `json:"sessionFile,omitempty"`
-	SessionID    string            `json:"sessionId,omitempty"`
-	Approved     bool              `json:"approved,omitempty"`
-	ResumeCount  int               `json:"resumeCount,omitempty"`
-	RestartCount int               `json:"restartCount,omitempty"`
-	Model        string            `json:"model,omitempty"`
-	ParentTaskID string            `json:"parentTaskId,omitempty"`
-	ForkSequence uint64            `json:"forkSequence,omitempty"`
-	BranchKind   string            `json:"branchKind,omitempty"`
-	ArchivedAt   *time.Time        `json:"archivedAt,omitempty"`
-	Approvals    []pendingApproval `json:"pendingApprovals,omitempty"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Cwd            string            `json:"cwd"`
+	Status         taskStatus        `json:"status"`
+	PID            int               `json:"pid,omitempty"`
+	CreatedAt      time.Time         `json:"createdAt"`
+	UpdatedAt      time.Time         `json:"updatedAt"`
+	LastSequence   uint64            `json:"lastSequence"`
+	LogTruncated   bool              `json:"logTruncated,omitempty"`
+	LastError      string            `json:"lastError,omitempty"`
+	SessionFile    string            `json:"sessionFile,omitempty"`
+	SessionID      string            `json:"sessionId,omitempty"`
+	Approved       bool              `json:"approved,omitempty"`
+	ResumeCount    int               `json:"resumeCount,omitempty"`
+	RestartCount   int               `json:"restartCount,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	PermissionMode string            `json:"permissionMode,omitempty"`
+	ParentTaskID   string            `json:"parentTaskId,omitempty"`
+	ForkSequence   uint64            `json:"forkSequence,omitempty"`
+	BranchKind     string            `json:"branchKind,omitempty"`
+	ArchivedAt     *time.Time        `json:"archivedAt,omitempty"`
+	Approvals      []pendingApproval `json:"pendingApprovals,omitempty"`
 }
 
 type task struct {
@@ -86,20 +88,22 @@ type taskManager struct {
 }
 
 type startTaskParams struct {
-	Name    string `json:"name,omitempty"`
-	Cwd     string `json:"cwd"`
-	Prompt  string `json:"prompt"`
-	Approve bool   `json:"approve,omitempty"`
-	Model   string `json:"model,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Cwd            string `json:"cwd"`
+	Prompt         string `json:"prompt"`
+	Approve        bool   `json:"approve,omitempty"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 type forkTaskParams struct {
-	TaskID   string `json:"taskId"`
-	Sequence uint64 `json:"sequence,omitempty"`
-	Prompt   string `json:"prompt"`
-	Name     string `json:"name,omitempty"`
-	Kind     string `json:"kind,omitempty"`
-	Model    string `json:"model,omitempty"`
+	TaskID         string `json:"taskId"`
+	Sequence       uint64 `json:"sequence,omitempty"`
+	Prompt         string `json:"prompt"`
+	Name           string `json:"name,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 type resumeTaskParams struct {
@@ -137,6 +141,11 @@ type setTaskModelParams struct {
 	TaskID   string `json:"taskId"`
 	Provider string `json:"provider"`
 	ModelID  string `json:"modelId"`
+}
+
+type setTaskPermissionParams struct {
+	TaskID string `json:"taskId"`
+	Mode   string `json:"mode"`
 }
 
 type taskIDParams struct {
@@ -180,6 +189,7 @@ func newTaskManager(cfg config) (*taskManager, error) {
 		if json.Unmarshal(content, &metadata) != nil || metadata.ID != entry.Name() {
 			continue
 		}
+		metadata.PermissionMode, _ = normalizePermissionMode(metadata.PermissionMode)
 		if isLiveStatus(metadata.Status) {
 			metadata.Status = statusInterrupted
 			metadata.PID = 0
@@ -286,6 +296,60 @@ func newTaskID() (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
+func validateTaskName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || !utf8.ValidString(value) {
+		return "", fmt.Errorf("task title is required")
+	}
+	runes := []rune(value)
+	if len(runes) > 64 {
+		return "", fmt.Errorf("task title must contain at most 64 characters")
+	}
+	for _, char := range runes {
+		if char == '/' || char == '\\' || unicode.IsControl(char) || unicode.In(char, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return "", fmt.Errorf("task title cannot contain path separators or control characters")
+		}
+	}
+	return value, nil
+}
+
+func deriveTaskTitle(prompt string) string {
+	value := strings.Join(strings.Fields(prompt), " ")
+	value = strings.TrimLeft(value, "#>*-` ")
+	for _, prefix := range []string{"请帮我", "帮我", "请", "麻烦", "Please ", "Can you ", "Could you "} {
+		if strings.HasPrefix(value, prefix) {
+			value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
+			break
+		}
+	}
+	value = strings.Map(func(char rune) rune {
+		if char == '/' || char == '\\' || unicode.IsControl(char) || unicode.In(char, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return ' '
+		}
+		return char
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	limit := 36
+	if len(runes) > limit {
+		runes = runes[:limit]
+	}
+	value = strings.TrimSpace(string(runes))
+	value = strings.TrimRight(value, "，。！？；,.!?;:- ")
+	if value == "" {
+		return "New task"
+	}
+	return value
+}
+
+func truncateTaskTitle(value string, maximum int) string {
+	runes := []rune(value)
+	if len(runes) > maximum {
+		runes = runes[:maximum]
+	}
+	return string(runes)
+}
+
 func normalizeWorkingDirectory(value string) (string, error) {
 	if value == "" {
 		value = "."
@@ -317,6 +381,10 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
 	}
+	permissionMode, err := normalizePermissionMode(params.PermissionMode)
+	if err != nil {
+		return taskMetadata{}, err
+	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
 	manager.mu.RUnlock()
@@ -334,12 +402,13 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if err != nil {
 		return taskMetadata{}, err
 	}
-	name := params.Name
+	name := strings.TrimSpace(params.Name)
 	if name == "" {
-		name = "task-" + id[:8]
+		name = deriveTaskTitle(params.Prompt)
 	}
-	if !taskNamePattern.MatchString(name) {
-		return taskMetadata{}, fmt.Errorf("task name must start with a letter or digit and use at most 64 letters, digits, _ or -")
+	name, err = validateTaskName(name)
+	if err != nil {
+		return taskMetadata{}, err
 	}
 
 	dir := filepath.Join(manager.cfg.TasksRoot, id)
@@ -360,7 +429,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 		metadata: taskMetadata{
 			ID: id, Name: name, Cwd: cwd, Status: statusStarting,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
-			Model: normalizeModelSelection(params.Model),
+			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
@@ -399,6 +468,11 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	}
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
+	}
+	if params.PermissionMode != "" {
+		if _, err := normalizePermissionMode(params.PermissionMode); err != nil {
+			return taskMetadata{}, err
+		}
 	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
@@ -455,13 +529,12 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			suffix = "branch"
 		}
 		base := parent.Name
-		if len(base) > 54 {
-			base = base[:54]
-		}
+		base = truncateTaskTitle(base, 54)
 		name = base + "-" + suffix
 	}
-	if !taskNamePattern.MatchString(name) {
-		return taskMetadata{}, fmt.Errorf("task name must start with a letter or digit and use at most 64 letters, digits, _ or -")
+	name, err = validateTaskName(name)
+	if err != nil {
+		return taskMetadata{}, err
 	}
 	dir := filepath.Join(manager.cfg.TasksRoot, id)
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -477,6 +550,11 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if model == "" {
 		model = parent.Model
 	}
+	permissionMode := params.PermissionMode
+	if permissionMode == "" {
+		permissionMode = parent.PermissionMode
+	}
+	permissionMode, _ = normalizePermissionMode(permissionMode)
 	parentTaskID := parent.ID
 	if params.Kind == "side" {
 		parentTaskID = manager.rootTaskID(parent)
@@ -489,7 +567,7 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		metadata: taskMetadata{
 			ID: id, Name: name, Cwd: parent.Cwd, Status: statusStarting,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
-			SessionFile: forkFile, Model: model, ParentTaskID: parentTaskID,
+			SessionFile: forkFile, Model: model, PermissionMode: permissionMode, ParentTaskID: parentTaskID,
 			ForkSequence: params.Sequence, BranchKind: params.Kind,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
@@ -554,6 +632,9 @@ func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLin
 }
 
 func (current *task) launch(prompt string, approve bool, sessionFile string) error {
+	if err := current.writePermissionPolicy(current.metadata.PermissionMode); err != nil {
+		return fmt.Errorf("write task permission policy: %w", err)
+	}
 	args := []string{"--mode", "rpc", "--session-dir", current.manager.cfg.SessionDir, "--name", current.metadata.Name}
 	if sessionFile != "" {
 		args = append(args, "--session", sessionFile)
@@ -568,7 +649,11 @@ func (current *task) launch(prompt string, approve bool, sessionFile string) err
 	}
 	command := exec.Command(current.manager.cfg.AgentBinary, args...)
 	command.Dir = current.metadata.Cwd
-	command.Env = append(os.Environ(), "HOBOT_CODE_BACKGROUND_TASK=1", "HOBOT_CODE_BACKGROUND_TASK_ID="+current.metadata.ID)
+	command.Env = append(os.Environ(),
+		"HOBOT_CODE_BACKGROUND_TASK=1",
+		"HOBOT_CODE_BACKGROUND_TASK_ID="+current.metadata.ID,
+		"HOBOT_CODE_PERMISSION_POLICY="+current.permissionPolicyPath(),
+	)
 	command.SysProcAttr = workerSysProcAttr()
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -1125,6 +1210,46 @@ func (manager *taskManager) setModel(params setTaskModelParams) (taskMetadata, e
 	return current.snapshot(), nil
 }
 
+func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (taskMetadata, error) {
+	mode, err := normalizePermissionMode(params.Mode)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	if current.metadata.Status != statusIdle && !isTerminalStatus(current.metadata.Status) {
+		current.mu.Unlock()
+		return taskMetadata{}, fmt.Errorf("task must be idle or stopped before changing permissions")
+	}
+	previousMode := current.metadata.PermissionMode
+	previousUpdatedAt := current.metadata.UpdatedAt
+	current.metadata.PermissionMode = mode
+	current.metadata.UpdatedAt = time.Now().UTC()
+	metadata := current.metadata
+	current.mu.Unlock()
+	if err := current.writePermissionPolicy(mode); err != nil {
+		current.mu.Lock()
+		current.metadata.PermissionMode = previousMode
+		current.metadata.UpdatedAt = previousUpdatedAt
+		current.mu.Unlock()
+		return taskMetadata{}, err
+	}
+	if err := current.saveMetadata(); err != nil {
+		current.mu.Lock()
+		current.metadata.PermissionMode = previousMode
+		current.metadata.UpdatedAt = previousUpdatedAt
+		current.mu.Unlock()
+		if restoreErr := current.writePermissionPolicy(previousMode); restoreErr != nil {
+			return taskMetadata{}, fmt.Errorf("save task metadata: %w; restore permission policy: %v", err, restoreErr)
+		}
+		return taskMetadata{}, err
+	}
+	return metadata, nil
+}
+
 func (manager *taskManager) list() []taskMetadata {
 	manager.mu.RLock()
 	result := make([]taskMetadata, 0, len(manager.tasks))
@@ -1210,15 +1335,16 @@ func (manager *taskManager) page(params pageTaskParams) (taskPage, error) {
 }
 
 func (manager *taskManager) rename(params renameTaskParams) (taskMetadata, error) {
-	if !taskNamePattern.MatchString(params.Name) {
-		return taskMetadata{}, fmt.Errorf("task name must start with a letter or digit and use at most 64 letters, digits, _ or -")
+	name, err := validateTaskName(params.Name)
+	if err != nil {
+		return taskMetadata{}, err
 	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
 	}
 	current.mu.Lock()
-	current.metadata.Name = params.Name
+	current.metadata.Name = name
 	current.metadata.UpdatedAt = time.Now().UTC()
 	current.mu.Unlock()
 	if err := current.saveMetadata(); err != nil {

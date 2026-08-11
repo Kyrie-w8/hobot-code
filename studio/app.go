@@ -296,6 +296,26 @@ func (app *App) SetTaskModel(boardID, taskID, provider, modelID string) error {
 	return client.SetModel(ctx, taskID, provider, modelID)
 }
 
+func (app *App) SetTaskPermissionMode(boardID, taskID, mode string) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SetPermissionMode(ctx, taskID, mode)
+}
+
+func (app *App) RenameTask(boardID, taskID, name string) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.RenameTask(ctx, taskID, name)
+}
+
 func (app *App) OpenExternalURL(rawURL string) error {
 	target, err := safeExternalURL(rawURL)
 	if err != nil {
@@ -323,7 +343,22 @@ func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
 	}
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
-	return client.Models(ctx)
+	models, err := client.Models(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return studioModels(models), nil
+}
+
+func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
+	filtered := make([]hobot.ModelOption, 0, len(models))
+	for _, model := range models {
+		if model.Provider == "drobotics" {
+			filtered = append(filtered, model)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+	return filtered
 }
 
 func (app *App) BrowseWorkspace(boardID, path string) (hobot.WorkspaceListing, error) {

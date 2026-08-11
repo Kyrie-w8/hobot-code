@@ -50,7 +50,7 @@
 | `workspace.list` | `{path?}` | 浏览当前用户可见的目录，只返回子目录 |
 | `workspace.create` | `{parent, name}` | 在用户明确选定的父目录中创建私有工作目录 |
 | `daemon.shutdown` | `{force?: boolean}` | 请求服务停止；有活跃任务时必须显式 `force` |
-| `task.start` | `{name?, cwd, prompt, approve?, model?}` | 新任务元数据 |
+| `task.start` | `{name?, cwd, prompt, approve?, model?, permissionMode?}` | 新任务元数据；省略名称时从首条 Prompt 生成 Unicode 标题 |
 | `task.list` | `{}` | 未归档任务元数据，按创建时间倒序 |
 | `task.page` | `{cursor?, limit?, includeArchived?}` | 有界任务分页与下一游标 |
 | `task.get` | `{taskId}` | 单个任务元数据 |
@@ -59,15 +59,16 @@
 | `task.delete` | `{taskId}` | 删除已归档的终态任务及本地日志 |
 | `task.resume` | `{taskId, prompt?}` | 重新打开已校验的 Pi session，可选发送新 Prompt |
 | `task.restart` | `{taskId, prompt}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
-| `task.fork` | `{taskId, sequence?, prompt, name?, kind, model?}` | 从已稳定上下文或指定用户消息之前创建独立任务分支 |
+| `task.fork` | `{taskId, sequence?, prompt, name?, kind, model?, permissionMode?}` | 从已稳定上下文或指定用户消息之前创建独立任务分支 |
 | `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为终态任务持久化下次 Resume 使用的模型 |
+| `task.permissions` | `{taskId, mode}` | 为 idle 或终态任务设置独立的 `review`、`ask` 或 `developer` 权限策略 |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
 | `task.approvals` | `{taskId}` | 有界待审批队列，包含活跃和已失效项 |
 | `task.stop` | `{taskId}` | 终止 worker 进程组 |
 | `task.events` | `{taskId, after?, limit?}` | 按序号读取最多 1000 条持久事件 |
 | `task.subscribe` | `{taskId, after?, follow?}` | 先重放 `sequence > after` 的事件，再按需跟随 |
 
-`task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。客户端应使用 `task.model` 切换模型：活动 worker 只在 `idle` 时接受，`stopped`、`failed` 和 `interrupted` 任务会将选择写入元数据并在下次 Resume/Restart 生效。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果仍在板端 worker 内判定，客户端无法绕过。
+`task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。客户端应使用 `task.model` 切换模型：活动 worker 只在 `idle` 时接受，`stopped`、`failed` 和 `interrupted` 任务会将选择写入元数据并在下次 Resume/Restart 生效。`task.permissions` 为每个任务写入私有策略文件；`review` 禁止变更，`ask` 确认变更，`developer` 放行日常 Shell 与工作区编辑，但破坏性命令、受保护路径、持久状态与未知/MCP 工具仍由板端保护或确认。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果始终在板端 worker 内判定，客户端无法绕过。
 
 ## 任务状态
 

@@ -54,6 +54,18 @@ func (client *Client) SetModel(ctx context.Context, taskID, provider, modelID st
 	}, nil)
 }
 
+func (client *Client) SetPermissionMode(ctx context.Context, taskID, mode string) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.permissions", map[string]any{"taskId": taskID, "mode": mode}, &task)
+	return task, err
+}
+
+func (client *Client) RenameTask(ctx context.Context, taskID, name string) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.rename", map[string]any{"taskId": taskID, "name": name}, &task)
+	return task, err
+}
+
 func (client *Client) Models(ctx context.Context) ([]ModelOption, error) {
 	var models []ModelOption
 	err := client.Call(ctx, "models.list", struct{}{}, &models)

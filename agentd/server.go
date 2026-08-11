@@ -364,6 +364,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.permissions":
+		var params setTaskPermissionParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.setPermissionMode(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_permissions_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
 	case "task.archive":
 		var params archiveTaskParams
 		if err := decodeParams(req.Params, &params); err != nil {

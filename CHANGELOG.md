@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.0
+
+- Make the Studio composer send and stop actions share one stable button position, and restrict the desktop model picker to D-Robotics models.
+- Let every project create multiple conversations, derive readable Unicode titles from the first instruction, and support inline conversation renaming.
+- Add per-task Review, Ask, and Developer approval modes whose private policies remain enforced on the RDK board with high-risk operations guarded.
+- Document the current attachment boundary: image/document transport remains disabled until secure SSH staging, validation, and session replay are implemented end to end.
+
 ## 0.19.1
 
 - Make Studio reply links open safely in the Mac default browser instead of disappearing inside the embedded WebView.

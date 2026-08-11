@@ -213,6 +213,16 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	}
 	current, _ := server.manager.get(metadata.ID)
 	waitForStatus(t, current, statusIdle)
+	permissionResult, err := client.call("task.permissions", setTaskPermissionParams{TaskID: metadata.ID, Mode: "developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(permissionResult, &metadata); err != nil || metadata.PermissionMode != "developer" {
+		t.Fatalf("permission mode was not returned: metadata=%+v err=%v", metadata, err)
+	}
+	if _, err := os.Stat(current.permissionPolicyPath()); err != nil {
+		t.Fatalf("task permission policy was not written: %v", err)
+	}
 	if err := client.subscribe(metadata.ID, 0, false, true); err != nil {
 		t.Fatalf("non-following event replay failed: %v", err)
 	}

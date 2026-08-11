@@ -92,6 +92,7 @@ type Task struct {
 	ResumeCount      int        `json:"resumeCount,omitempty"`
 	RestartCount     int        `json:"restartCount,omitempty"`
 	Model            string     `json:"model,omitempty"`
+	PermissionMode   string     `json:"permissionMode,omitempty"`
 	ParentTaskID     string     `json:"parentTaskId,omitempty"`
 	ForkSequence     uint64     `json:"forkSequence,omitempty"`
 	BranchKind       string     `json:"branchKind,omitempty"`
@@ -127,20 +128,22 @@ type EventPage struct {
 }
 
 type StartTaskRequest struct {
-	Name    string `json:"name,omitempty"`
-	Cwd     string `json:"cwd"`
-	Prompt  string `json:"prompt"`
-	Approve bool   `json:"approve,omitempty"`
-	Model   string `json:"model,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Cwd            string `json:"cwd"`
+	Prompt         string `json:"prompt"`
+	Approve        bool   `json:"approve,omitempty"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 type ForkTaskRequest struct {
-	TaskID   string `json:"taskId"`
-	Sequence uint64 `json:"sequence,omitempty"`
-	Prompt   string `json:"prompt"`
-	Name     string `json:"name,omitempty"`
-	Kind     string `json:"kind,omitempty"`
-	Model    string `json:"model,omitempty"`
+	TaskID         string `json:"taskId"`
+	Sequence       uint64 `json:"sequence,omitempty"`
+	Prompt         string `json:"prompt"`
+	Name           string `json:"name,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 }
 
 type ModelOption struct {
