@@ -329,7 +329,7 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .composer, .approval-bar { width: min(100%, 860px); margin: 0 auto; }
 .composer { overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: 0 10px 32px rgba(0, 0, 0, 0.15); transition: border-color 140ms ease, box-shadow 140ms ease; }
 .composer:focus-within { border-color: rgba(101, 191, 167, 0.5); box-shadow: 0 0 0 3px rgba(101, 191, 167, 0.055), 0 12px 34px rgba(0, 0, 0, 0.17); }
-.composer textarea { display: block; width: 100%; min-height: 48px; max-height: 180px; resize: none; padding: 12px 14px 3px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 14.5px; line-height: 1.48; }
+.composer textarea { display: block; width: 100%; min-height: 44px; max-height: 180px; resize: none; padding: 12px 14px 3px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 14.5px; line-height: 1.48; }
 .composer textarea::placeholder { color: var(--text-dim); }
 .composer-footer { display: flex; min-height: 36px; align-items: center; padding: 1px 7px 6px 10px; color: var(--text-dim); font-size: 10px; }
 .model-picker, .permission-picker { position: relative; display: inline-flex; height: 28px; max-width: 190px; align-items: center; color: var(--text-muted); }

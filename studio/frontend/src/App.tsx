@@ -57,6 +57,7 @@ function App() {
   const followsOutput = useRef(true);
   const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null}>());
   const previousTaskId = useRef('');
+  const activeBoardId = useRef('');
 
   const boardId = connection?.board.id ?? '';
 
@@ -64,6 +65,7 @@ function App() {
     if (!targetBoard) return;
     try {
       const page = await api.tasks(targetBoard);
+      if (targetBoard !== activeBoardId.current) return;
       setTasks(page.tasks ?? []);
       setSelectedTask((current) => {
         if (!current) return page.tasks?.[0] ?? null;
@@ -78,17 +80,28 @@ function App() {
     setBusy(true);
     setError('');
     try {
+      const previousBoard = activeBoardId.current;
       const next = await api.connectBoard(board.id);
+      const [pageModels, page] = await Promise.all([
+        api.models(board.id).catch(() => []),
+        api.tasks(board.id),
+      ]);
+      activeBoardId.current = board.id;
+      if (previousBoard && previousBoard !== board.id) await api.disconnectBoard(previousBoard).catch(() => undefined);
       setConnection(next);
-      const [pageModels] = await Promise.all([api.models(board.id).catch(() => []), refreshTasks(board.id)]);
       setModels(pageModels ?? []);
+      setTasks(page.tasks ?? []);
+      setSelectedTask(page.tasks?.[0] ?? null);
+      setEvents([]);
+      setOptimisticPrompt(null);
+      setError('');
       setShowBoard(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(false);
     }
-  }, [refreshTasks]);
+  }, []);
 
   useEffect(() => {
     if (startupStarted.current) return;
@@ -119,12 +132,12 @@ function App() {
 
   useEffect(() => {
     const removeEvent = api.onEvent(({boardId: eventBoard, event}) => {
-      if (eventBoard !== boardId || event.taskId !== selectedTask?.id) return;
+      if (eventBoard !== activeBoardId.current || event.taskId !== selectedTask?.id) return;
       setEvents((current) => current.some((item) => item.sequence === event.sequence) ? current : [...current, event]);
       if (['task.running', 'task.idle', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
     });
     const removeError = api.onWatchError((watchError) => {
-      if (watchError.boardId === boardId) setError(watchError.error);
+      if (watchError.boardId === activeBoardId.current) setError(watchError.error);
     });
     return () => { removeEvent(); removeError(); };
   }, [boardId, refreshTasks, selectedTask?.id]);
@@ -202,7 +215,7 @@ function App() {
     const textarea = composerRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(180, Math.max(54, textarea.scrollHeight))}px`;
+    textarea.style.height = `${Math.min(180, Math.max(44, textarea.scrollHeight))}px`;
   }, [composer]);
 
   const visibleTasks = useMemo(() => {
@@ -506,7 +519,7 @@ function App() {
                   if (!composerBlocked && composer.trim()) event.currentTarget.form?.requestSubmit();
                 }}
                 placeholder={selectedComposerMode === 'resume' ? 'Continue this task' : selectedComposerMode === 'restart' ? 'Start a new session' : 'Message Hobot Code'}
-                rows={2}
+                rows={1}
               />
               <div className="composer-footer">
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
