@@ -15,6 +15,7 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 - **可组合扩展**：继续使用 Pi packages、extensions、MCP、Skills、Prompt templates 和 themes。
 - **工程保障**：工具权限、质量门、Hook、资源受限 LSP、持久记忆和持久目标。
 - **并行协作**：`/btw` 在右侧窗格启动独立、多轮、临时的侧边 Agent。
+- **后台任务**：板端 `agentd` 托管无界面 Agent，支持 SSH 断开后继续运行、事件重放和多轮续接。
 
 ## 支持平台
 
@@ -40,7 +41,7 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 
 每篇资料在正文末尾就地列出 D-Robotics 官方文档或官方 GitHub 来源。发布校验会拒绝未登记文档、缺失核对日期、来源不足、正文未引用来源、非官方域名和疑似凭据；资料中的版本说明仍不能替代当前板端的实时检查。
 
-基础运行时自包含，使用内置 Agent 能力时，板端无需另外安装 Node.js、Bun、Go、Python 或容器。SSH 断线续跑功能需要 `tmux`；第三方 Pi package 可能需要系统中的 `git`、`npm` 或自定义 `npmCommand`，用户配置的 Hook 与 LSP 也需要对应外部命令。
+基础运行时自包含，使用内置 Agent 能力时，板端无需另外安装 Node.js、Bun、Go、Python 或容器。完整 TUI 的断线续跑需要 `tmux`；无界面后台任务由随包安装的 `agentd` 托管，不依赖 `tmux`。第三方 Pi package 可能需要系统中的 `git`、`npm` 或自定义 `npmCommand`，用户配置的 Hook 与 LSP 也需要对应外部命令。
 
 ## 快速开始
 
@@ -58,7 +59,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.14.3
+  | sh -s -- --version 0.15.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -142,6 +143,20 @@ hobot persistent stop main                 # 终止会话及受其终端托管�
 
 主动离开但保持任务运行时，直接执行 `/detach`。也可使用 tmux 原生快捷键：按 `Ctrl+B`，松开后按 `D`。持久会话运行在按 OS 用户隔离的 `hobot-code` 专用 `tmux` 服务中，随包配置会启用鼠标、剪贴板转发、扩展按键和 256 色支持，不会读取或修改用户普通 `tmux` 服务的会话与设置。若当前已经位于其他 `tmux` 客户端中，需要先分离再运行 `hobot persistent`。它只能承受客户端断线：板卡重启、断电、内存不足杀进程或程序崩溃仍会终止实时任务；此后可使用 `hobot --resume` 恢复已落盘的对话，但不会自动重放中断的工具调用。
 
+不需要保留完整 TUI 时，可把独立任务交给板端常驻服务：
+
+```bash
+hobot task start --name build -- "检查项目、修复问题并运行测试"
+hobot task list
+hobot task attach <task-id>                 # 重放历史并持续查看输出
+hobot task send <task-id> "继续处理下一项"  # 同一 Agent 多轮续接
+hobot task abort <task-id>                  # 中断当前一轮，保留 worker
+hobot task respond <task-id> <request-id> yes
+hobot task stop <task-id>
+```
+
+首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多并行两个后台任务；板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`，且不会自动重放可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
+
 脚本化调用沿用 Pi：
 
 ```bash
@@ -190,7 +205,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.14.3
+hobot update --version 0.15.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：
@@ -215,7 +230,7 @@ make check
 make release
 ```
 
-`make check` 执行 Shell/JSON 校验、Node 测试、知识库与 Prompt 预算验证、品牌、文档链接和版本一致性检查，以及扩展源码语法与模块依赖检查。`make release` 还会校验完整发行包的文件集合与清单。构建缓存与开发覆盖项见[配置说明](docs/configuration.md#构建覆盖)。贡献前请阅读[贡献指南](CONTRIBUTING.md)。
+`make check` 执行 Shell/JSON 校验、Node 测试、Go race/vet、知识库与 Prompt 预算验证、品牌、文档链接和版本一致性检查，以及扩展源码语法与模块依赖检查。`make release` 还会交叉编译并校验 ARM64 `agentd`、完整发行包文件集合与清单。构建缓存与开发覆盖项见[配置说明](docs/configuration.md#构建覆盖)。贡献前请阅读[贡献指南](CONTRIBUTING.md)。
 
 ## 文档
 
@@ -223,6 +238,7 @@ make release
 |---|---|
 | [配置说明](docs/configuration.md) | 模型、权限、记忆、目标、Hook、通知和 LSP |
 | [系统架构](docs/architecture.md) | 运行路径、适配层、数据边界与部署模型 |
+| [agentd 协议](docs/agentd-protocol.md) | 后台任务协议、状态机、重连与安全边界 |
 | [用户目录布局](docs/user-directory-layout.md) | 配置、状态、迁移与安装目标用户 |
 | [设计调研](docs/prime-agent-crush-review.md) | Prime Agent 与 Crush 的可借鉴设计 |
 | [发布流程](docs/releasing.md) | 版本、GitHub Release、来源证明与实机检查 |

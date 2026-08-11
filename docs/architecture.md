@@ -7,6 +7,9 @@ Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 
 ```mermaid
 flowchart LR
   U["Terminal user"] --> T["Pi TUI and editor"]
+  U --> CLI["hobot task CLI"]
+  CLI --> AD["Per-user agentd"]
+  AD --> BG["Pi RPC workers"]
   T --> S["Session tree and compaction"]
   S --> A["Main Pi agent and tool loop"]
 
@@ -31,9 +34,20 @@ flowchart LR
   SA --> P
   SA --> B
   SA --> R
+  BG --> P
+  BG --> B
+  BG --> R
 ```
 
 图中主 Agent 与侧边 Agent 指向相同组件，表示两个进程加载相同的 Provider、工具和 RDK 扩展实现，不表示它们共享同一个进程内实例。
+
+## 板端常驻服务
+
+`agentd` 是 Go 编写的按用户常驻控制面，只负责后台任务、事件日志、进程组和客户端重连。每个任务启动发行包内同一个 `runtime/hobot --mode rpc` worker，因此 TUI 与后台模式共享模型、工具、权限、Skills、RDK 知识和系统 Prompt，不存在第二套 Agent 实现。
+
+CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取。每个用户默认最多两个后台任务，事件和 stderr 均有硬上限。
+
+daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但活动任务只会标记为 `interrupted`。系统不会自动重放 Prompt、审批或工具调用，以免重复产生文件、进程和硬件副作用。协议细节见 [agentd 协议](agentd-protocol.md)。
 
 `runtime/hobot` 是按版本与 SHA256 固定的 Pi Linux ARM64 standalone 二进制。它读取同目录的产品配置，由 Pi 生成标题、帮助、配置路径、会话 UI 和快捷键。Hobot Code 不复制或修改 Pi 的 TUI 组件、消息队列与会话树实现。
 
@@ -65,7 +79,7 @@ D-Robotics 适配器将 Pi 消息、工具描述和 thinking 预算转换为 Ant
 权限匹配 -> 交互确认 -> PreToolUse Hook -> 工具执行 -> PostToolUse Hook
 ```
 
-权限规则按顺序匹配，`deny` 工具会先从活跃工具集合移除，调用阶段仍进行 fail-closed 复核。内置 `write`、`edit` 不允许修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`；它们写入工作区外及 Shell 命中破坏性规则时需要确认。root 下的 `bash`、`write`、`edit` 始终逐次确认，非交互 root 会话拒绝这些调用。
+权限规则按顺序匹配，`deny` 工具会先从活跃工具集合移除，调用阶段仍进行 fail-closed 复核。内置 `write`、`edit` 不允许修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`；它们写入工作区外及 Shell 命中破坏性规则时需要确认。root 默认逐次确认 `bash`、`write`、`edit`；显式切换到 `policy` 后普通操作遵守 allow/ask/deny，但破坏性命令、工作区外写入和关键系统路径仍受硬边界保护。
 
 质量门配置来自项目 `.hobot/quality-gates.json`，会话覆盖与运行结果作为 Pi custom entry 保存。通过结果绑定运行后的工作区指纹；后续写入、编辑、Shell 或 MCP 调用会将结果标记为 `stale`。质量门和修改工具出现在同一并行批次时，门禁调用会被拒绝。
 
@@ -95,7 +109,7 @@ Pi JSONL 会话位于 `~/.local/state/hobot-code/sessions`。Hobot Code 在同�
 
 ## 部署与回滚
 
-发行包包含按锁文件校验的 Pi、`fd`、`ripgrep` Linux ARM64 二进制及许可证。程序安装在 `/usr/local/lib/hobot-code`，启动器位于 `/usr/local/bin/hobot`，回滚命令位于 `/usr/local/sbin/hobot-rollback`。
+发行包包含按锁文件校验的 Pi、`fd`、`ripgrep` Linux ARM64 二进制，以及从当前提交交叉编译的静态 ARM64 `agentd` 和相应许可证。程序安装在 `/usr/local/lib/hobot-code`，启动器位于 `/usr/local/bin/hobot`，回滚命令位于 `/usr/local/sbin/hobot-rollback`。
 
 公开安装入口从 GitHub Release 读取不可变版本号，下载同版本归档和 SHA256，并在解压前限制归档根目录、规范路径与文件类型。`hobot update` 复用相同入口；`hobot update --extensions` 保留给 Pi 扩展管理。Git tag 发布工作流重新构建发行包，并使用 GitHub OIDC 为归档、安装脚本和版本文件生成 provenance attestation。
 

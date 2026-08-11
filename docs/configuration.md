@@ -91,6 +91,8 @@ hobot update --extensions
 | `XDG_STATE_HOME` | 默认 `$HOME/.local/state`；仅限启动前设置 |
 | `HOBOT_CODE_CONFIG_DIR` | `${XDG_CONFIG_HOME:-$HOME/.config}/hobot-code`；仅限启动前设置 |
 | `HOBOT_CODE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/hobot-code` |
+| `HOBOT_CODE_AGENTD_SOCKET` | 当前用户 agentd 的绝对 Unix socket 路径 |
+| `HOBOT_CODE_MAX_BACKGROUND_TASKS` | 同一用户后台任务上限，默认 2，有效范围 1..8 |
 | `HOBOT_CODING_AGENT_DIR` | `<config-root>/agent` |
 | `HOBOT_CODING_AGENT_SESSION_DIR` | `<state-root>/sessions` |
 | `HOBOT_CODE_PERMISSION_POLICY` | 权限策略文件 |
@@ -227,6 +229,24 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 全屏模式下，`/btw` 将主 Agent 与侧边 Agent 等分显示，打开时不抢占主输入焦点。点击任一半屏即可切换到对应 Agent；也可使用 `Ctrl+Shift+Right` 切换到侧边 Agent，使用 `Ctrl+Shift+Left` 返回主 Agent。点击事件仍交给 Pi 的选择层处理，因此拖动选取、链接和滚轮不会被焦点切换功能吞掉。
 
 ## SSH 断线续跑
+
+无界面任务可直接交给 `agentd`，无需安装 `tmux`：
+
+```bash
+hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
+hobot task list
+hobot task show TASK_ID
+hobot task logs TASK_ID [--after SEQUENCE] [--follow]
+hobot task attach TASK_ID [--after SEQUENCE]
+hobot task send TASK_ID PROMPT
+hobot task abort TASK_ID
+hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
+hobot task stop TASK_ID
+```
+
+`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。`attach` 会先重放已持久化事件再跟随实时输出；失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务只恢复元数据并标记为 `interrupted`，不会重放工具调用。完整接口见 [agentd 协议](agentd-protocol.md)。
+
+需要保留完整 TUI、编辑区和侧边 Agent 时，继续使用 `hobot persistent`：
 
 `hobot persistent` 使用当前 OS 用户的 `tmux` 服务托管完整交互进程：
 

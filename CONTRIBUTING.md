@@ -12,7 +12,7 @@
 
 ## 开发环境
 
-需要 Git、`make`、Node.js 22.13 或更新版本、POSIX Shell、`curl`、`tar`、`gzip`，以及 `sha256sum` 或 `shasum`。执行完整发行构建还需要访问上游归档，或准备[经过校验的本地缓存](docs/configuration.md#构建覆盖)。
+需要 Git、`make`、Node.js 22.13 或更新版本、Go 1.23 或更新版本、POSIX Shell、`curl`、`tar`、`gzip`，以及 `sha256sum` 或 `shasum`。执行完整发行构建还需要访问上游归档，或准备[经过校验的本地缓存](docs/configuration.md#构建覆盖)。
 
 克隆后先运行基线检查：
 
@@ -20,7 +20,7 @@
 make check
 ```
 
-该命令包含 Shell 与 JSON 语法检查、Node 测试、知识库与专家 Prompt 预算验证、品牌、文档链接和版本一致性检查，以及扩展源码语法与模块依赖检查。完整发行包的文件集合与清单在 `make release` 阶段校验。
+该命令包含 Shell 与 JSON 语法检查、Node 测试、Go race/vet、知识库与专家 Prompt 预算验证、品牌、文档链接和版本一致性检查，以及扩展源码语法与模块依赖检查。完整发行包的文件集合、ARM64 `agentd` 和清单在 `make release` 阶段校验。
 
 ## 变更流程
 
@@ -36,6 +36,7 @@ make check
 ```bash
 node --test tests/provider-stream.test.mjs
 node --test tests/side-agent.test.mjs
+cd agentd && go test -race ./...
 ```
 
 最终提交前仍应运行完整的 `make check`。

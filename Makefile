@@ -1,4 +1,16 @@
-.PHONY: check release pi-release pi-check clean
+.PHONY: check release pi-release pi-check agentd-check agentd-release clean
+
+VERSION := $(shell sed -n '1p' VERSION)
+GO_CACHE ?= $(CURDIR)/dist/go-cache
+AGENTD_BINARY := $(CURDIR)/dist/hobot-agentd-linux-arm64
+
+agentd-check:
+	cd agentd && GOCACHE="$(GO_CACHE)" go test -race ./...
+	cd agentd && GOCACHE="$(GO_CACHE)" go vet ./...
+
+agentd-release: agentd-check
+	mkdir -p dist
+	cd agentd && GOCACHE="$(GO_CACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -buildvcs=false -trimpath -ldflags '-s -w -X main.version=$(VERSION)' -o "$(AGENTD_BINARY)" .
 
 pi-check:
 	sh -n scripts/package-pi.sh scripts/install-pi.sh scripts/rollback-pi.sh scripts/hobot-release.sh scripts/uninstall-pi.sh scripts/validate-tar-archive.sh packaging/pi/hobot-launcher
@@ -11,10 +23,10 @@ pi-check:
 	node scripts/validate-version.mjs
 	node scripts/validate-package.mjs --source .
 
-check: pi-check
+check: pi-check agentd-check
 
-pi-release: pi-check
-	./scripts/package-pi.sh
+pi-release: pi-check agentd-release
+	HOBOT_CODE_AGENTD_BINARY="$(AGENTD_BINARY)" ./scripts/package-pi.sh
 
 release: pi-release
 

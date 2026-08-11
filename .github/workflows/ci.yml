@@ -27,5 +27,11 @@ jobs:
         with:
           node-version: 22
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agentd/go.mod
+          cache-dependency-path: agentd/go.mod
+
       - name: Run repository checks
         run: make check

@@ -144,7 +144,7 @@ for root_owned_path in "$backup_root" /usr/local/lib/hobot-code /usr/local/bin/h
   fi
 done
 
-active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/hobot)([[:space:]]|$)' || true)
+active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/(hobot|agentd))([[:space:]]|$)' || true)
 if [ -n "$active_pids" ]; then
   printf 'Stop active Hobot Code processes before rollback: %s\n' "$active_pids" >&2
   exit 1

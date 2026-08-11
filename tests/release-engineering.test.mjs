@@ -15,6 +15,7 @@ import {
   REQUIRED_PACKAGE_DIRECTORIES,
   REQUIRED_PACKAGE_PATHS,
   validateRelativeImports,
+  validateAgentdBinary,
   validatePackageMetadata,
   validatePackagedKnowledgeLayout,
   validateRequiredPackageLayout,
@@ -112,6 +113,7 @@ test("release manifest detects post-build mutation", async (t) => {
 
 test("release layout covers installer inputs and linked documentation", async (t) => {
   const installerInputs = [
+    "agentd",
     "runtime/hobot",
     "extensions/rdk/index.ts",
     "skills/rdk-board/SKILL.md",
@@ -145,7 +147,7 @@ test("release layout covers installer inputs and linked documentation", async (t
   for (const name of ["extensions", "skills", "knowledge", "prompts", "licenses"]) {
     assert.ok(REQUIRED_PACKAGE_DIRECTORIES.includes(name), `missing package directory contract: ${name}`);
   }
-  for (const name of ["architecture.md", "configuration.md", "prime-agent-crush-review.md", "releasing.md", "user-directory-layout.md"]) {
+  for (const name of ["agentd-protocol.md", "architecture.md", "configuration.md", "prime-agent-crush-review.md", "releasing.md", "user-directory-layout.md"]) {
     assert.ok(REQUIRED_PACKAGE_PATHS.includes(`docs/${name}`), `missing packaged documentation: ${name}`);
   }
 
@@ -203,6 +205,19 @@ test("upstream archive validation rejects traversal, links, and special entries"
       /outside pi|non-canonical path|unsupported archive entry type|Error exit delayed/,
     );
   }
+});
+
+test("release validation accepts only Linux ARM64 agentd binaries", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-agentd-elf-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const header = Buffer.alloc(64);
+  header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+  header.writeUInt16LE(183, 18);
+  await writeFile(join(root, "agentd"), header);
+  await validateAgentdBinary(root);
+  header.writeUInt16LE(62, 18);
+  await writeFile(join(root, "agentd"), header);
+  await assert.rejects(() => validateAgentdBinary(root), /Linux ARM64 ELF/);
 });
 
 test("extension validation catches missing relative imports and TypeScript syntax errors", async (t) => {
@@ -432,6 +447,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(packager, /^umask 022$/m);
   assert.match(packager, /HOBOT_CODE_ALLOW_DIRTY_BUILD/);
   assert.match(packager, /release-metadata\.mjs" write/);
+  assert.match(packager, /HOBOT_CODE_AGENTD_BINARY/);
+  assert.match(packager, /stage_dir\/agentd/);
   assert.match(packager, /output_part=.*\.part\.\$\$/);
   assert.match(packager, /\.package-pi\.lock/);
   assert.match(packager, /package_download_partial=.*package_download_destination\.part\.\$\$/);
@@ -453,6 +470,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /Installed command validation failed/);
   assert.match(installer, /TOOLS_RUNTIME/);
   assert.match(installer, /HOBOT_CODE_INSTALL_CHANNEL/);
+  assert.match(installer, /package_dir\/agentd/);
+  assert.match(installer, /new_runtime\/agentd/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
   assert.doesNotMatch(installer, /\/usr\/local\/bin\/hobot --version/);
   assert.match(rollback, /LAST_BACKUP/);

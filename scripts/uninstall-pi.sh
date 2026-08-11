@@ -84,7 +84,7 @@ if [ "$purge" -eq 1 ]; then
   done
 fi
 
-active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/hobot)([[:space:]]|$)' || true)
+active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/(hobot|agentd))([[:space:]]|$)' || true)
 if [ -n "$active_pids" ]; then
   printf 'Stop active Hobot Code processes before uninstalling: %s\n' "$active_pids" >&2
   exit 1

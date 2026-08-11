@@ -8,7 +8,7 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 |---|---|
 | `/usr/local/bin/hobot` | 启动器 |
 | `/usr/local/sbin/hobot-rollback` | 需要 root 的回滚命令 |
-| `/usr/local/lib/hobot-code` | 当前运行时、扩展、Skills、知识和默认配置 |
+| `/usr/local/lib/hobot-code` | 当前 Pi 运行时、`agentd`、扩展、Skills、知识和默认配置 |
 | `/usr/local/lib/hobot-code-backups` | 安装前的运行时与迁移备份 |
 
 系统级程序通常为只读安装内容。运行时不应直接修改其中的知识、Prompt 或扩展；变更应在源码中验证后重新打包安装。
@@ -42,6 +42,10 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 | `memory/memory.db` | SQLite/FTS5 持久记忆与记忆审计 |
 | `goals/goals.db` | 持久目标状态和事件 |
 | `audit/hooks.jsonl` | 脱敏后的 Hook 审计 |
+| `agentd/agentd.log`、`agentd/agentd.pid` | 当前用户后台服务日志与 PID |
+| `agentd/tasks/<task-id>/metadata.json` | 后台任务状态、工作目录和事件序号 |
+| `agentd/tasks/<task-id>/events.jsonl` | 可按序号重放的 Pi RPC 事件 |
+| `agentd/tasks/<task-id>/worker.stderr.log` | 有大小上限的 worker 诊断输出 |
 | `legacy-sessions` | 从旧系统布局归档、不再作为活动会话加载的历史会话 |
 
 数据库与状态文件默认使用 `0600`，目录默认使用 `0700`。`legacy-sessions` 是归档语义，不是文件系统只读目录；其文件仍由所属用户控制。
@@ -62,6 +66,7 @@ XDG_STATE_HOME    默认 $HOME/.local/state
 ```text
 HOBOT_CODE_CONFIG_DIR
 HOBOT_CODE_STATE_DIR
+HOBOT_CODE_AGENTD_SOCKET
 HOBOT_CODING_AGENT_DIR
 HOBOT_CODING_AGENT_SESSION_DIR
 ```

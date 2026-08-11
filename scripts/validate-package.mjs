@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, open, readFile, readdir } from "node:fs/promises";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -28,6 +28,7 @@ export const REQUIRED_PACKAGE_DIRECTORIES = [
 
 export const REQUIRED_PACKAGE_PATHS = [
   "BUILD_INFO.json",
+  "agentd",
   "CHANGELOG.md",
   "CONTRIBUTING.md",
   "LICENSE",
@@ -38,6 +39,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "PI_RUNTIME",
   "TOOLS_RUNTIME",
   "docs/architecture.md",
+  "docs/agentd-protocol.md",
   "docs/configuration.md",
   "docs/prime-agent-crush-review.md",
   "docs/releasing.md",
@@ -79,6 +81,7 @@ export const REQUIRED_PACKAGE_PATHS = [
 ];
 
 export const REQUIRED_EXECUTABLE_PATHS = [
+  "agentd",
   "runtime/hobot",
   "managed-bin/fd",
   "managed-bin/rg",
@@ -307,12 +310,36 @@ export async function validatePackageMetadata(rootDirectory) {
   }
 }
 
+export async function validateAgentdBinary(rootDirectory) {
+  const file = await open(resolve(rootDirectory, "agentd"), "r");
+  const header = Buffer.alloc(20);
+  let bytesRead;
+  try {
+    ({ bytesRead } = await file.read(header, 0, header.length, 0));
+  } finally {
+    await file.close();
+  }
+  if (
+    bytesRead < 20
+    || header[0] !== 0x7f
+    || header[1] !== 0x45
+    || header[2] !== 0x4c
+    || header[3] !== 0x46
+    || header[4] !== 2
+    || header[5] !== 1
+    || header.readUInt16LE(18) !== 183
+  ) {
+    throw new Error("agentd must be a little-endian Linux ARM64 ELF binary");
+  }
+}
+
 export async function validatePackage(rootDirectory, { sourceOnly = false } = {}) {
   const root = resolve(rootDirectory);
   if (!sourceOnly) await validateRequiredPackageLayout(root);
   await validateSourceSyntax(root);
   await validateRelativeImports(root);
   if (sourceOnly) return;
+  await validateAgentdBinary(root);
   await validatePackageMetadata(root);
   await verifyManifest(root);
 }

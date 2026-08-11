@@ -57,7 +57,8 @@ async function createLauncherFixture(prefix) {
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
   await copyFile(new URL("../packaging/pi/tmux.conf", import.meta.url), join(runtime, "tmux.conf"));
   await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf '%s\\n' \"$HOBOT_CODING_AGENT_DIR\" \"$HOBOT_CODING_AGENT_SESSION_DIR\" \"$HOBOT_CODE_MEMORY_DB\"\nfor hobot_arg in \"$@\"; do printf 'arg=<%s>\\n' \"$hobot_arg\"; done\n");
-  await chmod(join(runtime, "hobot"), 0o755);
+  await writeFile(join(runtime, "agentd"), "#!/bin/sh\nfor hobot_arg in \"$@\"; do printf 'agentd=<%s>\\n' \"$hobot_arg\"; done\n");
+  await Promise.all(["hobot", "agentd"].map((name) => chmod(join(runtime, name), 0o755)));
   const source = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
   const launcher = join(root, "hobot-launcher");
   await writeFile(launcher, source.replaceAll("/usr/local/lib/hobot-code", runtime));
@@ -245,6 +246,19 @@ test("launcher persistent sessions preserve arguments and shell safety", async (
     assert.match(stdout, /arg=<--resume>/);
     assert.ok(stdout.includes(`arg=<${unsafeArgument}>`));
     await assert.rejects(() => access(marker));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("launcher routes daemon and task commands after loading the user environment", async () => {
+  const fixture = await createLauncherFixture("hobot-agentd-route-");
+  try {
+    const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+    const daemon = await execFileAsync(fixture.launcher, ["daemon", "status"], { env: environment });
+    assert.equal(daemon.stdout.trim(), "agentd=<daemon>\nagentd=<status>");
+    const task = await execFileAsync(fixture.launcher, ["task", "list"], { env: environment });
+    assert.equal(task.stdout.trim(), "agentd=<task>\nagentd=<list>");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

@@ -74,6 +74,7 @@ checksum_output="$output.sha256"
 checksum_part="$checksum_output.part.$$"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/hobot-code-pi-package.XXXXXX")
 tool_bundle_dir=${HOBOT_CODE_TOOL_BUNDLE_DIR:-}
+agentd_binary=${HOBOT_CODE_AGENTD_BINARY:-$root_dir/dist/hobot-agentd-linux-arm64}
 package_lock_dir="$root_dir/dist/.package-pi.lock"
 package_lock_acquired=0
 
@@ -94,6 +95,15 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
 mkdir -p "$cache_dir" "$root_dir/dist"
+
+case "$agentd_binary" in
+  /*) ;;
+  *) printf 'HOBOT_CODE_AGENTD_BINARY must be an absolute path: %s\n' "$agentd_binary" >&2; exit 1 ;;
+esac
+if [ -L "$agentd_binary" ] || [ ! -f "$agentd_binary" ] || [ ! -x "$agentd_binary" ]; then
+  printf 'The Linux ARM64 hobot-agentd binary is missing, non-executable, or a symbolic link: %s\n' "$agentd_binary" >&2
+  exit 1
+fi
 
 acquire_package_lock() {
   if mkdir "$package_lock_dir" 2>/dev/null; then
@@ -219,6 +229,7 @@ done
 install -m 0600 "$root_dir/packaging/pi/hobot.env.example" "$stage_dir/config/hobot.env.example"
 install -m 0644 "$root_dir/packaging/pi/tmux.conf" "$stage_dir/config/tmux.conf"
 install -m 0755 "$root_dir/packaging/pi/hobot-launcher" "$stage_dir/hobot-launcher"
+install -m 0755 "$agentd_binary" "$stage_dir/agentd"
 install -m 0755 "$root_dir/scripts/install-pi.sh" "$stage_dir/install.sh"
 install -m 0755 "$root_dir/scripts/rollback-pi.sh" "$stage_dir/rollback.sh"
 install -m 0755 "$root_dir/scripts/hobot-release.sh" "$stage_dir/release.sh"

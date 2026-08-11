@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.0
+
+- Add the per-user Go `agentd` control plane for background, multi-turn Pi RPC tasks that survive CLI and SSH client disconnects.
+- Add versioned local JSONL task RPC with private Unix sockets, Linux peer-UID verification, persisted event sequences, bounded logs, reconnect replay, and fail-closed recovery.
+- Add `hobot daemon` and `hobot task` lifecycle commands, including attach, follow, prompt, abort, approval response, stop, concurrency limits, and explicit interrupted-task semantics.
+- Cross-compile and validate the static Linux ARM64 daemon in release packages, and include it in transactional install, rollback, uninstall, CI, documentation, and manifest checks.
+
 ## 0.14.3
 
 - Use `curl` as the sole release downloader and restore the concise `curl -fsSL ... | sh` installation command.

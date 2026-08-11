@@ -296,7 +296,7 @@ for config_name in settings.json models.json auth.json permissions.json memory.j
   fi
 done
 
-active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/hobot)([[:space:]]|$)' || true)
+active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/(hobot|agentd))([[:space:]]|$)' || true)
 if [ -n "$active_pids" ]; then
   printf 'Stop active Hobot Code processes before upgrading: %s\n' "$active_pids" >&2
   exit 1
@@ -376,6 +376,7 @@ if [ -d "$config_root" ]; then
 fi
 install -d -m 0755 "$new_runtime/bin" "$new_runtime/default-config" "$new_runtime/licenses"
 cp -R "$package_dir/runtime/." "$new_runtime/"
+install -m 0755 "$package_dir/agentd" "$new_runtime/agentd"
 install -m 0755 "$package_dir/release.sh" "$new_runtime/release.sh"
 install -m 0755 "$package_dir/uninstall.sh" "$new_runtime/uninstall.sh"
 install -d -m 0755 "$new_runtime/extensions" "$new_runtime/skills" "$new_runtime/knowledge" "$new_runtime/prompts"
@@ -398,6 +399,7 @@ done
 install -m 0644 "$package_dir/config/hobot.env.example" "$new_runtime/default-config/hobot.env.example"
 install -m 0644 "$package_dir/config/tmux.conf" "$new_runtime/tmux.conf"
 "$new_runtime/hobot" --version >/dev/null
+"$new_runtime/agentd" version >/dev/null
 
 if [ -d "$legacy_config" ]; then
   cp -a "$legacy_config" "$backup_dir/legacy-etc-hobot-code"
