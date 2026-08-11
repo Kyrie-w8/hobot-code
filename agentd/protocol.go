@@ -8,7 +8,7 @@ import (
 
 const (
 	protocolVersion     = 1
-	eventSchemaVersion  = 2
+	eventSchemaVersion  = 3
 	maxRequestBytes     = 2 * 1024 * 1024
 	maxEventRecordBytes = 4*1024*1024 + 64*1024
 	maxResponseBytes    = 8 * 1024 * 1024
@@ -16,7 +16,7 @@ const (
 )
 
 var protocolCapabilities = []string{
-	"events.normalized.v2",
+	"events.normalized.v3",
 	"approvals.list",
 	"tasks.lifecycle",
 	"tasks.page",

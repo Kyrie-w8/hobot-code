@@ -545,7 +545,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		}
 	}
 	current.mu.Unlock()
-	if logBecameTruncated || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" || header.Type == "response" {
+	if logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" || header.Type == "response" {
 		_ = current.saveMetadata()
 	}
 }
@@ -597,6 +597,10 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		}
 	default:
 		return fmt.Errorf("unsupported worker command: %s", header.Type)
+	}
+	if header.Type == "prompt" {
+		promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message})
+		current.recordEvent(promptEvent)
 	}
 	if err := current.writeWorkerCommand(command); err != nil {
 		return err

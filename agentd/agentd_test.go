@@ -394,6 +394,7 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 	}
 	cancel()
 	foundThinkingOrText := false
+	foundUserMessage := false
 	foundApproval := false
 	foundResolved := false
 	for _, event := range events {
@@ -401,6 +402,10 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 			continue
 		}
 		switch event.Normalized.Type {
+		case "user.message":
+			if event.Normalized.Data["text"] == "approval-test" {
+				foundUserMessage = true
+			}
 		case "assistant.text.delta":
 			foundThinkingOrText = true
 		case "approval.requested":
@@ -409,8 +414,8 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 			foundResolved = true
 		}
 	}
-	if !foundApproval || !foundResolved {
-		t.Fatalf("normalized approval lifecycle missing: requested=%v resolved=%v", foundApproval, foundResolved)
+	if !foundUserMessage || !foundApproval || !foundResolved {
+		t.Fatalf("normalized conversation lifecycle missing: user=%v requested=%v resolved=%v", foundUserMessage, foundApproval, foundResolved)
 	}
 	page, err := readEventPage(current.events, metadata.ID, 0, 2)
 	if err != nil || len(page.Events) != 2 || !page.HasMore || page.NextAfter != page.Events[1].Sequence {

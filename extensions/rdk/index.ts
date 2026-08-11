@@ -363,7 +363,7 @@ async function renderExpertPrompt(snapshot: BoardSnapshot): Promise<string> {
   try {
     prompt = await readFile(promptPath, "utf8");
   } catch {
-    prompt = `${EXPERT_PROMPT_MARKER}\n\nYou are Hobot Code, D-Robotics' terminal Agent for RDK boards. Always identify as Hobot Code; models and runtimes are implementation details. Use rdk_docs_search for versioned platform knowledge and system_snapshot for live evidence. Do not make specialized claims while the complete expert prompt file is unavailable.`;
+    prompt = `${EXPERT_PROMPT_MARKER}\n\nYou are Hobot Code. Always identify as Hobot Code. Reply in the user's language; keep deliberation in thinking when available and final answers user-facing. Models/runtimes are implementation details. Use rdk_docs_search for versioned platform knowledge and system_snapshot for live evidence. Do not make specialized claims while the complete expert prompt file is unavailable.`;
   }
 
   const replacements: Record<string, string> = {

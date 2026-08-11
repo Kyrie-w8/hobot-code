@@ -34,6 +34,13 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 	data := map[string]any{}
 	var normalizedType string
 	switch eventType {
+	case "hobot_user_prompt":
+		message, _ := event["message"].(string)
+		if message == "" {
+			return nil
+		}
+		normalizedType = "user.message"
+		data["text"] = message
 	case "agent_start":
 		normalizedType = "task.running"
 	case "agent_settled":

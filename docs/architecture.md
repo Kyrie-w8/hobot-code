@@ -10,7 +10,7 @@ Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 
 
 `studio/` 是 Wails/Go 桌面应用，对外名称仍为 Hobot Code。它只在 macOS 用户配置目录保存板卡显示名、地址、SSH 用户、端口和可选私钥路径，文件与目录分别限定为 `0600` 和 `0700`，并拒绝符号链接、过大文件和重复 ID。它不保存 SSH 密码、Provider 凭据或工具权限副本。
 
-桌面端展示 schema-2 normalized events，但板端仍保留原始 Pi RPC 事件用于调试和协议兼容。审批结果通过 task command 发回 `agentd`，最终工具权限和安全边界仍由板端决定，客户端无法绕过。
+桌面端展示 schema-3 normalized events。用户 Prompt 由 `agentd` 作为私有任务事件持久化，前端据此恢复完整用户轮次，并将碎片化的 thinking、工具和回答聚合成对话。板端仍保留原始 Pi RPC 事件用于调试和协议兼容。审批结果通过 task command 发回 `agentd`，最终工具权限和安全边界仍由板端决定，客户端无法绕过。
 
 ## 运行路径
 
