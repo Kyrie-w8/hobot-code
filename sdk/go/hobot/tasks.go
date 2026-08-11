@@ -89,6 +89,16 @@ func (client *Client) StopTask(ctx context.Context, taskID string) error {
 	return client.Call(ctx, "task.stop", map[string]any{"taskId": taskID}, nil)
 }
 
+func (client *Client) ArchiveTask(ctx context.Context, taskID string, archive bool) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.archive", map[string]any{"taskId": taskID, "archive": archive}, &task)
+	return task, err
+}
+
+func (client *Client) DeleteTask(ctx context.Context, taskID string) error {
+	return client.Call(ctx, "task.delete", map[string]any{"taskId": taskID}, nil)
+}
+
 func (client *Client) ResumeTask(ctx context.Context, taskID, prompt string) (Task, error) {
 	var task Task
 	err := client.Call(ctx, "task.resume", map[string]any{"taskId": taskID, "prompt": prompt}, &task)

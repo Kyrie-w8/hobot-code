@@ -6,6 +6,8 @@
 - Replace the hidden branch icon with an explicit Side Agent action that explains when a settled context is required.
 - Allow idle and stopped Studio tasks to select a model, persisting terminal-task choices for the next resume while keeping in-flight turns immutable.
 - Add D-Robotics Qwen 3.8 Max and GLM 5.2 alongside Kimi K3 in the built-in provider and default model scope.
+- Suspend the oldest idle worker when the board-side concurrency pool is full, preserving its session while never interrupting active work or approvals.
+- Rebuild the Studio sidebar as a collapsible project/conversation hierarchy, flatten Side Agents into sibling branches, and add confirmed conversation/project removal that never deletes workspace files.
 
 ## 0.19.0
 

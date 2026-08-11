@@ -243,6 +243,41 @@ func (manager *taskManager) activeCount() int {
 	return count
 }
 
+func (manager *taskManager) ensureActiveSlot() error {
+	if manager.activeCount() < manager.cfg.MaxTasks {
+		return nil
+	}
+	manager.mu.RLock()
+	candidates := make([]*task, 0)
+	for _, current := range manager.tasks {
+		if current.snapshot().Status == statusIdle {
+			candidates = append(candidates, current)
+		}
+	}
+	manager.mu.RUnlock()
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].snapshot().UpdatedAt.Before(candidates[j].snapshot().UpdatedAt)
+	})
+	for _, candidate := range candidates {
+		stopped, err := candidate.stopIfIdle()
+		if err != nil {
+			return err
+		}
+		if !stopped {
+			continue
+		}
+		deadline := time.Now().Add(6 * time.Second)
+		for time.Now().Before(deadline) {
+			if isTerminalStatus(candidate.snapshot().Status) && manager.activeCount() < manager.cfg.MaxTasks {
+				return nil
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return fmt.Errorf("timed out while suspending an idle background task")
+	}
+	return fmt.Errorf("background task limit reached (%d); all agents are currently working", manager.cfg.MaxTasks)
+}
+
 func newTaskID() (string, error) {
 	value := make([]byte, 12)
 	if _, err := rand.Read(value); err != nil {
@@ -282,9 +317,6 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
 	}
-	if manager.activeCount() >= manager.cfg.MaxTasks {
-		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
-	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
 	manager.mu.RUnlock()
@@ -293,6 +325,9 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	}
 	cwd, err := normalizeWorkingDirectory(params.Cwd)
 	if err != nil {
+		return taskMetadata{}, err
+	}
+	if err := manager.ensureActiveSlot(); err != nil {
 		return taskMetadata{}, err
 	}
 	id, err := newTaskID()
@@ -365,9 +400,6 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
 	}
-	if manager.activeCount() >= manager.cfg.MaxTasks {
-		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
-	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
 	manager.mu.RUnlock()
@@ -409,6 +441,9 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			_ = os.Remove(forkFile)
 		}
 	}()
+	if err := manager.ensureActiveSlot(); err != nil {
+		return taskMetadata{}, err
+	}
 	id, err := newTaskID()
 	if err != nil {
 		return taskMetadata{}, err
@@ -442,6 +477,10 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if model == "" {
 		model = parent.Model
 	}
+	parentTaskID := parent.ID
+	if params.Kind == "side" {
+		parentTaskID = manager.rootTaskID(parent)
+	}
 	current := &task{
 		manager: manager,
 		dir:     dir,
@@ -450,7 +489,7 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		metadata: taskMetadata{
 			ID: id, Name: name, Cwd: parent.Cwd, Status: statusStarting,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
-			SessionFile: forkFile, Model: model, ParentTaskID: parent.ID,
+			SessionFile: forkFile, Model: model, ParentTaskID: parentTaskID,
 			ForkSequence: params.Sequence, BranchKind: params.Kind,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
@@ -928,6 +967,41 @@ func (current *task) stop() error {
 	return nil
 }
 
+func (current *task) stopIfIdle() (bool, error) {
+	current.mu.Lock()
+	if current.metadata.Status != statusIdle {
+		current.mu.Unlock()
+		return false, nil
+	}
+	current.stopping = true
+	current.metadata.Status = statusStopping
+	current.metadata.UpdatedAt = time.Now().UTC()
+	pid := current.metadata.PID
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		return false, err
+	}
+	if pid <= 0 {
+		current.setTerminal(statusStopped, "")
+		return true, nil
+	}
+	if err := terminateProcessGroup(pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return false, err
+	}
+	go func() {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		<-timer.C
+		current.mu.Lock()
+		stillRunning := current.metadata.PID == pid
+		current.mu.Unlock()
+		if stillRunning {
+			_ = terminateProcessGroup(pid, syscall.SIGKILL)
+		}
+	}()
+	return true, nil
+}
+
 func terminateProcessGroup(pid int, signal syscall.Signal) error {
 	if pid <= 0 {
 		return nil
@@ -997,6 +1071,23 @@ func (manager *taskManager) get(id string) (*task, error) {
 		return nil, fmt.Errorf("task does not exist: %s", id)
 	}
 	return current, nil
+}
+
+func (manager *taskManager) rootTaskID(metadata taskMetadata) string {
+	rootID := metadata.ID
+	parentID := metadata.ParentTaskID
+	seen := map[string]bool{rootID: true}
+	for parentID != "" && !seen[parentID] {
+		seen[parentID] = true
+		parent, err := manager.get(parentID)
+		if err != nil {
+			break
+		}
+		metadata = parent.snapshot()
+		rootID = metadata.ID
+		parentID = metadata.ParentTaskID
+	}
+	return rootID
 }
 
 func (manager *taskManager) setModel(params setTaskModelParams) (taskMetadata, error) {
@@ -1213,9 +1304,6 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	if len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain at most %d bytes", maxPromptBytes)
 	}
-	if manager.activeCount() >= manager.cfg.MaxTasks {
-		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
-	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
@@ -1229,6 +1317,9 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	}
 	sessionFile, err := validateSessionFile(manager.cfg.SessionDir, metadata.SessionFile)
 	if err != nil {
+		return taskMetadata{}, err
+	}
+	if err := manager.ensureActiveSlot(); err != nil {
 		return taskMetadata{}, err
 	}
 	current.mu.Lock()
@@ -1257,9 +1348,6 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
 	}
-	if manager.activeCount() >= manager.cfg.MaxTasks {
-		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
-	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
@@ -1270,6 +1358,9 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	}
 	if metadata.ArchivedAt != nil {
 		return taskMetadata{}, fmt.Errorf("unarchive the task before restarting it")
+	}
+	if err := manager.ensureActiveSlot(); err != nil {
+		return taskMetadata{}, err
 	}
 	current.mu.Lock()
 	current.metadata.Status = statusStarting

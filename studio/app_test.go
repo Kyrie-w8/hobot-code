@@ -93,3 +93,16 @@ func TestSafeExternalURL(t *testing.T) {
 		}
 	}
 }
+
+func TestStudioTaskIsLive(t *testing.T) {
+	for _, status := range []string{"starting", "idle", "running", "waiting", "stopping"} {
+		if !studioTaskIsLive(status) {
+			t.Fatalf("status %q should be live", status)
+		}
+	}
+	for _, status := range []string{"stopped", "failed", "interrupted"} {
+		if studioTaskIsLive(status) {
+			t.Fatalf("status %q should be terminal", status)
+		}
+	}
+}

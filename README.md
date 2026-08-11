@@ -82,7 +82,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 
-消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；中文输入法确认候选词时不会误触发发送。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支。输入框底部可以在任务 Ready 或停止后切换模型；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
+消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；中文输入法确认候选词时不会误触发发送。左侧项目可以折叠，对话和 Side Agent 作为项目子项展示；每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部可以在任务 Ready 或停止后切换模型；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
 目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。权限文件会在每次工具调用前重新读取，因此设置会立即同步到同一用户已打开的其他会话。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
@@ -173,7 +173,7 @@ hobot task delete <task-id> --yes            # 必须先停止并归档
 hobot task stop <task-id>
 ```
 
-首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多并行两个后台任务；板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`。此时 `resume` 只会重新打开同一 Pi 对话，不会自动重放 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
+首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多保留两个常驻 worker；创建或恢复对话时，服务会自动挂起最久未使用的 Ready worker并保留其 session，只有所有槽位都正在工作或等待审批时才拒绝新任务。板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`。此时 `resume` 只会重新打开同一 Pi 对话，不会自动重放 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
 
 Hobot Code 桌面端通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。桌面端按工作目录组织项目和任务；新建任务时可浏览板端目录、新建文件夹，或选择不绑定项目的默认工作区，无需手输路径。
 

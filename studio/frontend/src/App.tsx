@@ -6,12 +6,13 @@ import {
   Activity, ArrowDown, ArrowLeft, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, CircleStop, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   FolderOpen, GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
-  PanelRight, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal,
-  Wrench, X, XCircle,
+  MoreHorizontal, PanelRight, Plus, RefreshCw, Search, Server, ShieldCheck,
+  SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
+import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
 import type {Approval, Board, Connection, ModelOption, Task, TaskEvent, WorkspaceListing} from './types';
 import './App.css';
@@ -40,6 +41,9 @@ function App() {
   const [showBoard, setShowBoard] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showInspector, setShowInspector] = useState(false);
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const [openMenu, setOpenMenu] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{kind: 'conversation' | 'project'; label: string; taskIds: string[]} | null>(null);
   const [watchRevision, setWatchRevision] = useState(0);
   const [hasNewOutput, setHasNewOutput] = useState(false);
   const startupStarted = useRef(false);
@@ -89,6 +93,23 @@ function App() {
       if (saved.length > 0) void connect(saved[0]);
       else setShowBoard(true);
     }).catch((reason) => setError(String(reason)));
+  }, []);
+
+  useEffect(() => {
+    const closeMenus = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.row-more, .row-menu')) return;
+      setOpenMenu('');
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenMenu('');
+    };
+    document.addEventListener('pointerdown', closeMenus);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeMenus);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
   }, []);
 
   useEffect(() => {
@@ -308,6 +329,31 @@ function App() {
     setWatchRevision((revision) => revision + 1);
   }
 
+  async function confirmDelete() {
+    if (!deleteTarget || !boardId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.deleteTasks(boardId, deleteTarget.taskIds);
+      setDeleteTarget(null);
+      setOpenMenu('');
+      await refreshTasks();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleProject(path: string) {
+    setCollapsedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
   function selectTask(task: Task) {
     if (selectedTask?.id === task.id) setWatchRevision((revision) => revision + 1);
     else setSelectedTask(task);
@@ -343,17 +389,25 @@ function App() {
       <aside className="task-sidebar">
         <div className="sidebar-heading">
           <div><span className="section-label">Projects</span><span className="task-count">{projects.length}</span></div>
-          <button className="icon-button compact" title="New task" onClick={() => setShowNewTask(true)} disabled={!connection}><Plus size={17} /></button>
+          <button className="icon-button compact" title="New conversation" onClick={() => setShowNewTask(true)} disabled={!connection}><Plus size={17} /></button>
         </div>
         <label className="search-field"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects and tasks" /></label>
         <div className="task-list">
-          {projects.map((project) => <section className="project-group" key={project.path}>
-            <div className="project-heading"><Folder size={14} /><span>{project.name}</span><small>{project.tasks.length}</small></div>
-            {arrangeTasks(project.tasks).map(({task, depth}) => <button key={task.id} className={`task-row ${depth ? 'branch-task' : ''} ${selectedTask?.id === task.id ? 'selected' : ''}`} style={{'--task-depth': depth} as any} onClick={() => selectTask(task)}>
-              {depth ? <CornerDownRight className="branch-mark" size={13} /> : <span className={`task-state-dot dot-${task.status}`} />}
-              <span className="task-row-main"><span className="task-row-name">{task.name}</span>{depth > 0 && <span className="task-row-path">{task.branchKind === 'edit' ? 'Edited branch' : 'Side task'}</span>}</span>
-              <span className="task-row-time">{relativeTime(task.updatedAt)}</span>
-            </button>)}
+          {projects.map((project) => <section className={`project-group ${collapsedProjects.has(project.path) ? 'collapsed' : ''}`} key={project.path}>
+            <div className="project-heading">
+              <button className="project-toggle" onClick={() => toggleProject(project.path)} title={collapsedProjects.has(project.path) ? 'Expand project' : 'Collapse project'}><ChevronRight className="project-chevron" size={13} /><Folder size={14} /><span>{project.name}</span><small>{project.tasks.length}</small></button>
+              <button className="row-more" title="Project actions" onClick={() => setOpenMenu((current) => current === `project:${project.path}` ? '' : `project:${project.path}`)}><MoreHorizontal size={15} /></button>
+              {openMenu === `project:${project.path}` && <div className="row-menu"><button onClick={() => setDeleteTarget({kind: 'project', label: project.name, taskIds: project.tasks.map((task) => task.id)})}><Trash2 size={14} />Remove project</button></div>}
+            </div>
+            {!collapsedProjects.has(project.path) && <div className="project-conversations">{arrangeTasks(project.tasks).map(({task, depth}) => <div key={task.id} className={`task-row-shell ${depth ? 'branch-task' : ''}`} style={{'--task-depth': depth} as any}>
+              <button className={`task-row ${selectedTask?.id === task.id ? 'selected' : ''}`} onClick={() => {selectTask(task); setOpenMenu('');}}>
+                {depth ? <CornerDownRight className="branch-mark" size={13} /> : <span className={`task-state-dot dot-${task.status}`} />}
+                <span className="task-row-main"><span className="task-row-name">{task.name}</span>{depth > 0 && <span className="task-row-path">{task.branchKind === 'edit' ? 'Edited branch' : 'Side Agent'}</span>}</span>
+                <span className="task-row-time">{relativeTime(task.updatedAt)}</span>
+              </button>
+              <button className="row-more task-more" title="Conversation actions" onClick={() => setOpenMenu((current) => current === `task:${task.id}` ? '' : `task:${task.id}`)}><MoreHorizontal size={15} /></button>
+              {openMenu === `task:${task.id}` && <div className="row-menu task-menu"><button onClick={() => setDeleteTarget({kind: 'conversation', label: task.name, taskIds: [task.id]})}><Trash2 size={14} />Delete conversation</button></div>}
+            </div>)}</div>}
           </section>)}
           {visibleTasks.length === 0 && <div className="empty-state"><ListTodo size={21} /><span>No tasks</span></div>}
         </div>
@@ -426,6 +480,7 @@ function App() {
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {setBusy(true); setError(''); try {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
       {showNewTask && connection && <NewTaskDialog boardId={connection.board.id} busy={busy} onClose={() => setShowNewTask(false)} onCreate={async (request) => {setBusy(true); setError(''); try {const task = await api.startTask(connection.board.id, request); await refreshTasks(); setSelectedTask(task); setShowNewTask(false);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
       {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
+      {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
     </div>
   );
 }
@@ -520,6 +575,11 @@ function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: 
   return <div className="modal-backdrop"><form className="modal side-task-modal" onSubmit={(event) => {event.preventDefault(); onCreate(prompt.trim(), name.trim());}}><div className="modal-header"><div><span className="modal-eyebrow">Parallel branch</span><h2>New side task</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="fork-source"><GitBranch size={16} /><span><strong>Shares the settled context from {parent.name}</strong><small>The main task stays unchanged and both can continue independently.</small></span></div><div className="form-grid"><label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={`${parent.name}-side`} /></label><label><span>Instruction</span><textarea rows={6} value={prompt} onChange={(event) => setPrompt(event.target.value)} autoFocus required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !prompt.trim()}><GitBranch size={15} />Start side task</button></div></div></form></div>;
 }
 
+function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conversation' | 'project'; label: string; taskIds: string[]}; busy: boolean; onClose: () => void; onDelete: () => void}) {
+  const project = target.kind === 'project';
+  return <div className="modal-backdrop"><div className="modal confirm-modal"><div className="confirm-icon"><Trash2 size={18} /></div><h2>{project ? 'Remove project?' : 'Delete conversation?'}</h2><p>{project ? `This removes ${target.taskIds.length} conversation${target.taskIds.length === 1 ? '' : 's'} from ${target.label}.` : `This permanently removes ${target.label} from Hobot Code.`}</p><small>Running agents will stop. Files in the board workspace will not be deleted.</small><div className="modal-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="danger-button" onClick={onDelete} disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}Delete</button></div></div></div>;
+}
+
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
 function InfoRow({label, value, mono, copy}: {label: string; value: string; mono?: boolean; copy?: string}) { return <div className="info-row"><span>{label}</span><div><strong className={mono ? 'mono' : ''}>{value}</strong>{copy && <CopyButton value={copy} />}</div></div>; }
 function CopyButton({value}: {value: string}) { const [copied, setCopied] = useState(false); return <button type="button" className="copy-button" title={copied ? 'Copied' : 'Copy'} onClick={() => void navigator.clipboard.writeText(value).then(() => {setCopied(true); window.setTimeout(() => setCopied(false), 1200);})}>{copied ? <Check size={13} /> : <Clipboard size={13} />}</button>; }
@@ -527,36 +587,12 @@ function Metric({icon, label, value}: {icon: ReactNode; label: string; value: st
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
 function basename(path: string) { return path.split('/').filter(Boolean).at(-1) ?? path; }
-function groupTasksByProject(tasks: Task[]) {
-  const groups = new Map<string, Task[]>();
-  for (const task of tasks) groups.set(task.cwd, [...(groups.get(task.cwd) ?? []), task]);
-  return [...groups.entries()].map(([path, projectTasks]) => ({path, name: path === '/root' ? 'General' : basename(path), tasks: projectTasks})).sort((left, right) => left.name.localeCompare(right.name));
-}
-function arrangeTasks(tasks: Task[]) {
-  const byParent = new Map<string, Task[]>();
-  const ids = new Set(tasks.map((task) => task.id));
-  for (const task of tasks) {
-    const parent = task.parentTaskId && ids.has(task.parentTaskId) ? task.parentTaskId : '';
-    byParent.set(parent, [...(byParent.get(parent) ?? []), task]);
-  }
-  const result: Array<{task: Task; depth: number}> = [];
-  const seen = new Set<string>();
-  const visit = (parent: string, depth: number) => {
-    for (const task of (byParent.get(parent) ?? []).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())) {
-      if (seen.has(task.id)) continue;
-      seen.add(task.id);
-      result.push({task, depth});
-      visit(task.id, depth + 1);
-    }
-  };
-  visit('', 0);
-  return result;
-}
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';
   if (/requires a newer Hobot Code event schema/i.test(message)) return 'Update the board-side Hobot Code and reconnect.';
   if (/has no resumable Hobot Code session/i.test(message)) return 'This task has no saved session. Start a new session instead.';
+  if (/background task limit reached.*all agents are currently working/i.test(message)) return 'Both background slots are busy. Stop a working agent, or wait for one to finish.';
   return message;
 }
 

@@ -55,21 +55,32 @@ func TestTaskLifecyclePersistsEventsAndBoundsConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := manager.start(startTaskParams{Name: "background", Cwd: cfg.StateRoot, Prompt: "test"})
+	metadata, err := manager.start(startTaskParams{Name: "background", Cwd: cfg.StateRoot, Prompt: "approval-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	current, _ := manager.get(metadata.ID)
-	waitForStatus(t, current, statusIdle)
+	waitForStatus(t, current, statusWaiting)
 	if _, err := manager.start(startTaskParams{Name: "excess", Cwd: cfg.StateRoot, Prompt: "test"}); err == nil {
-		t.Fatal("expected the background task limit to reject another live worker")
+		t.Fatal("expected the background task limit to reject another working agent")
 	}
+	if err := current.sendCommand(json.RawMessage(`{"type":"extension_ui_response","id":"approval-1","confirmed":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusIdle)
 	events, _, cancel, err := current.subscribe(0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancel()
-	if len(events) < 4 || string(events[len(events)-1].Event) != `{"type":"agent_settled"}` {
+	settled := false
+	for _, event := range events {
+		if string(event.Event) == `{"type":"agent_settled"}` {
+			settled = true
+			break
+		}
+	}
+	if len(events) < 4 || !settled {
 		t.Fatalf("unexpected persisted events: %+v", events)
 	}
 	if err := current.stop(); err != nil {
@@ -78,6 +89,45 @@ func TestTaskLifecyclePersistsEventsAndBoundsConcurrency(t *testing.T) {
 	waitForStatus(t, current, statusStopped)
 	if info, err := os.Stat(current.events); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("event log permissions: info=%v err=%v", info, err)
+	}
+}
+
+func TestStartingTaskSuspendsOldestIdleWorker(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstMetadata, err := manager.start(startTaskParams{Name: "first", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := manager.get(firstMetadata.ID)
+	waitForStatus(t, first, statusIdle)
+	secondMetadata, err := manager.start(startTaskParams{Name: "second", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, first, statusStopped)
+	second, _ := manager.get(secondMetadata.ID)
+	waitForStatus(t, second, statusIdle)
+	if first.snapshot().SessionFile == "" {
+		t.Fatal("suspended task lost its resumable session")
+	}
+	if err := second.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, second, statusStopped)
+}
+
+func TestSideTaskDisplayParentUsesConversationRoot(t *testing.T) {
+	manager := &taskManager{tasks: make(map[string]*task)}
+	root := &task{metadata: taskMetadata{ID: "00112233445566778899aabb"}}
+	side := &task{metadata: taskMetadata{ID: "11223344556677889900aabb", ParentTaskID: root.metadata.ID, BranchKind: "side"}}
+	manager.tasks[root.metadata.ID] = root
+	manager.tasks[side.metadata.ID] = side
+	if got := manager.rootTaskID(side.snapshot()); got != root.metadata.ID {
+		t.Fatalf("rootTaskID() = %q, want %q", got, root.metadata.ID)
 	}
 }
 

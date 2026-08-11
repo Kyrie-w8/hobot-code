@@ -103,7 +103,7 @@ Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 
 
 ## 资源与安全边界
 
-- 每个 OS 用户默认最多同时运行 2 个后台任务，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。
+- 每个 OS 用户默认最多保留 2 个后台 worker，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。创建、分支、Resume 或 Restart 需要空位时，会原子挂起最久未使用的 `idle` worker并保留 session；`running`、`waiting`、`starting` 和 `stopping` 任务绝不会被自动回收。所有槽位都在工作时才返回并发上限错误。
 - 默认最多保留 200 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。
 - worker 位于独立进程组；停止任务会先发送 `SIGTERM`，超时后发送 `SIGKILL`。
 - `--approve` 只传递 Pi 的项目资源信任选项，不会关闭 Hobot Code 的工具权限和硬安全边界。

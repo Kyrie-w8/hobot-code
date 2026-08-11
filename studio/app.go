@@ -22,11 +22,15 @@ import (
 
 const (
 	requestTimeout       = 20 * time.Second
+	deleteTimeout        = 45 * time.Second
 	maximumBoards        = 64
 	maximumBoardFileSize = 1024 * 1024
 )
 
-var boardIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+var (
+	boardIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+	taskIDPattern  = regexp.MustCompile(`^[0-9a-f]{24}$`)
+)
 
 type Board struct {
 	ID           string `json:"id"`
@@ -360,6 +364,71 @@ func (app *App) StopTask(boardID, taskID string) error {
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
 	return client.StopTask(ctx, taskID)
+}
+
+func (app *App) DeleteTasks(boardID string, taskIDs []string) error {
+	if len(taskIDs) == 0 || len(taskIDs) > 200 {
+		return fmt.Errorf("delete between 1 and 200 conversations at a time")
+	}
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, deleteTimeout)
+	defer cancel()
+	seen := make(map[string]bool, len(taskIDs))
+	tasks := make([]hobot.Task, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		if seen[taskID] || !taskIDPattern.MatchString(taskID) {
+			return fmt.Errorf("conversation ID is invalid or duplicated")
+		}
+		seen[taskID] = true
+		current, err := client.Task(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		tasks = append(tasks, current)
+	}
+	for index, current := range tasks {
+		if studioTaskIsLive(current.Status) {
+			if current.Status != "stopping" {
+				if err := client.StopTask(ctx, current.ID); err != nil {
+					return err
+				}
+			}
+			for studioTaskIsLive(current.Status) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(50 * time.Millisecond):
+				}
+				var err error
+				current, err = client.Task(ctx, current.ID)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		tasks[index] = current
+	}
+	for _, current := range tasks {
+		if _, err := client.ArchiveTask(ctx, current.ID, true); err != nil {
+			return err
+		}
+		if err := client.DeleteTask(ctx, current.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func studioTaskIsLive(status string) bool {
+	switch status {
+	case "starting", "idle", "running", "waiting", "stopping":
+		return true
+	default:
+		return false
+	}
 }
 
 func (app *App) ResumeTask(boardID, taskID, prompt string) (hobot.Task, error) {
