@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { readlink } from "node:fs/promises";
 import { basename } from "node:path";
 import { promisify } from "node:util";
 
@@ -35,18 +34,19 @@ export async function detachPersistentTmuxClient(options = {}) {
   }
 
   const run = options.run ?? execFileAsync;
-  const readStdinTarget = options.readStdinTarget ?? (() => readlink("/proc/self/fd/0"));
-  const [{ stdout: sessionOutput }, { stdout: clientsOutput }, tty] = await Promise.all([
-    run("tmux", ["display-message", "-p", "-t", pane, "#{session_name}"]),
+  const [{ stdout: currentOutput }, { stdout: clientsOutput }] = await Promise.all([
+    run("tmux", ["display-message", "-p", "-t", pane, "#{session_name}\t#{client_tty}"]),
     run("tmux", ["list-clients", "-F", "#{client_tty}\t#{session_name}"]),
-    readStdinTarget(),
   ]);
-  const session = String(sessionOutput ?? "").trim();
+  const current = String(currentOutput ?? "").trim();
+  const separator = current.indexOf("\t");
+  const session = separator < 0 ? "" : current.slice(0, separator);
+  const tty = separator < 0 ? "" : current.slice(separator + 1);
   if (!HOBOT_SESSION_PATTERN.test(session)) {
     throw new Error("Current tmux session is not managed by Hobot Code");
   }
 
-  const target = selectTmuxClient(parseTmuxClients(clientsOutput), session, String(tty));
+  const target = selectTmuxClient(parseTmuxClients(clientsOutput), session, tty);
   if (!target) throw new Error("Cannot identify the current attached terminal safely");
   await run("tmux", ["detach-client", "-t", target]);
   return { session, target };
