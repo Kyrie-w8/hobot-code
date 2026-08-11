@@ -1,0 +1,82 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestBoardStoreRoundTrip(t *testing.T) {
+	store := &boardStore{path: filepath.Join(t.TempDir(), "boards.json")}
+	want := []Board{{
+		ID: "00112233445566778899aabb", Name: "RDK S100", Host: "10.112.10.98", User: "root", Port: 22,
+	}}
+	if err := store.save(want); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("board store mode = %o, want 600", got)
+	}
+	got, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("loaded boards = %+v, want %+v", got, want)
+	}
+}
+
+func TestBoardStoreRejectsUnsafeInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		mode    os.FileMode
+		want    string
+	}{
+		{name: "permissions", content: `[]`, mode: 0o644, want: "permissions"},
+		{name: "invalid ID", content: `[{"id":"bad","name":"RDK","host":"rdk","user":"root","port":22}]`, mode: 0o600, want: "invalid board"},
+		{name: "duplicate ID", content: `[{"id":"00112233445566778899aabb","name":"A"},{"id":"00112233445566778899aabb","name":"B"}]`, mode: 0o600, want: "duplicate"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "boards.json")
+			if err := os.WriteFile(path, []byte(test.content), test.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := (&boardStore{path: path}).load()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("load error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestBoardStoreRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(target, []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "boards.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&boardStore{path: link}).load(); err == nil {
+		t.Fatal("symlink board store was accepted")
+	}
+}
+
+func TestSortedBoards(t *testing.T) {
+	boards := sortedBoards(map[string]Board{
+		"b": {ID: "b", Name: "RDK X5"},
+		"a": {ID: "a", Name: "RDK S100"},
+	})
+	if len(boards) != 2 || boards[0].Name != "RDK S100" || boards[1].Name != "RDK X5" {
+		t.Fatalf("unexpected sort order: %+v", boards)
+	}
+}

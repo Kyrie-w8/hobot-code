@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0
+
+- Add the Hobot Code macOS application for connecting to RDK boards, managing persistent Agent tasks, following normalized event streams, and handling approvals without moving credentials or permission decisions off the board.
+- Add a reusable Go SSH Bridge SDK with typed task APIs, a reused control connection, dedicated event subscriptions, strict connection validation, bounded protocol decoding, and real S100 integration coverage.
+- Add saved board profiles containing connection metadata only, secure local storage, automatic event-stream reconnection, task start/send/stop/resume controls, and a responsive task timeline with visible thinking and tool activity.
+- Add a branded deterministic app icon, signed ARM64 application packaging, DMG generation, version and bundle metadata validation, and separate macOS CI release artifacts.
+
 ## 0.16.0
 
 - Add capability negotiation and schema-2 normalized Hobot events while preserving protocol-1 envelopes and raw Pi RPC events for compatibility.

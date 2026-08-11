@@ -2,6 +2,16 @@
 
 Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 负责终端编辑、会话、Agent 循环和通用工具；Hobot Code 只实现 RDK 所需的 Provider、证据、知识、安全与部署能力。
 
+产品形态是“板端常驻核心 + 双前端”：SSH 现场调试使用 `hobot` TUI，长期任务由每用户的 `agentd` 托管，Mac 上的 Hobot Code 应用是同一控制面的可视化客户端。
+
+## 桌面端与 SSH Bridge
+
+`sdk/go/hobot` 通过系统 OpenSSH 启动 `hobot bridge --stdio`。控制请求复用一条串行化 SSH 连接，每个活跃任务的事件订阅使用独立连接；订阅断开后从最后确认的 sequence 自动退避重连。SSH 参数以独立 argv 传入，不经 Shell 解析；主机、用户、端口、私钥和 host-key 策略均在启动前校验。
+
+`studio/` 是 Wails/Go 桌面应用，对外名称仍为 Hobot Code。它只在 macOS 用户配置目录保存板卡显示名、地址、SSH 用户、端口和可选私钥路径，文件与目录分别限定为 `0600` 和 `0700`，并拒绝符号链接、过大文件和重复 ID。它不保存 SSH 密码、Provider 凭据或工具权限副本。
+
+桌面端展示 schema-2 normalized events，但板端仍保留原始 Pi RPC 事件用于调试和协议兼容。审批结果通过 task command 发回 `agentd`，最终工具权限和安全边界仍由板端决定，客户端无法绕过。
+
 ## 运行路径
 
 ```mermaid
@@ -11,7 +21,7 @@ flowchart LR
   CLI --> AD["Per-user agentd"]
   AD --> BG["Pi RPC workers"]
   T --> S["Session tree and compaction"]
-  S --> A["Main Pi agent and tool loop"]
+  S --> A["Hobot Code agent and tool loop"]
 
   A --> P["Provider registry"]
   P --> K["D-Robotics Kimi adapter"]

@@ -9,9 +9,10 @@ Hobot Code 以 GitHub Release 作为公开发行源。`VERSION`、`CHANGELOG.md`
 ```bash
 make check
 make release
+make studio-macos-release  # 仅在 macOS ARM64 构建机上
 ```
 
-`make release` 先以 `CGO_ENABLED=0` 从当前源码交叉编译 Go `agentd`，再生成版本化 Linux ARM64 归档及 SHA256 文件。包校验器要求 daemon 是小端 ARM64 ELF。归档包含 `BUILD_INFO.json` 和覆盖包内普通文件的 `MANIFEST.sha256`，并拒绝符号链接、特殊文件、路径逃逸和未登记内容。
+`make release` 先以 `CGO_ENABLED=0` 从当前源码交叉编译 Go `agentd`，再生成版本化 Linux ARM64 归档及 SHA256 文件。包校验器要求 daemon 是小端 ARM64 ELF。归档包含 `BUILD_INFO.json` 和覆盖包内普通文件的 `MANIFEST.sha256`，并拒绝符号链接、特殊文件、路径逃逸和未登记内容。`make studio-macos-release` 串行执行前端构建、SDK/后端测试、Wails ARM64 打包、ad-hoc codesign 验证和 DMG 生成。
 
 至少在 X5、S100、S600 中受影响的板卡上验证安装、启动、模型连接、工具审批、会话恢复与卸载保留数据。涉及 `agentd` 时还要验证任务启动、多轮输入、事件重放、SSH 断线、重新连接与进程回收。无法完成的板卡验证必须写入发布说明，不能以本机构建通过代替实机结果。
 
@@ -31,8 +32,10 @@ git push origin "v$version"
 - `hobot-code-<version>-linux-arm64.tar.gz.sha256`
 - `hobot-install.sh`
 - `hobot-code-version.txt`
+- `hobot-code-<version>-macos-arm64.dmg`
+- `hobot-code-<version>-macos-arm64.dmg.sha256`
 
-工作流使用 GitHub OIDC 为归档、安装器和版本文件生成 build provenance attestation。发布失败时修复源码并发布新版本；不要替换已被用户下载的同版本产物。
+工作流在 Ubuntu 和 macOS ARM64 独立构建，再由发布 job 聚合不可变产物。GitHub OIDC 为板端归档、桌面 DMG、安装脚本和版本文件生成 build provenance attestation。发布失败时修复源码并发布新版本；不要替换已被用户下载的同版本产物。
 
 ## 验证发行来源
 

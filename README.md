@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/Kyrie-w8/hobot-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Kyrie-w8/hobot-code/actions/workflows/ci.yml)
 
-面向地瓜机器人 RDK 的终端开发 Agent。Hobot Code 直接使用 [Pi](https://github.com/earendil-works/pi) 的交互运行时，在保留其编辑器、流式输出、会话树、工具、扩展和 Skills 生态的同时，补充板卡识别、版本化知识、硬件安全策略和 Linux ARM64 部署能力。
+面向地瓜机器人 RDK 的开发 Agent。Hobot Code 在板端提供基于 [Pi](https://github.com/earendil-works/pi) 的原生 TUI 和常驻任务服务，在 Mac 上提供同名桌面应用；两个入口共享同一套模型、工具、审批、Skills、会话和 RDK 专业知识。
 
-Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板卡适配集中在可审计的扩展、Prompt、知识库和安装层中。
+Hobot Code 不维护 Pi 的叉路 TUI。终端交互来自固定版本的 Pi，桌面端通过 SSH Bridge 操作板端常驻任务；权限判定、工具执行和模型凭据始终留在 RDK 上。
 
 ## 核心能力
 
@@ -16,6 +16,7 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 - **工程保障**：工具权限、质量门、Hook、资源受限 LSP、持久记忆和持久目标。
 - **并行协作**：`/btw` 在右侧窗格启动独立、多轮、临时的侧边 Agent。
 - **后台任务**：板端 `agentd` 托管无界面 Agent，支持 SSH 断开后继续运行、事件重放和多轮续接。
+- **Mac 桌面端**：统一查看板卡、主/后台任务、thinking、工具时间线和待审批操作。
 
 ## 支持平台
 
@@ -59,7 +60,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.16.0
+  | sh -s -- --version 0.17.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -74,6 +75,12 @@ tar -xzf "$package"
 cd "${package%.tar.gz}"
 sudo ./install.sh  # root 直接登录时使用 ./install.sh
 ```
+
+### Mac 桌面应用
+
+从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
+
+桌面应用要求板端 Hobot Code 提供 event schema 2 和 `hobot bridge --stdio`。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 
 目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。权限文件会在每次工具调用前重新读取，因此设置会立即同步到同一用户已打开的其他会话。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
@@ -163,7 +170,7 @@ hobot task stop <task-id>
 
 首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多并行两个后台任务；板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`。此时 `resume` 只会重新打开同一 Pi 对话，不会自动重放 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
 
-未来的 Hobot Studio 通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。
+Hobot Code 桌面端通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。
 
 脚本化调用沿用 Pi：
 
@@ -213,7 +220,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.16.0
+hobot update --version 0.17.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

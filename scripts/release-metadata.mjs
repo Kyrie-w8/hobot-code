@@ -68,6 +68,14 @@ export async function validateReleaseSource(rootDirectory) {
     throw new Error(`VERSION ${version} does not match pi-runtime/package.json ${packageJson.version}`);
   }
 
+  const desktopConfig = JSON.parse(await readFile(resolve(root, "studio/wails.json"), "utf8"));
+  if (desktopConfig.name !== "Hobot Code" || desktopConfig.outputfilename !== "HobotCode") {
+    throw new Error("studio/wails.json must use the Hobot Code product and executable names");
+  }
+  if (desktopConfig.info?.productVersion !== version) {
+    throw new Error(`VERSION ${version} does not match studio/wails.json ${desktopConfig.info?.productVersion ?? "missing"}`);
+  }
+
   const changelog = await readFile(resolve(root, "CHANGELOG.md"), "utf8");
   const firstRelease = /^## ([^\s]+)$/mu.exec(changelog)?.[1];
   if (firstRelease !== version) throw new Error(`CHANGELOG first release ${firstRelease ?? "missing"} does not match ${version}`);
@@ -109,7 +117,7 @@ export async function validateReleaseSource(rootDirectory) {
     "RIPGREP_LINUX_ARM64_URL",
   );
 
-  return { root, version, packageJson, pi, tools };
+  return { root, version, packageJson, desktopConfig, pi, tools };
 }
 
 export async function writeBuildInfo(rootDirectory, stageDirectory, options) {

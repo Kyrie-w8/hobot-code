@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+framework_flags="-framework UniformTypeIdentifiers -mmacosx-version-min=10.13"
+if [ -n "${CGO_LDFLAGS:-}" ]; then
+  export CGO_LDFLAGS="$CGO_LDFLAGS $framework_flags"
+else
+  export CGO_LDFLAGS="$framework_flags"
+fi
+
+exec go "$@"

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Hobot Code",
+  "outputfilename": "HobotCode",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "D-Robotics",
+    "email": "Kyrie-w8@users.noreply.github.com"
+  },
+  "info": {
+    "companyName": "D-Robotics",
+    "productName": "Hobot Code",
+    "productVersion": "0.17.0",
+    "copyright": "Copyright (c) 2026 D-Robotics",
+    "comments": "Hobot Code for D-Robotics RDK boards"
+  }
+}
