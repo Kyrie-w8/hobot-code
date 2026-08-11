@@ -49,16 +49,25 @@ Hobot Code 不维护另一套 TUI。交互行为来自固定版本的 Pi，板�
 在 RDK X5、S100 或 S600 上执行：
 
 ```bash
-wget -qO- https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh | sh
+(
+  installer=$(mktemp) &&
+  trap 'rm -f "$installer"' EXIT &&
+  wget -q -T 20 -t 4 -O "$installer" https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh &&
+  sh "$installer"
+)
 ```
 
-脚本自动使用系统已有的 `curl` 或 `wget`，只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。如果更习惯 `curl`，可将命令开头替换为 `curl -fsSL`。
+引导命令使用 S100 默认提供的 `wget`，并为弱网设置超时与有限重试；只有下载完整后才会执行安装器，临时文件在退出时删除。安装器内部自动使用系统已有的 `curl` 或 `wget`，只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。
 
 安装指定版本：
 
 ```bash
-wget -qO- https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.14.2
+(
+  installer=$(mktemp) &&
+  trap 'rm -f "$installer"' EXIT &&
+  wget -q -T 20 -t 4 -O "$installer" https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh &&
+  sh "$installer" --version 0.14.2
+)
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
