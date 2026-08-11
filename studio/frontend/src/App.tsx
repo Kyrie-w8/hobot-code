@@ -3,16 +3,17 @@ import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  Activity, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
-  ChevronRight, CircleStop, Clipboard, Cpu, FilePenLine, ListTodo,
-  LoaderCircle, MemoryStick, MessageSquare, PanelRight, Plus, RefreshCw,
-  Search, Server, ShieldCheck, SquareTerminal, Wrench, X, XCircle,
+  Activity, ArrowDown, ArrowLeft, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
+  ChevronRight, CircleStop, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
+  FolderOpen, GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
+  PanelRight, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal,
+  Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, Task, TaskEvent} from './types';
+import type {Approval, Board, Connection, ModelOption, Task, TaskEvent, WorkspaceListing} from './types';
 import './App.css';
 
 const statusLabel: Record<string, string> = {
@@ -29,6 +30,10 @@ function App() {
   const [search, setSearch] = useState('');
   const [composer, setComposer] = useState('');
   const [editingMessage, setEditingMessage] = useState<number | null>(null);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string} | null>(null);
+  const [showSideTask, setShowSideTask] = useState(false);
+  const [activityClock, setActivityClock] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -66,7 +71,8 @@ function App() {
     try {
       const next = await api.connectBoard(board.id);
       setConnection(next);
-      await refreshTasks(board.id);
+      const [pageModels] = await Promise.all([api.models(board.id).catch(() => []), refreshTasks(board.id)]);
+      setModels(pageModels ?? []);
       setShowBoard(false);
     } catch (reason) {
       setError(String(reason));
@@ -154,6 +160,19 @@ function App() {
   }, [events.length, selectedTask?.status]);
 
   useEffect(() => {
+    if (!selectedTask || !['starting', 'running'].includes(selectedTask.status)) return;
+    setActivityClock(Date.now());
+    const timer = window.setInterval(() => setActivityClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [selectedTask?.id, selectedTask?.status]);
+
+  useEffect(() => {
+    if (!optimisticPrompt || optimisticPrompt.taskId !== selectedTask?.id) return;
+    const persisted = events.some((event) => event.normalized?.type === 'user.message' && String(event.normalized.data?.text ?? '') === optimisticPrompt.text);
+    if (persisted) setOptimisticPrompt(null);
+  }, [events, optimisticPrompt, selectedTask?.id]);
+
+  useEffect(() => {
     const textarea = composerRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
@@ -165,10 +184,16 @@ function App() {
     return query ? tasks.filter((task) => `${task.name} ${task.cwd} ${task.status}`.toLowerCase().includes(query)) : tasks;
   }, [search, tasks]);
   const conversation = useMemo(() => buildConversation(events), [events]);
+  const projects = useMemo(() => groupTasksByProject(visibleTasks), [visibleTasks]);
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
   const composerBlocked = busy || (selectedTask ? composerIsBlocked(selectedTask.status) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
+  const selectedModel = selectedTask?.model ?? '';
+  const latestConversationItem = conversation[conversation.length - 1];
+  const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
+    ? optimisticPrompt.time
+    : latestConversationItem?.kind === 'user' ? latestConversationItem.time : selectedTask?.updatedAt;
 
   async function submitPrompt(event: FormEvent) {
     event.preventDefault();
@@ -176,21 +201,29 @@ function App() {
     if (!prompt || !selectedTask || !boardId || composerBlocked) return;
     setBusy(true);
     setError('');
+    const submittedAt = new Date().toISOString();
+    setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt});
+    setSelectedTask((current) => current?.id === selectedTask.id ? {...current, status: 'running', updatedAt: submittedAt} : current);
+    setComposer('');
+    followsOutput.current = true;
     try {
       let nextTask: Task | undefined;
-      if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt);
+      if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, kind: 'edit', model: selectedModel});
+      else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt);
       else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt);
       else await api.sendPrompt(boardId, selectedTask.id, prompt);
-      setComposer('');
       setEditingMessage(null);
       taskDrafts.current.delete(selectedTask.id);
-      followsOutput.current = true;
       await refreshTasks();
       if (nextTask) {
+        setOptimisticPrompt({taskId: nextTask.id, text: prompt, time: submittedAt});
         setSelectedTask(nextTask);
         setWatchRevision((revision) => revision + 1);
       }
     } catch (reason) {
+      setComposer(prompt);
+      setOptimisticPrompt(null);
+      setSelectedTask(selectedTask);
       setError(String(reason));
     } finally {
       setBusy(false);
@@ -234,6 +267,41 @@ function App() {
     });
   }
 
+  async function changeModel(value: string) {
+    if (!selectedTask || !boardId || selectedTask.status !== 'idle') return;
+    const [provider, ...rest] = value.split('/');
+    const modelId = rest.join('/');
+    if (!provider || !modelId) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.setModel(boardId, selectedTask.id, provider, modelId);
+      setSelectedTask({...selectedTask, model: value});
+      setTasks((current) => current.map((task) => task.id === selectedTask.id ? {...task, model: value} : task));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSideTask(prompt: string, name: string) {
+    if (!selectedTask || !boardId) return;
+    setBusy(true);
+    setError('');
+    try {
+      const task = await api.forkTask(boardId, {taskId: selectedTask.id, prompt, name, kind: 'side', model: selectedModel});
+      await refreshTasks();
+      setSelectedTask(task);
+      setOptimisticPrompt({taskId: task.id, text: prompt, time: new Date().toISOString()});
+      setShowSideTask(false);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshWorkspace() {
     await refreshTasks();
     setWatchRevision((revision) => revision + 1);
@@ -273,18 +341,19 @@ function App() {
 
       <aside className="task-sidebar">
         <div className="sidebar-heading">
-          <div><span className="section-label">Tasks</span><span className="task-count">{tasks.length}</span></div>
+          <div><span className="section-label">Projects</span><span className="task-count">{projects.length}</span></div>
           <button className="icon-button compact" title="New task" onClick={() => setShowNewTask(true)} disabled={!connection}><Plus size={17} /></button>
         </div>
-        <label className="search-field"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tasks" /></label>
+        <label className="search-field"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects and tasks" /></label>
         <div className="task-list">
-          {visibleTasks.map((task) => (
-            <button key={task.id} className={`task-row ${selectedTask?.id === task.id ? 'selected' : ''}`} onClick={() => selectTask(task)}>
-              <span className={`task-state-dot dot-${task.status}`} />
-              <span className="task-row-main"><span className="task-row-name">{task.name}</span><span className="task-row-path">{task.cwd}</span></span>
+          {projects.map((project) => <section className="project-group" key={project.path}>
+            <div className="project-heading"><Folder size={14} /><span>{project.name}</span><small>{project.tasks.length}</small></div>
+            {arrangeTasks(project.tasks).map(({task, depth}) => <button key={task.id} className={`task-row ${depth ? 'branch-task' : ''} ${selectedTask?.id === task.id ? 'selected' : ''}`} style={{'--task-depth': depth} as any} onClick={() => selectTask(task)}>
+              {depth ? <CornerDownRight className="branch-mark" size={13} /> : <span className={`task-state-dot dot-${task.status}`} />}
+              <span className="task-row-main"><span className="task-row-name">{task.name}</span>{depth > 0 && <span className="task-row-path">{task.branchKind === 'edit' ? 'Edited branch' : 'Side task'}</span>}</span>
               <span className="task-row-time">{relativeTime(task.updatedAt)}</span>
-            </button>
-          ))}
+            </button>)}
+          </section>)}
           {visibleTasks.length === 0 && <div className="empty-state"><ListTodo size={21} /><span>No tasks</span></div>}
         </div>
         {connection && <button className="board-summary" onClick={() => setShowBoard(true)}>
@@ -297,6 +366,7 @@ function App() {
           <div className="task-header">
             <div className="task-title-block"><div className="task-title-line"><h1>{selectedTask.name}</h1><span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span></div><span className="workspace-path">{selectedTask.cwd}</span></div>
             <div className="task-actions">
+              <button className="icon-button" title="New side task from this context" onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={16} /></button>
               {terminalStatuses.has(selectedTask.status)
                 ? <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>
                 : <button className="secondary-button" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><CircleStop size={14} />Stop</button>}
@@ -309,8 +379,9 @@ function App() {
               {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>Start a conversation</strong><span>Ask Hobot Code to inspect, build, debug, or deploy on this board.</span></div>}
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
-                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && item === conversation[conversation.length - 1]} />)}
-              {selectedTask.status === 'starting' && <div className="agent-progress"><LoaderCircle size={15} className="spin" /><span>Starting agent</span></div>}
+                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} />)}
+              {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text}} />}
+              {['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
             </div>
           </div>
 
@@ -318,7 +389,7 @@ function App() {
           <div className="composer-dock">
             {activeApproval && <ApprovalBar approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
             <form className="composer" onSubmit={submitPrompt}>
-              {editingMessage !== null && <div className="editing-banner"><FilePenLine size={14} /><span>Edited prompt</span><button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setComposer('');}}><X size={14} /></button></div>}
+              {editingMessage !== null && <div className="editing-banner"><GitBranch size={14} /><span>Continue from this message in a new branch</span><button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setComposer('');}}><X size={14} /></button></div>}
               <textarea
                 ref={composerRef}
                 id="composer"
@@ -334,7 +405,8 @@ function App() {
                 rows={2}
               />
               <div className="composer-footer">
-                <span>{selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
+                <label className="model-picker" title={selectedTask.status === 'idle' ? 'Choose model' : 'Model can be changed when the task is ready'}><select value={selectedModel} disabled={busy || selectedTask.status !== 'idle'} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
+                <span className="composer-state">{editingMessage !== null ? 'Creates a branch' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {['running', 'starting'].includes(selectedTask.status) && <button className="composer-stop" type="button" title="Stop agent" onClick={stopTask} disabled={busy}><SquareTerminal size={14} /></button>}
                 <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>
               </div>
@@ -351,24 +423,31 @@ function App() {
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {setBusy(true); setError(''); try {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
-      {showNewTask && connection && <NewTaskDialog busy={busy} onClose={() => setShowNewTask(false)} onCreate={async (request) => {setBusy(true); setError(''); try {const task = await api.startTask(connection.board.id, request); await refreshTasks(); setSelectedTask(task); setShowNewTask(false);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
+      {showNewTask && connection && <NewTaskDialog boardId={connection.board.id} busy={busy} onClose={() => setShowNewTask(false)} onCreate={async (request) => {setBusy(true); setError(''); try {const task = await api.startTask(connection.board.id, request); await refreshTasks(); setSelectedTask(task); setShowNewTask(false);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
+      {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
     </div>
   );
 }
 
-function UserMessage({item, onEdit}: {item: UserConversationItem; onEdit: (item: UserConversationItem) => void}) {
-  return <article className="user-message"><div className="message-meta"><strong>You</strong><time>{formatTime(item.time)}</time><span className="message-actions"><CopyButton value={item.text} /><button className="copy-button" title="Edit and send again" onClick={() => onEdit(item)}><FilePenLine size={14} /></button></span></div><div className="user-message-content">{item.text}</div></article>;
+function UserMessage({item, onEdit}: {item: UserConversationItem; onEdit?: (item: UserConversationItem) => void}) {
+  return <article className="user-message"><div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
 }
 
 function AssistantTurn({item, running}: {item: AssistantConversationItem; running: boolean}) {
   return <article className="assistant-turn">
-    <div className="assistant-heading"><div className="assistant-avatar">H</div><strong>Hobot Code</strong><time>{formatTime(item.startedAt)}</time></div>
     {item.thinking && <ThinkingBlock item={item} running={running} />}
     {item.tools.length > 0 && <ToolGroup tools={item.tools} />}
     {item.notices.map((notice, index) => <div key={`${notice.time}-${index}`} className={`turn-notice notice-${notice.type}`}><Activity size={13} /><span>{notice.label}</span></div>)}
     {item.text && <div className="assistant-content"><MarkdownContent value={item.text} /><div className="assistant-actions"><CopyButton value={item.text} /></div></div>}
     {running && <div className="agent-progress"><LoaderCircle size={14} className="spin" /><span>Working</span></div>}
   </article>;
+}
+
+function AgentProgress({startedAt, now, hasOutput}: {startedAt?: string; now: number; hasOutput: boolean}) {
+  if (hasOutput) return null;
+  const seconds = startedAt ? Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000)) : 0;
+  const label = seconds < 2 ? 'Sending' : seconds < 8 ? 'Starting' : seconds < 30 ? 'Thinking' : 'Still working';
+  return <div className="agent-progress immediate"><LoaderCircle size={15} className="spin" /><span>{label}</span>{seconds >= 2 && <small>{seconds}s</small>}</div>;
 }
 
 function ThinkingBlock({item, running}: {item: AssistantConversationItem; running: boolean}) {
@@ -410,9 +489,31 @@ function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[
   return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid"><label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
 }
 
-function NewTaskDialog({busy, onClose, onCreate}: {busy: boolean; onClose: () => void; onCreate: (request: {name: string; cwd: string; prompt: string; approve: boolean}) => void}) {
-  const [request, setRequest] = useState({name: '', cwd: '/root', prompt: '', approve: false});
-  return <div className="modal-backdrop"><form className="modal task-modal" onSubmit={(event) => {event.preventDefault(); onCreate(request);}}><div className="modal-header"><div><span className="modal-eyebrow">Agent task</span><h2>New task</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="form-grid"><label><span>Name</span><input value={request.name} onChange={(event) => setRequest({...request, name: event.target.value})} placeholder="Optional" /></label><label><span>Workspace</span><input value={request.cwd} onChange={(event) => setRequest({...request, cwd: event.target.value})} required /></label><label><span>Instruction</span><textarea rows={5} value={request.prompt} onChange={(event) => setRequest({...request, prompt: event.target.value})} required /></label><label className="checkbox-row"><input type="checkbox" checked={request.approve} onChange={(event) => setRequest({...request, approve: event.target.checked})} /><span>Trust project resources</span></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !request.prompt.trim()}><Plus size={15} />Create task</button></div></div></form></div>;
+function NewTaskDialog({boardId, busy, onClose, onCreate}: {boardId: string; busy: boolean; onClose: () => void; onCreate: (request: {name: string; cwd: string; prompt: string; approve: boolean; model?: string}) => void}) {
+  const [request, setRequest] = useState({name: '', cwd: '', prompt: '', approve: false});
+  const [listing, setListing] = useState<WorkspaceListing | null>(null);
+  const [folderMode, setFolderMode] = useState(false);
+  const [newFolder, setNewFolder] = useState('');
+  const [dialogError, setDialogError] = useState('');
+  const activeBoard = useRef<string>(boardId);
+  const browse = useCallback(async (path = '') => {
+    setDialogError('');
+    try {
+      const next = await api.browseWorkspace(activeBoard.current || boardId, path);
+      setListing(next);
+      if (!request.cwd) setRequest((current) => ({...current, cwd: next.home}));
+    } catch (reason) {
+      setDialogError(friendlyError(String(reason)));
+    }
+  }, [request.cwd]);
+  useEffect(() => { void browse(''); }, []);
+  return <div className="modal-backdrop"><form className="modal task-modal" onSubmit={(event) => {event.preventDefault(); if (request.cwd) onCreate(request);}}><div className="modal-header"><div><span className="modal-eyebrow">New conversation</span><h2>Start a task</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="form-grid"><label><span>Name</span><input value={request.name} onChange={(event) => setRequest({...request, name: event.target.value})} placeholder="Generated automatically if empty" /></label><div className="workspace-chooser"><span>Project</span><button type="button" className="workspace-selection" onClick={() => setFolderMode(true)}><FolderOpen size={16} /><span><strong>{request.cwd === listing?.home ? 'No project folder' : basename(request.cwd) || 'Choose a folder'}</strong><small>{request.cwd || 'Select an existing or new folder'}</small></span><ChevronRight size={15} /></button></div><label><span>Instruction</span><textarea rows={5} value={request.prompt} onChange={(event) => setRequest({...request, prompt: event.target.value})} required autoFocus /></label><label className="checkbox-row"><input type="checkbox" checked={request.approve} onChange={(event) => setRequest({...request, approve: event.target.checked})} /><span>Trust project resources</span></label>{dialogError && <div className="inline-error">{dialogError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !request.prompt.trim() || !request.cwd}><Plus size={15} />Create task</button></div></div>{folderMode && listing && <div className="folder-panel"><div className="folder-panel-header"><button type="button" className="icon-button compact" title="Back" onClick={() => setFolderMode(false)}><ArrowLeft size={16} /></button><div><strong>Choose project folder</strong><small>{listing.path}</small></div></div><button type="button" className="folder-choice special" onClick={() => {setRequest({...request, cwd: listing.home}); setFolderMode(false);}}><MessageSquare size={16} /><span><strong>No project folder</strong><small>Use {listing.home} as a neutral workspace</small></span></button>{listing.parent && <button type="button" className="folder-choice" onClick={() => void browse(listing.parent)}><ArrowLeft size={15} /><span><strong>Parent folder</strong><small>{listing.parent}</small></span></button>}<div className="folder-list">{listing.directories.map((entry) => <button type="button" className="folder-choice" key={entry.path} onDoubleClick={() => {setRequest({...request, cwd: entry.path}); setFolderMode(false);}} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong><small>{entry.path}</small></span><ChevronRight size={14} /></button>)}</div><div className="new-folder-row"><input value={newFolder} onChange={(event) => setNewFolder(event.target.value)} placeholder="New folder name" /><button type="button" className="secondary-button" disabled={!newFolder.trim()} onClick={() => void api.createWorkspace(activeBoard.current || boardId, listing.path, newFolder.trim()).then((next) => {setListing(next); setRequest({...request, cwd: next.path}); setNewFolder(''); setFolderMode(false);}).catch((reason) => setDialogError(friendlyError(String(reason))))}>Create</button></div><div className="folder-panel-actions"><button type="button" className="primary-button" onClick={() => {setRequest({...request, cwd: listing.path}); setFolderMode(false);}}>Choose this folder</button></div></div>}</form></div>;
+}
+
+function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: boolean; onClose: () => void; onCreate: (prompt: string, name: string) => void}) {
+  const [prompt, setPrompt] = useState('');
+  const [name, setName] = useState('');
+  return <div className="modal-backdrop"><form className="modal side-task-modal" onSubmit={(event) => {event.preventDefault(); onCreate(prompt.trim(), name.trim());}}><div className="modal-header"><div><span className="modal-eyebrow">Parallel branch</span><h2>New side task</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="fork-source"><GitBranch size={16} /><span><strong>Shares the settled context from {parent.name}</strong><small>The main task stays unchanged and both can continue independently.</small></span></div><div className="form-grid"><label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={`${parent.name}-side`} /></label><label><span>Instruction</span><textarea rows={6} value={prompt} onChange={(event) => setPrompt(event.target.value)} autoFocus required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !prompt.trim()}><GitBranch size={15} />Start side task</button></div></div></form></div>;
 }
 
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
@@ -421,6 +522,32 @@ function CopyButton({value}: {value: string}) { const [copied, setCopied] = useS
 function Metric({icon, label, value}: {icon: ReactNode; label: string; value: string}) { return <div className="metric"><span>{icon}{label}</span><strong>{value}</strong></div>; }
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
+function basename(path: string) { return path.split('/').filter(Boolean).at(-1) ?? path; }
+function groupTasksByProject(tasks: Task[]) {
+  const groups = new Map<string, Task[]>();
+  for (const task of tasks) groups.set(task.cwd, [...(groups.get(task.cwd) ?? []), task]);
+  return [...groups.entries()].map(([path, projectTasks]) => ({path, name: path === '/root' ? 'General' : basename(path), tasks: projectTasks})).sort((left, right) => left.name.localeCompare(right.name));
+}
+function arrangeTasks(tasks: Task[]) {
+  const byParent = new Map<string, Task[]>();
+  const ids = new Set(tasks.map((task) => task.id));
+  for (const task of tasks) {
+    const parent = task.parentTaskId && ids.has(task.parentTaskId) ? task.parentTaskId : '';
+    byParent.set(parent, [...(byParent.get(parent) ?? []), task]);
+  }
+  const result: Array<{task: Task; depth: number}> = [];
+  const seen = new Set<string>();
+  const visit = (parent: string, depth: number) => {
+    for (const task of (byParent.get(parent) ?? []).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())) {
+      if (seen.has(task.id)) continue;
+      seen.add(task.id);
+      result.push({task, depth});
+      visit(task.id, depth + 1);
+    }
+  };
+  visit('', 0);
+  return result;
+}
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';

@@ -1,4 +1,4 @@
-import type {Board, Connection, EventEnvelope, EventPage, Task, TaskPage} from './types';
+import type {Board, Connection, EventEnvelope, EventPage, ForkTaskRequest, ModelOption, Task, TaskPage, WorkspaceListing} from './types';
 
 type Backend = Record<string, (...args: any[]) => Promise<any>>;
 
@@ -12,9 +12,9 @@ declare global {
 const mockBoard: Board = {id: 's100-demo', name: 'RDK S100', host: '10.112.10.98', user: 'root', port: 22};
 const now = new Date();
 const mockTasks: Task[] = [
-  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 128, sessionId: '019fef9b-695f-7e9d'},
+  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 128, sessionId: '019fef9b-695f-7e9d', sessionFile: '/root/.local/state/hobot-code/sessions/demo.jsonl', model: 'drobotics/kimi-k3'},
   {id: '04acf83b820b934e12345678', name: 'camera-pipeline', cwd: '/root/tros_ws', status: 'waiting', pid: 842244, createdAt: new Date(now.getTime() - 18 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 72, pendingApprovals: [{id: 'approval-demo', method: 'confirm', title: 'Allow bash?', message: 'Run the camera device inspection command on RDK S100.', active: true}]},
-  {id: 'f30bb47e8d552f1812345678', name: 'deploy-review', cwd: '/root/models', status: 'idle', pid: 841992, createdAt: new Date(now.getTime() - 70 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 53},
+  {id: 'f30bb47e8d552f1812345678', name: 'deploy-review', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 841992, createdAt: new Date(now.getTime() - 70 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 53, parentTaskId: 'b8930da1a77e4a8f12345678', branchKind: 'side', model: 'drobotics/kimi-k3'},
 ];
 
 const mockEvents = (taskId: string): EventPage => ({
@@ -34,7 +34,7 @@ const mockBackend: Backend = {
   ListBoards: async () => [mockBoard],
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
-  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.18.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 200}}),
+  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.19.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 200}}),
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
   GetTask: async (_board: string, taskId: string) => mockTasks.find((task) => task.id === taskId),
@@ -44,6 +44,11 @@ const mockBackend: Backend = {
   StopTask: async () => undefined,
   ResumeTask: async (_board: string, taskId: string) => ({...mockTasks.find((task) => task.id === taskId), status: 'starting'}),
   RestartTask: async (_board: string, taskId: string) => ({...mockTasks.find((task) => task.id === taskId), status: 'starting', sessionFile: undefined, sessionId: undefined}),
+  SetTaskModel: async () => undefined,
+  ListModels: async (): Promise<ModelOption[]> => [{provider: 'drobotics', id: 'kimi-k3', name: 'kimi-k3'}],
+  BrowseWorkspace: async (_board: string, path: string): Promise<WorkspaceListing> => ({path: path || '/root', parent: path === '/root' || !path ? '/' : '/root', home: '/root', directories: [{name: 'models', path: '/root/models'}, {name: 'tros_ws', path: '/root/tros_ws'}, {name: 'yolo_bench_s100', path: '/root/yolo_bench_s100'}]}),
+  CreateWorkspace: async (_board: string, parent: string, name: string): Promise<WorkspaceListing> => ({path: `${parent}/${name}`.replace('//', '/'), parent, home: '/root', directories: []}),
+  ForkTask: async (_board: string, request: ForkTaskRequest) => ({...mockTasks[2], id: `task-${Date.now()}`, name: request.name || `${mockTasks[0].name}-side`, status: 'starting', parentTaskId: request.taskId, forkSequence: request.sequence, branchKind: request.kind}),
   RespondApproval: async () => undefined,
   WatchTask: async () => undefined,
   StopWatchingTask: async () => undefined,
@@ -61,11 +66,16 @@ export const api = {
   tasks: (id: string, archived = false): Promise<TaskPage> => backend().RefreshTasks(id, archived),
   task: (boardId: string, taskId: string): Promise<Task> => backend().GetTask(boardId, taskId),
   events: (boardId: string, taskId: string, after = 0, limit = 200): Promise<EventPage> => backend().GetEvents(boardId, taskId, after, limit),
-  startTask: (boardId: string, request: {name: string; cwd: string; prompt: string; approve: boolean}): Promise<Task> => backend().StartTask(boardId, request),
+  startTask: (boardId: string, request: {name: string; cwd: string; prompt: string; approve: boolean; model?: string}): Promise<Task> => backend().StartTask(boardId, request),
   sendPrompt: (boardId: string, taskId: string, prompt: string) => backend().SendPrompt(boardId, taskId, prompt),
   stopTask: (boardId: string, taskId: string) => backend().StopTask(boardId, taskId),
   resumeTask: (boardId: string, taskId: string, prompt: string): Promise<Task> => backend().ResumeTask(boardId, taskId, prompt),
   restartTask: (boardId: string, taskId: string, prompt: string): Promise<Task> => backend().RestartTask(boardId, taskId, prompt),
+  setModel: (boardId: string, taskId: string, provider: string, modelId: string) => backend().SetTaskModel(boardId, taskId, provider, modelId),
+  models: (boardId: string): Promise<ModelOption[]> => backend().ListModels(boardId),
+  browseWorkspace: (boardId: string, path = ''): Promise<WorkspaceListing> => backend().BrowseWorkspace(boardId, path),
+  createWorkspace: (boardId: string, parent: string, name: string): Promise<WorkspaceListing> => backend().CreateWorkspace(boardId, parent, name),
+  forkTask: (boardId: string, request: ForkTaskRequest): Promise<Task> => backend().ForkTask(boardId, request),
   respond: (boardId: string, taskId: string, approvalId: string, response: Record<string, unknown>) => backend().RespondApproval(boardId, taskId, approvalId, response),
   watch: (boardId: string, taskId: string, after: number) => backend().WatchTask(boardId, taskId, after),
   stopWatch: (boardId: string, taskId: string) => backend().StopWatchingTask(boardId, taskId),

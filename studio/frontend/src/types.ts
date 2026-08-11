@@ -59,6 +59,10 @@ export type Task = {
   approved?: boolean;
   resumeCount?: number;
   restartCount?: number;
+  model?: string;
+  parentTaskId?: string;
+  forkSequence?: number;
+  branchKind?: 'side' | 'edit';
   archivedAt?: string;
   pendingApprovals?: Approval[];
 };
@@ -82,3 +86,7 @@ export type TaskEvent = {
 export type TaskPage = { tasks: Task[]; nextCursor?: string };
 export type EventPage = { events: TaskEvent[]; nextAfter?: number; hasMore: boolean };
 export type EventEnvelope = { boardId: string; event: TaskEvent };
+export type ModelOption = {provider: string; id: string; name: string};
+export type WorkspaceEntry = {name: string; path: string};
+export type WorkspaceListing = {path: string; parent?: string; home: string; directories: WorkspaceEntry[]};
+export type ForkTaskRequest = {taskId: string; sequence?: number; prompt: string; name?: string; kind: 'side' | 'edit'; model?: string};

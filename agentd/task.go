@@ -52,6 +52,10 @@ type taskMetadata struct {
 	Approved     bool              `json:"approved,omitempty"`
 	ResumeCount  int               `json:"resumeCount,omitempty"`
 	RestartCount int               `json:"restartCount,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	ParentTaskID string            `json:"parentTaskId,omitempty"`
+	ForkSequence uint64            `json:"forkSequence,omitempty"`
+	BranchKind   string            `json:"branchKind,omitempty"`
 	ArchivedAt   *time.Time        `json:"archivedAt,omitempty"`
 	Approvals    []pendingApproval `json:"pendingApprovals,omitempty"`
 }
@@ -86,6 +90,16 @@ type startTaskParams struct {
 	Cwd     string `json:"cwd"`
 	Prompt  string `json:"prompt"`
 	Approve bool   `json:"approve,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+type forkTaskParams struct {
+	TaskID   string `json:"taskId"`
+	Sequence uint64 `json:"sequence,omitempty"`
+	Prompt   string `json:"prompt"`
+	Name     string `json:"name,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 type resumeTaskParams struct {
@@ -250,6 +264,9 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
 	}
+	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
+		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
+	}
 	if manager.activeCount() >= manager.cfg.MaxTasks {
 		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
 	}
@@ -293,6 +310,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 		metadata: taskMetadata{
 			ID: id, Name: name, Cwd: cwd, Status: statusStarting,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
+			Model: normalizeModelSelection(params.Model),
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
@@ -317,10 +335,177 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	return current.snapshot(), nil
 }
 
+func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
+		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	}
+	if params.Kind == "" {
+		params.Kind = "side"
+	}
+	if params.Kind != "side" && params.Kind != "edit" {
+		return taskMetadata{}, fmt.Errorf("task fork kind must be side or edit")
+	}
+	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
+		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
+	}
+	if manager.activeCount() >= manager.cfg.MaxTasks {
+		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
+	}
+	manager.mu.RLock()
+	retained := len(manager.tasks)
+	manager.mu.RUnlock()
+	if retained >= manager.cfg.MaxRetainedTasks {
+		return taskMetadata{}, fmt.Errorf("retained task limit reached (%d); archive and delete old tasks", manager.cfg.MaxRetainedTasks)
+	}
+	source, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	parent := source.snapshot()
+	sessionFile, err := validateSessionFile(manager.cfg.SessionDir, parent.SessionFile)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	_, lines, err := readSessionLines(sessionFile)
+	if err != nil {
+		return taskMetadata{}, fmt.Errorf("read source session: %w", err)
+	}
+	leafID := ""
+	if params.Sequence > 0 {
+		leafID, err = source.sessionLeafBeforePrompt(params.Sequence, lines)
+		if err != nil {
+			return taskMetadata{}, err
+		}
+	} else {
+		leafID = safeSessionLeaf(lines)
+		if leafID == "" {
+			return taskMetadata{}, fmt.Errorf("source task has no settled context to fork")
+		}
+	}
+	forkFile, err := writeSessionFork(manager.cfg.SessionDir, sessionFile, parent.Cwd, leafID, lines)
+	if err != nil {
+		return taskMetadata{}, fmt.Errorf("create session fork: %w", err)
+	}
+	keepSession := false
+	defer func() {
+		if !keepSession {
+			_ = os.Remove(forkFile)
+		}
+	}()
+	id, err := newTaskID()
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		suffix := "side"
+		if params.Kind == "edit" {
+			suffix = "branch"
+		}
+		base := parent.Name
+		if len(base) > 54 {
+			base = base[:54]
+		}
+		name = base + "-" + suffix
+	}
+	if !taskNamePattern.MatchString(name) {
+		return taskMetadata{}, fmt.Errorf("task name must start with a letter or digit and use at most 64 letters, digits, _ or -")
+	}
+	dir := filepath.Join(manager.cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return taskMetadata{}, err
+	}
+	keepDirectory := false
+	defer func() {
+		if !keepDirectory {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	model := normalizeModelSelection(params.Model)
+	if model == "" {
+		model = parent.Model
+	}
+	current := &task{
+		manager: manager,
+		dir:     dir,
+		events:  filepath.Join(dir, "events.jsonl"),
+		stderr:  filepath.Join(dir, "worker.stderr.log"),
+		metadata: taskMetadata{
+			ID: id, Name: name, Cwd: parent.Cwd, Status: statusStarting,
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
+			SessionFile: forkFile, Model: model, ParentTaskID: parent.ID,
+			ForkSequence: params.Sequence, BranchKind: params.Kind,
+		},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		return taskMetadata{}, err
+	}
+	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
+		return taskMetadata{}, err
+	}
+	if err := current.saveMetadata(); err != nil {
+		return taskMetadata{}, err
+	}
+	manager.mu.Lock()
+	manager.tasks[id] = current
+	manager.mu.Unlock()
+	keepDirectory = true
+	keepSession = true
+	if err := current.launch(params.Prompt, parent.Approved, forkFile); err != nil {
+		current.setTerminal(statusFailed, err.Error())
+		return current.snapshot(), err
+	}
+	return current.snapshot(), nil
+}
+
+func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLine) (string, error) {
+	events, err := readEvents(current.events, current.metadata.ID, 0)
+	if err != nil {
+		return "", err
+	}
+	prompt := ""
+	for _, event := range events {
+		if event.Sequence == sequence {
+			if event.Normalized == nil || event.Normalized.Type != "user.message" {
+				break
+			}
+			prompt, _ = event.Normalized.Data["text"].(string)
+			break
+		}
+	}
+	if prompt == "" {
+		return "", fmt.Errorf("fork sequence is not a user message: %d", sequence)
+	}
+	parentID := ""
+	matches := 0
+	for _, line := range lines {
+		if line.Type == "message" && line.Role == "user" && line.Text == prompt {
+			matches++
+			parentID = line.ParentID
+		}
+	}
+	if matches == 0 {
+		return "", fmt.Errorf("selected message was not found in the current source session")
+	}
+	if matches > 1 {
+		return "", fmt.Errorf("selected message is ambiguous in the current source session")
+	}
+	if parentID == "" {
+		return "", fmt.Errorf("selected message has no parent context")
+	}
+	return parentID, nil
+}
+
 func (current *task) launch(prompt string, approve bool, sessionFile string) error {
 	args := []string{"--mode", "rpc", "--session-dir", current.manager.cfg.SessionDir, "--name", current.metadata.Name}
 	if sessionFile != "" {
 		args = append(args, "--session", sessionFile)
+	}
+	if current.metadata.Model != "" {
+		args = append(args, "--model", current.metadata.Model)
 	}
 	if approve {
 		args = append(args, "--approve")
@@ -478,6 +663,12 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		Data    struct {
 			SessionFile string `json:"sessionFile"`
 			SessionID   string `json:"sessionId"`
+			Provider    string `json:"provider"`
+			ID          string `json:"id"`
+			Model       *struct {
+				Provider string `json:"provider"`
+				ID       string `json:"id"`
+			} `json:"model"`
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(raw, &header)
@@ -507,6 +698,11 @@ func (current *task) recordEvent(raw json.RawMessage) {
 			if current.metadata.Status == statusStarting {
 				current.metadata.Status = statusIdle
 			}
+			if header.Data.Model != nil {
+				current.metadata.Model = joinModel(header.Data.Model.Provider, header.Data.Model.ID)
+			}
+		} else if header.Success && header.Command == "set_model" {
+			current.metadata.Model = joinModel(header.Data.Provider, header.Data.ID)
 		}
 	}
 	event := taskEvent{
@@ -568,9 +764,11 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		return fmt.Errorf("worker command must be valid JSON no larger than %d bytes", maxRequestBytes)
 	}
 	var header struct {
-		Type    string `json:"type"`
-		ID      string `json:"id"`
-		Message string `json:"message"`
+		Type     string `json:"type"`
+		ID       string `json:"id"`
+		Message  string `json:"message"`
+		Provider string `json:"provider"`
+		ModelID  string `json:"modelId"`
 	}
 	if err := json.Unmarshal(command, &header); err != nil || header.Type == "" {
 		return fmt.Errorf("worker command must contain a type")
@@ -591,6 +789,13 @@ func (current *task) sendCommand(command json.RawMessage) error {
 			return fmt.Errorf("task must be idle before accepting another prompt")
 		}
 	case "abort":
+	case "set_model":
+		if status != statusIdle {
+			return fmt.Errorf("task must be idle before changing models")
+		}
+		if !modelProviderPattern.MatchString(header.Provider) || !modelIDPattern.MatchString(header.ModelID) {
+			return fmt.Errorf("model provider and ID are invalid")
+		}
 	case "extension_ui_response":
 		if header.ID == "" || status != statusWaiting || !current.hasActiveApproval(header.ID) {
 			return fmt.Errorf("task is not waiting for an approval response")
@@ -599,10 +804,28 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		return fmt.Errorf("unsupported worker command: %s", header.Type)
 	}
 	if header.Type == "prompt" {
+		current.mu.Lock()
+		if current.metadata.Status != statusStarting && current.metadata.Status != statusIdle {
+			current.mu.Unlock()
+			return fmt.Errorf("task must be idle before accepting another prompt")
+		}
+		current.metadata.Status = statusRunning
+		current.metadata.UpdatedAt = time.Now().UTC()
+		current.mu.Unlock()
+		_ = current.saveMetadata()
 		promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message})
 		current.recordEvent(promptEvent)
 	}
 	if err := current.writeWorkerCommand(command); err != nil {
+		if header.Type == "prompt" {
+			current.mu.Lock()
+			if current.metadata.Status == statusRunning {
+				current.metadata.Status = status
+				current.metadata.UpdatedAt = time.Now().UTC()
+			}
+			current.mu.Unlock()
+			_ = current.saveMetadata()
+		}
 		return err
 	}
 	if header.Type == "extension_ui_response" {

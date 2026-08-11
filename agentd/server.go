@@ -186,6 +186,41 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, server.capabilities()))
+	case "models.list":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		models, err := listModels(server.cfg)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_list_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, models))
+	case "workspace.list":
+		var params workspaceParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		listing, err := browseWorkspace(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_list_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, listing))
+	case "workspace.create":
+		var params createWorkspaceParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		listing, err := createWorkspace(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_create_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, listing))
 	case "daemon.shutdown":
 		var params struct {
 			Force bool `json:"force,omitempty"`
@@ -290,6 +325,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		metadata, err := server.manager.restart(params)
 		if err != nil {
 			_ = writeJSON(connection, failure(req.ID, "task_restart_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.fork":
+		var params forkTaskParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.fork(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_fork_failed", err))
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, metadata))

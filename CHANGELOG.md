@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.0
+
+- Rework Hobot Studio around project-grouped navigation, nested conversation branches, softer macOS-native visual hierarchy, and unlabeled user/Agent messages.
+- Add board-side model discovery and idle-session model switching, exposed through a compact model selector in the composer.
+- Show an optimistic persisted user turn plus staged, elapsed Agent progress immediately after submit, before the model emits its first token.
+- Replace manually typed working directories with board-side folder browsing, safe folder creation, and an explicit no-project-folder workspace.
+- Add persistent multi-turn side tasks that inherit the latest settled session context and continue independently under the existing per-user task limit.
+- Make historical message editing a true session-tree fork from the selected user turn instead of appending a duplicate prompt to the current conversation.
+- Add bounded protocol and regression coverage for model tables, workspace browsing, safe session leaves, and historical session snapshots.
+
 ## 0.18.0
 
 - Rebuild Hobot Studio around a conversation-first two-column workspace with a wider reading surface, optional task details, clearer task state, responsive composition, and restrained Codex-style visual hierarchy.

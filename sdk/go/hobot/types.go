@@ -91,6 +91,10 @@ type Task struct {
 	Approved         bool       `json:"approved,omitempty"`
 	ResumeCount      int        `json:"resumeCount,omitempty"`
 	RestartCount     int        `json:"restartCount,omitempty"`
+	Model            string     `json:"model,omitempty"`
+	ParentTaskID     string     `json:"parentTaskId,omitempty"`
+	ForkSequence     uint64     `json:"forkSequence,omitempty"`
+	BranchKind       string     `json:"branchKind,omitempty"`
 	ArchivedAt       *time.Time `json:"archivedAt,omitempty"`
 	PendingApprovals []Approval `json:"pendingApprovals,omitempty"`
 }
@@ -127,4 +131,32 @@ type StartTaskRequest struct {
 	Cwd     string `json:"cwd"`
 	Prompt  string `json:"prompt"`
 	Approve bool   `json:"approve,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+type ForkTaskRequest struct {
+	TaskID   string `json:"taskId"`
+	Sequence uint64 `json:"sequence,omitempty"`
+	Prompt   string `json:"prompt"`
+	Name     string `json:"name,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+type ModelOption struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+}
+
+type WorkspaceEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type WorkspaceListing struct {
+	Path        string           `json:"path"`
+	Parent      string           `json:"parent,omitempty"`
+	Home        string           `json:"home"`
+	Directories []WorkspaceEntry `json:"directories"`
 }

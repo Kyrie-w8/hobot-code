@@ -48,6 +48,37 @@ func (client *Client) SendPrompt(ctx context.Context, taskID, message string) er
 	}, nil)
 }
 
+func (client *Client) SetModel(ctx context.Context, taskID, provider, modelID string) error {
+	return client.Call(ctx, "task.command", map[string]any{
+		"taskId":  taskID,
+		"command": map[string]any{"id": nextCommandID(), "type": "set_model", "provider": provider, "modelId": modelID},
+	}, nil)
+}
+
+func (client *Client) Models(ctx context.Context) ([]ModelOption, error) {
+	var models []ModelOption
+	err := client.Call(ctx, "models.list", struct{}{}, &models)
+	return models, err
+}
+
+func (client *Client) BrowseWorkspace(ctx context.Context, path string) (WorkspaceListing, error) {
+	var listing WorkspaceListing
+	err := client.Call(ctx, "workspace.list", map[string]any{"path": path}, &listing)
+	return listing, err
+}
+
+func (client *Client) CreateWorkspace(ctx context.Context, parent, name string) (WorkspaceListing, error) {
+	var listing WorkspaceListing
+	err := client.Call(ctx, "workspace.create", map[string]any{"parent": parent, "name": name}, &listing)
+	return listing, err
+}
+
+func (client *Client) ForkTask(ctx context.Context, request ForkTaskRequest) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.fork", request, &task)
+	return task, err
+}
+
 func (client *Client) Abort(ctx context.Context, taskID string) error {
 	return client.Call(ctx, "task.command", map[string]any{
 		"taskId":  taskID,

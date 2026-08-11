@@ -281,6 +281,56 @@ func (app *App) SendPrompt(boardID, taskID, prompt string) error {
 	return client.SendPrompt(ctx, taskID, prompt)
 }
 
+func (app *App) SetTaskModel(boardID, taskID, provider, modelID string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SetModel(ctx, taskID, provider, modelID)
+}
+
+func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.Models(ctx)
+}
+
+func (app *App) BrowseWorkspace(boardID, path string) (hobot.WorkspaceListing, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.WorkspaceListing{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.BrowseWorkspace(ctx, path)
+}
+
+func (app *App) CreateWorkspace(boardID, parent, name string) (hobot.WorkspaceListing, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.WorkspaceListing{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.CreateWorkspace(ctx, parent, name)
+}
+
+func (app *App) ForkTask(boardID string, request hobot.ForkTaskRequest) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.ForkTask(ctx, request)
+}
+
 func (app *App) StopTask(boardID, taskID string) error {
 	client, err := app.client(boardID)
 	if err != nil {

@@ -23,6 +23,9 @@ var protocolCapabilities = []string{
 	"events.page",
 	"tasks.resume",
 	"tasks.restart",
+	"tasks.fork",
+	"tasks.models",
+	"workspaces.browse",
 	"bridge.stdio",
 }
 

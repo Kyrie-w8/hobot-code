@@ -60,7 +60,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.18.0
+  | sh -s -- --version 0.19.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -173,7 +173,9 @@ hobot task stop <task-id>
 
 首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多并行两个后台任务；板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`。此时 `resume` 只会重新打开同一 Pi 对话，不会自动重放 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
 
-Hobot Code 桌面端通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。
+Hobot Code 桌面端通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。桌面端按工作目录组织项目和任务；新建任务时可浏览板端目录、新建文件夹，或选择不绑定项目的默认工作区，无需手输路径。
+
+输入框底部可切换板端已配置模型。发送后客户端会立即显示用户消息、当前阶段和已等待时间，而不是等到首个模型 token 才反馈。从历史用户消息编辑时，板端会在该消息之前的会话节点创建新分支，原任务和审计记录保留不变。侧边任务使用相同的安全分支机制继承主任务已稳定的上下文，两者可独立多轮继续，且都受每用户并发上限约束。
 
 脚本化调用沿用 Pi：
 
@@ -223,7 +225,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.18.0
+hobot update --version 0.19.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：
