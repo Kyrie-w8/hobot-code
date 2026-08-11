@@ -133,6 +133,12 @@ type commandTaskParams struct {
 	Command json.RawMessage `json:"command"`
 }
 
+type setTaskModelParams struct {
+	TaskID   string `json:"taskId"`
+	Provider string `json:"provider"`
+	ModelID  string `json:"modelId"`
+}
+
 type taskIDParams struct {
 	TaskID string `json:"taskId"`
 }
@@ -207,6 +213,15 @@ func newTaskManager(cfg config) (*taskManager, error) {
 func isLiveStatus(status taskStatus) bool {
 	switch status {
 	case statusStarting, statusIdle, statusRunning, statusWaiting, statusStopping:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTerminalStatus(status taskStatus) bool {
+	switch status {
+	case statusStopped, statusFailed, statusInterrupted:
 		return true
 	default:
 		return false
@@ -982,6 +997,41 @@ func (manager *taskManager) get(id string) (*task, error) {
 		return nil, fmt.Errorf("task does not exist: %s", id)
 	}
 	return current, nil
+}
+
+func (manager *taskManager) setModel(params setTaskModelParams) (taskMetadata, error) {
+	if !modelProviderPattern.MatchString(params.Provider) || !modelIDPattern.MatchString(params.ModelID) {
+		return taskMetadata{}, fmt.Errorf("model provider and ID are invalid")
+	}
+	model := joinModel(params.Provider, params.ModelID)
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	status := current.metadata.Status
+	if isTerminalStatus(status) {
+		current.metadata.Model = model
+		current.metadata.UpdatedAt = time.Now().UTC()
+		metadata := current.metadata
+		current.mu.Unlock()
+		if err := current.saveMetadata(); err != nil {
+			return taskMetadata{}, err
+		}
+		return metadata, nil
+	}
+	current.mu.Unlock()
+	if status != statusIdle {
+		return taskMetadata{}, fmt.Errorf("task must be idle or stopped before changing models")
+	}
+	command, _ := json.Marshal(map[string]string{
+		"id": fmt.Sprintf("agentd-model-%d", time.Now().UnixNano()), "type": "set_model",
+		"provider": params.Provider, "modelId": params.ModelID,
+	})
+	if err := current.sendCommand(command); err != nil {
+		return taskMetadata{}, err
+	}
+	return current.snapshot(), nil
 }
 
 func (manager *taskManager) list() []taskMetadata {

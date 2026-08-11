@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -289,6 +290,26 @@ func (app *App) SetTaskModel(boardID, taskID, provider, modelID string) error {
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
 	return client.SetModel(ctx, taskID, provider, modelID)
+}
+
+func (app *App) OpenExternalURL(rawURL string) error {
+	target, err := safeExternalURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if app.ctx == nil {
+		return fmt.Errorf("application is not ready")
+	}
+	runtime.BrowserOpenURL(app.ctx, target)
+	return nil
+}
+
+func safeExternalURL(rawURL string) (string, error) {
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || target.Host == "" || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil {
+		return "", fmt.Errorf("only HTTP and HTTPS links can be opened")
+	}
+	return target.String(), nil
 }
 
 func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {

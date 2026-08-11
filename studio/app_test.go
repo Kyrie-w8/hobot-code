@@ -80,3 +80,16 @@ func TestSortedBoards(t *testing.T) {
 		t.Fatalf("unexpected sort order: %+v", boards)
 	}
 }
+
+func TestSafeExternalURL(t *testing.T) {
+	for _, input := range []string{"https://developer.d-robotics.cc/docs", "http://10.112.10.98:8000/health"} {
+		if got, err := safeExternalURL(input); err != nil || got != input {
+			t.Fatalf("safeExternalURL(%q) = %q, %v", input, got, err)
+		}
+	}
+	for _, input := range []string{"file:///etc/passwd", "javascript:alert(1)", "https://user:secret@example.com", "/relative"} {
+		if _, err := safeExternalURL(input); err == nil {
+			t.Fatalf("unsafe URL was accepted: %q", input)
+		}
+	}
+}

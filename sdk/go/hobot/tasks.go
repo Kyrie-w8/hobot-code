@@ -49,9 +49,8 @@ func (client *Client) SendPrompt(ctx context.Context, taskID, message string) er
 }
 
 func (client *Client) SetModel(ctx context.Context, taskID, provider, modelID string) error {
-	return client.Call(ctx, "task.command", map[string]any{
-		"taskId":  taskID,
-		"command": map[string]any{"id": nextCommandID(), "type": "set_model", "provider": provider, "modelId": modelID},
+	return client.Call(ctx, "task.model", map[string]any{
+		"taskId": taskID, "provider": provider, "modelId": modelID,
 	}, nil)
 }
 

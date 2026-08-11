@@ -190,6 +190,7 @@ function App() {
   const composerBlocked = busy || (selectedTask ? composerIsBlocked(selectedTask.status) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const selectedModel = selectedTask?.model ?? '';
+  const canChangeModel = Boolean(selectedTask && (selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const latestConversationItem = conversation[conversation.length - 1];
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
     ? optimisticPrompt.time
@@ -268,7 +269,7 @@ function App() {
   }
 
   async function changeModel(value: string) {
-    if (!selectedTask || !boardId || selectedTask.status !== 'idle') return;
+    if (!selectedTask || !boardId || (selectedTask.status !== 'idle' && !terminalStatuses.has(selectedTask.status))) return;
     const [provider, ...rest] = value.split('/');
     const modelId = rest.join('/');
     if (!provider || !modelId) return;
@@ -366,7 +367,7 @@ function App() {
           <div className="task-header">
             <div className="task-title-block"><div className="task-title-line"><h1>{selectedTask.name}</h1><span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span></div><span className="workspace-path">{selectedTask.cwd}</span></div>
             <div className="task-actions">
-              <button className="icon-button" title="New side task from this context" onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={16} /></button>
+              <button className="secondary-button side-task-button" title={selectedTask.sessionFile ? 'Create an independent agent from this conversation' : 'Side Agent is available after the first response'} onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={15} />Side Agent</button>
               {terminalStatuses.has(selectedTask.status)
                 ? <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>
                 : <button className="secondary-button" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><CircleStop size={14} />Stop</button>}
@@ -405,7 +406,7 @@ function App() {
                 rows={2}
               />
               <div className="composer-footer">
-                <label className="model-picker" title={selectedTask.status === 'idle' ? 'Choose model' : 'Model can be changed when the task is ready'}><select value={selectedModel} disabled={busy || selectedTask.status !== 'idle'} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
+                <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={selectedModel} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
                 <span className="composer-state">{editingMessage !== null ? 'Creates a branch' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {['running', 'starting'].includes(selectedTask.status) && <button className="composer-stop" type="button" title="Stop agent" onClick={stopTask} disabled={busy}><SquareTerminal size={14} /></button>}
                 <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>
@@ -475,7 +476,10 @@ function ToolRow({tool}: {tool: ToolActivity}) {
 
 function MarkdownContent({value}: {value: string}) {
   return <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={{
-    a: ({node: _node, ...props}: any) => <a {...props} target="_blank" rel="noreferrer" />,
+    a: ({node: _node, href, ...props}: any) => <a {...props} href={href} onClick={(event) => {
+      event.preventDefault();
+      if (href) void api.openExternalURL(href);
+    }} />,
   }}>{value}</ReactMarkdown></div>;
 }
 

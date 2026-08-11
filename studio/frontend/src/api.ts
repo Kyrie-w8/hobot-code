@@ -34,7 +34,7 @@ const mockBackend: Backend = {
   ListBoards: async () => [mockBoard],
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
-  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.19.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 200}}),
+  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.19.1', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 200}}),
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
   GetTask: async (_board: string, taskId: string) => mockTasks.find((task) => task.id === taskId),
@@ -45,13 +45,18 @@ const mockBackend: Backend = {
   ResumeTask: async (_board: string, taskId: string) => ({...mockTasks.find((task) => task.id === taskId), status: 'starting'}),
   RestartTask: async (_board: string, taskId: string) => ({...mockTasks.find((task) => task.id === taskId), status: 'starting', sessionFile: undefined, sessionId: undefined}),
   SetTaskModel: async () => undefined,
-  ListModels: async (): Promise<ModelOption[]> => [{provider: 'drobotics', id: 'kimi-k3', name: 'kimi-k3'}],
+  ListModels: async (): Promise<ModelOption[]> => [
+    {provider: 'drobotics', id: 'kimi-k3', name: 'kimi-k3'},
+    {provider: 'drobotics', id: 'qwen3.8-max', name: 'qwen3.8-max'},
+    {provider: 'drobotics', id: 'glm-5.2', name: 'glm-5.2'},
+  ],
   BrowseWorkspace: async (_board: string, path: string): Promise<WorkspaceListing> => ({path: path || '/root', parent: path === '/root' || !path ? '/' : '/root', home: '/root', directories: [{name: 'models', path: '/root/models'}, {name: 'tros_ws', path: '/root/tros_ws'}, {name: 'yolo_bench_s100', path: '/root/yolo_bench_s100'}]}),
   CreateWorkspace: async (_board: string, parent: string, name: string): Promise<WorkspaceListing> => ({path: `${parent}/${name}`.replace('//', '/'), parent, home: '/root', directories: []}),
   ForkTask: async (_board: string, request: ForkTaskRequest) => ({...mockTasks[2], id: `task-${Date.now()}`, name: request.name || `${mockTasks[0].name}-side`, status: 'starting', parentTaskId: request.taskId, forkSequence: request.sequence, branchKind: request.kind}),
   RespondApproval: async () => undefined,
   WatchTask: async () => undefined,
   StopWatchingTask: async () => undefined,
+  OpenExternalURL: async (url: string) => { window.open(url, '_blank', 'noopener,noreferrer'); },
 };
 
 const backend = (): Backend => window.go?.main?.App ?? mockBackend;
@@ -79,6 +84,7 @@ export const api = {
   respond: (boardId: string, taskId: string, approvalId: string, response: Record<string, unknown>) => backend().RespondApproval(boardId, taskId, approvalId, response),
   watch: (boardId: string, taskId: string, after: number) => backend().WatchTask(boardId, taskId, after),
   stopWatch: (boardId: string, taskId: string) => backend().StopWatchingTask(boardId, taskId),
+  openExternalURL: (url: string) => backend().OpenExternalURL(url),
   onEvent: (callback: (envelope: EventEnvelope) => void) => window.runtime?.EventsOn?.('task:event', callback) ?? (() => undefined),
   onWatchError: (callback: (error: {boardId: string; taskId: string; error: string}) => void) => window.runtime?.EventsOn?.('task:watch-error', callback) ?? (() => undefined),
 };

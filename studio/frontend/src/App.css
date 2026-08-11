@@ -229,6 +229,7 @@ button:disabled { opacity: 0.42; cursor: default; }
 .primary-button:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
 .secondary-button { border: 1px solid var(--line-strong); background: var(--surface); color: var(--text-soft); }
 .secondary-button:hover { border-color: #5a5a57; background: var(--surface-hover); color: var(--text); }
+.side-task-button { min-width: 96px; }
 
 .conversation { min-height: 0; overflow: auto; scroll-behavior: smooth; }
 .conversation-inner { width: min(100%, 820px); min-height: 100%; margin: 0 auto; padding: 38px 36px 52px; }

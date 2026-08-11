@@ -261,6 +261,45 @@ func TestWorkerCommandValidation(t *testing.T) {
 	waitForStatus(t, current, statusStopped)
 }
 
+func TestStoppedTaskModelChangePersistsForResume(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.start(startTaskParams{Name: "model-change", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := manager.get(metadata.ID)
+	waitForStatus(t, current, statusIdle)
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+	updated, err := manager.setModel(setTaskModelParams{TaskID: metadata.ID, Provider: "drobotics", ModelID: "glm-5.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Model != "drobotics/glm-5.2" {
+		t.Fatalf("updated model = %q", updated.Model)
+	}
+	recovered, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := recovered.get(metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.snapshot().Model != "drobotics/glm-5.2" {
+		t.Fatalf("persisted model = %q", loaded.snapshot().Model)
+	}
+	if _, err := manager.setModel(setTaskModelParams{TaskID: metadata.ID, Provider: "bad/provider", ModelID: "model"}); err == nil {
+		t.Fatal("invalid model provider was accepted")
+	}
+}
+
 func TestTaskRestartWithoutSession(t *testing.T) {
 	cfg := testConfig(t)
 	manager, err := newTaskManager(cfg)

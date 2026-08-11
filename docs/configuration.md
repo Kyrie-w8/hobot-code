@@ -15,7 +15,7 @@ Hobot Code 沿用 Pi 的配置机制，并使用独立的用户配置与状态�
 
 安装器和启动器只在配置文件缺失时写入默认值，不覆盖已有用户设置。默认创建的用户配置文件权限为 `0600`；用户应持续保持该权限，并避免把配置目录暴露给其他账号。
 
-## D-Robotics Kimi
+## D-Robotics 模型
 
 编辑 `~/.config/hobot-code/hobot.env`：
 
@@ -28,7 +28,7 @@ HOBOT_CODE_MODEL_CONTEXT_WINDOW=1000000
 HOBOT_CODE_MODEL_MAX_TOKENS=8192
 ```
 
-Hobot Code 默认选择 `drobotics/kimi-k3`，thinking 等级为 `max`。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
+Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max` 和 `drobotics/glm-5.2`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除另外两个内置模型。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
 
 D-Robotics Provider 优先发起 Anthropic SSE 请求并实时转发 thinking、文本、工具参数和 usage。端点明确不支持流式格式或返回普通 JSON 时，会回退到有字节上限的缓冲读取。
 

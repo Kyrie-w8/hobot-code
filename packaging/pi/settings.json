@@ -27,7 +27,9 @@
   },
   "httpIdleTimeoutMs": 3000000,
   "enabledModels": [
-    "drobotics/kimi-k3"
+    "drobotics/kimi-k3",
+    "drobotics/qwen3.8-max",
+    "drobotics/glm-5.2"
   ],
   "extensions": [
     "/usr/local/lib/hobot-code/extensions"

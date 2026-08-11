@@ -54,6 +54,7 @@ import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = "kimi-k3";
+const BUILTIN_DROBOTICS_MODELS = [DEFAULT_MODEL, "qwen3.8-max", "glm-5.2"] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
 
@@ -662,6 +663,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   resolveUserPaths();
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_DROBOTICS_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+  const modelIds = [...new Set([modelId, ...BUILTIN_DROBOTICS_MODELS])];
   const runningAsRoot = process.getuid?.() === 0;
   const configuredContextWindow = Number(process.env.HOBOT_CODE_MODEL_CONTEXT_WINDOW || 1_000_000);
   const configuredMaxTokens = Number(process.env.HOBOT_CODE_MODEL_MAX_TOKENS || 8192);
@@ -977,10 +979,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
     apiKey: "$ANTHROPIC_AUTH_TOKEN",
     api: "drobotics-anthropic",
     streamSimple: streamDrobotics,
-    models: [
-      {
-        id: modelId,
-        name: `${modelId} (D-Robotics)`,
+    models: modelIds.map((id) => ({
+        id,
+        name: `${id} (D-Robotics)`,
         reasoning: true,
         thinkingLevelMap: {
           xhigh: "xhigh",
@@ -990,8 +991,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         contextWindow,
         maxTokens,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
+      })),
   });
 
   pi.registerTool({

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.1
+
+- Make Studio reply links open safely in the Mac default browser instead of disappearing inside the embedded WebView.
+- Replace the hidden branch icon with an explicit Side Agent action that explains when a settled context is required.
+- Allow idle and stopped Studio tasks to select a model, persisting terminal-task choices for the next resume while keeping in-flight turns immutable.
+- Add D-Robotics Qwen 3.8 Max and GLM 5.2 alongside Kimi K3 in the built-in provider and default model scope.
+
 ## 0.19.0
 
 - Rework Hobot Studio around project-grouped navigation, nested conversation branches, softer macOS-native visual hierarchy, and unlabeled user/Agent messages.

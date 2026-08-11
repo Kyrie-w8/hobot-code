@@ -60,13 +60,14 @@
 | `task.resume` | `{taskId, prompt?}` | 重新打开已校验的 Pi session，可选发送新 Prompt |
 | `task.restart` | `{taskId, prompt}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
 | `task.fork` | `{taskId, sequence?, prompt, name?, kind, model?}` | 从已稳定上下文或指定用户消息之前创建独立任务分支 |
+| `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为终态任务持久化下次 Resume 使用的模型 |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
 | `task.approvals` | `{taskId}` | 有界待审批队列，包含活跃和已失效项 |
 | `task.stop` | `{taskId}` | 终止 worker 进程组 |
 | `task.events` | `{taskId, after?, limit?}` | 按序号读取最多 1000 条持久事件 |
 | `task.subscribe` | `{taskId, after?, follow?}` | 先重放 `sequence > after` 的事件，再按需跟随 |
 
-`task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。`set_model` 只在 worker 处于 `idle` 时接受，并要求显式的 `provider` 和 `modelId`。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果仍在板端 worker 内判定，客户端无法绕过。
+`task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。客户端应使用 `task.model` 切换模型：活动 worker 只在 `idle` 时接受，`stopped`、`failed` 和 `interrupted` 任务会将选择写入元数据并在下次 Resume/Restart 生效。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果仍在板端 worker 内判定，客户端无法绕过。
 
 ## 任务状态
 

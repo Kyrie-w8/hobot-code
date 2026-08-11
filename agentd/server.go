@@ -292,6 +292,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, map[string]bool{"accepted": true}))
+	case "task.model":
+		var params setTaskModelParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.setModel(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_model_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
 	case "task.approvals":
 		var params taskIDParams
 		if err := decodeParams(req.Params, &params); err != nil {

@@ -11,7 +11,7 @@ Hobot Code 不维护 Pi 的叉路 TUI。终端交互来自固定版本的 Pi，�
 - **原生终端体验**：流式 thinking、工具调用、会话恢复、分支、压缩和快捷键。
 - **RDK 实机上下文**：按需读取型号、RDK OS、温度、内存、BPU 设备和工具状态。
 - **版本化板卡知识**：按 X5 3.x、S100 4.x、S600 5.x 路由 27 个专业主题，并在每篇资料中保留官方来源与核对日期。
-- **开放模型接入**：内置 D-Robotics Kimi 网关适配，也兼容 Pi 的 Provider、`models.json` 和 `/login`。
+- **开放模型接入**：内置 D-Robotics Kimi K3、Qwen 3.8 Max 和 GLM 5.2 网关适配，也兼容 Pi 的 Provider、`models.json` 和 `/login`。
 - **可组合扩展**：继续使用 Pi packages、extensions、MCP、Skills、Prompt templates 和 themes。
 - **工程保障**：工具权限、质量门、Hook、资源受限 LSP、持久记忆和持久目标。
 - **并行协作**：`/btw` 在右侧窗格启动独立、多轮、临时的侧边 Agent。
@@ -60,7 +60,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.19.0
+  | sh -s -- --version 0.19.1
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -82,7 +82,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 
-消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；中文输入法确认候选词时不会误触发发送。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。
+消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；中文输入法确认候选词时不会误触发发送。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支。输入框底部可以在任务 Ready 或停止后切换模型；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
 目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。权限文件会在每次工具调用前重新读取，因此设置会立即同步到同一用户已打开的其他会话。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
@@ -96,6 +96,8 @@ ANTHROPIC_AUTH_TOKEN=your-token
 ANTHROPIC_MODEL=kimi-k3
 API_TIMEOUT_MS=3000000
 ```
+
+内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max` 和 `drobotics/glm-5.2`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
 
 安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。D-Robotics Provider 优先请求 Anthropic SSE 流；若端点明确不支持流式格式或返回普通 JSON，则回退到有大小上限的缓冲响应。
 
@@ -225,7 +227,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.19.0
+hobot update --version 0.19.1
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：
