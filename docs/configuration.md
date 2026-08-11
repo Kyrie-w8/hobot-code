@@ -92,6 +92,8 @@ hobot update --extensions
 | `HOBOT_CODE_CONFIG_DIR` | `${XDG_CONFIG_HOME:-$HOME/.config}/hobot-code`；仅限启动前设置 |
 | `HOBOT_CODE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/hobot-code` |
 | `HOBOT_CODE_AGENTD_SOCKET` | 当前用户 agentd 的绝对 Unix socket 路径 |
+| `HOBOT_CODE_MAX_BACKGROUND_TASKS` | 同时活跃的后台 Agent 数，取值 `1..8`，默认 `2` |
+| `HOBOT_CODE_MAX_RETAINED_TASKS` | 当前用户可保留的任务总数，取值 `10..1000`，默认 `200` |
 | `HOBOT_CODE_MAX_BACKGROUND_TASKS` | 同一用户后台任务上限，默认 2，有效范围 1..8 |
 | `HOBOT_CODING_AGENT_DIR` | `<config-root>/agent` |
 | `HOBOT_CODING_AGENT_SESSION_DIR` | `<state-root>/sessions` |
@@ -241,10 +243,19 @@ hobot task attach TASK_ID [--after SEQUENCE]
 hobot task send TASK_ID PROMPT
 hobot task abort TASK_ID
 hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
+hobot task approvals TASK_ID
+hobot task resume TASK_ID [PROMPT]
+hobot task rename TASK_ID NAME
+hobot task archive TASK_ID
+hobot task unarchive TASK_ID
+hobot task list --all
+hobot task delete TASK_ID --yes
 hobot task stop TASK_ID
 ```
 
-`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。`attach` 会先重放已持久化事件再跟随实时输出；失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务只恢复元数据并标记为 `interrupted`，不会重放工具调用。完整接口见 [agentd 协议](agentd-protocol.md)。
+`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。`attach` 会先重放已持久化事件再跟随实时输出；失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务标记为 `interrupted`；`resume` 从已校验的 Pi session 续接对话，但不重放中断的 Prompt、审批或工具调用。归档任务从普通 `list` 中隐藏，但可用 `list --all` 查看；只有已停止且已归档的任务才能显式删除。完整接口见 [agentd 协议](agentd-protocol.md)。
+
+桌面客户端应在 SSH 连接上运行 `hobot bridge --stdio`。控制请求和长时订阅各使用一个 bridge 进程；每行是一个 agentd JSON 请求。桥接只转发到当前用户的 Unix socket，不替代板端权限判定。
 
 需要保留完整 TUI、编辑区和侧边 Agent 时，继续使用 `hobot persistent`：
 

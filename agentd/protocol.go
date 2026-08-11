@@ -7,10 +7,23 @@ import (
 )
 
 const (
-	protocolVersion = 1
-	maxRequestBytes = 2 * 1024 * 1024
-	maxPromptBytes  = 256 * 1024
+	protocolVersion     = 1
+	eventSchemaVersion  = 2
+	maxRequestBytes     = 2 * 1024 * 1024
+	maxEventRecordBytes = 4*1024*1024 + 64*1024
+	maxResponseBytes    = 8 * 1024 * 1024
+	maxPromptBytes      = 256 * 1024
 )
+
+var protocolCapabilities = []string{
+	"events.normalized.v2",
+	"approvals.list",
+	"tasks.lifecycle",
+	"tasks.page",
+	"events.page",
+	"tasks.resume",
+	"bridge.stdio",
+}
 
 type request struct {
 	Protocol int             `json:"protocol"`
@@ -33,12 +46,31 @@ type protocolError struct {
 }
 
 type taskEvent struct {
-	Protocol int             `json:"protocol"`
-	Kind     string          `json:"kind"`
-	TaskID   string          `json:"taskId"`
-	Sequence uint64          `json:"sequence"`
-	Time     time.Time       `json:"time"`
-	Event    json.RawMessage `json:"event"`
+	Protocol   int              `json:"protocol"`
+	Kind       string           `json:"kind"`
+	TaskID     string           `json:"taskId"`
+	Sequence   uint64           `json:"sequence"`
+	Time       time.Time        `json:"time"`
+	Event      json.RawMessage  `json:"event"`
+	Normalized *normalizedEvent `json:"normalized,omitempty"`
+}
+
+type normalizedEvent struct {
+	Schema int            `json:"schema"`
+	Type   string         `json:"type"`
+	Data   map[string]any `json:"data,omitempty"`
+}
+
+type capabilityInfo struct {
+	ProtocolMin     int      `json:"protocolMin"`
+	ProtocolMax     int      `json:"protocolMax"`
+	EventSchema     int      `json:"eventSchema"`
+	Capabilities    []string `json:"capabilities"`
+	MaximumRequest  int      `json:"maximumRequestBytes"`
+	MaximumResponse int      `json:"maximumResponseBytes"`
+	MaximumPrompt   int      `json:"maximumPromptBytes"`
+	MaximumTasks    int      `json:"maximumActiveTasks"`
+	MaximumRetained int      `json:"maximumRetainedTasks"`
 }
 
 func success(id string, result any) response {

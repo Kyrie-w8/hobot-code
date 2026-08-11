@@ -47,7 +47,7 @@ flowchart LR
 
 CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取。每个用户默认最多两个后台任务，事件和 stderr 均有硬上限。
 
-daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但活动任务只会标记为 `interrupted`。系统不会自动重放 Prompt、审批或工具调用，以免重复产生文件、进程和硬件副作用。协议细节见 [agentd 协议](agentd-protocol.md)。
+daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但活动任务只会标记为 `interrupted`。系统不会自动重放 Prompt、审批或工具调用，以免重复产生文件、进程和硬件副作用。用户可显式从已校验的 Pi session 恢复同一对话；新客户端通过 SSH 上的 stdio bridge 消费稳定的 Hobot 事件 schema，不直接依赖 Pi 内部事件。协议细节见 [agentd 协议](agentd-protocol.md)。
 
 `runtime/hobot` 是按版本与 SHA256 固定的 Pi Linux ARM64 standalone 二进制。它读取同目录的产品配置，由 Pi 生成标题、帮助、配置路径、会话 UI 和快捷键。Hobot Code 不复制或修改 Pi 的 TUI 组件、消息队列与会话树实现。
 

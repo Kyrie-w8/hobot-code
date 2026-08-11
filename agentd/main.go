@@ -20,14 +20,20 @@ func usage() {
 Usage:
   hobot daemon start|status
   hobot daemon stop|restart [--force]
+  hobot bridge --stdio
   hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
-  hobot task list
+  hobot task list [--all]
   hobot task show TASK_ID
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
   hobot task attach TASK_ID [--after SEQUENCE]
   hobot task send TASK_ID PROMPT
   hobot task abort TASK_ID
   hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
+  hobot task approvals TASK_ID
+  hobot task resume TASK_ID [PROMPT]
+  hobot task rename TASK_ID NAME
+  hobot task archive|unarchive TASK_ID
+  hobot task delete TASK_ID --yes
   hobot task stop TASK_ID`)
 }
 
@@ -54,6 +60,11 @@ func run(args []string) error {
 		return runDaemonCLI(cfg, args[1:])
 	case "task":
 		return runTaskCLI(cfg, args[1:])
+	case "bridge":
+		if len(args) != 2 || args[1] != "--stdio" {
+			return fmt.Errorf("usage: hobot bridge --stdio")
+		}
+		return runStdioBridge(cfg)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return nil
@@ -180,10 +191,11 @@ func runTaskCLI(cfg config, args []string) error {
 	case "start":
 		return runTaskStart(client, args[1:])
 	case "list":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: hobot task list")
+		includeArchived := len(args) == 2 && args[1] == "--all"
+		if len(args) > 2 || (len(args) == 2 && !includeArchived) {
+			return fmt.Errorf("usage: hobot task list [--all]")
 		}
-		return taskList(client)
+		return taskList(client, includeArchived)
 	case "show":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: hobot task show TASK_ID")
@@ -215,6 +227,51 @@ func runTaskCLI(cfg config, args []string) error {
 		return protocolCommand(client, args[1], workerCommand("abort", nil))
 	case "respond":
 		return runTaskRespond(client, args[1:])
+	case "approvals":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: hobot task approvals TASK_ID")
+		}
+		result, err := client.call("task.approvals", taskIDParams{TaskID: args[1]})
+		if err != nil {
+			return err
+		}
+		var approvals []pendingApproval
+		if err := json.Unmarshal(result, &approvals); err != nil {
+			return err
+		}
+		return printJSON(approvals)
+	case "resume":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: hobot task resume TASK_ID [PROMPT]")
+		}
+		result, err := client.call("task.resume", resumeTaskParams{TaskID: args[1], Prompt: strings.Join(args[2:], " ")})
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		fmt.Printf("Resumed background task %s (%s).\n", metadata.ID, metadata.Name)
+		return nil
+	case "rename":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task rename TASK_ID NAME")
+		}
+		_, err := client.call("task.rename", renameTaskParams{TaskID: args[1], Name: args[2]})
+		return err
+	case "archive", "unarchive":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: hobot task %s TASK_ID", args[0])
+		}
+		_, err := client.call("task.archive", archiveTaskParams{TaskID: args[1], Archive: args[0] == "archive"})
+		return err
+	case "delete":
+		if len(args) != 3 || args[2] != "--yes" {
+			return fmt.Errorf("usage: hobot task delete TASK_ID --yes")
+		}
+		_, err := client.call("task.delete", taskIDParams{TaskID: args[1]})
+		return err
 	case "stop":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: hobot task stop TASK_ID")
@@ -292,7 +349,32 @@ func runTaskLogs(client daemonClient, command string, args []string) error {
 			return fmt.Errorf("unknown task log option: %s", args[index])
 		}
 	}
+	if command == "logs" && !follow {
+		return replayEventPage(client, taskID, after, 200)
+	}
 	return client.subscribe(taskID, after, follow, command == "attach")
+}
+
+func replayEventPage(client daemonClient, taskID string, after uint64, limit int) error {
+	result, err := client.call("task.events", eventPageParams{TaskID: taskID, After: after, Limit: limit})
+	if err != nil {
+		return err
+	}
+	var page eventPage
+	if err := json.Unmarshal(result, &page); err != nil {
+		return err
+	}
+	for _, event := range page.Events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(encoded))
+	}
+	if page.HasMore {
+		fmt.Fprintf(os.Stderr, "More events are available; continue with --after %d.\n", page.NextAfter)
+	}
+	return nil
 }
 
 func runTaskRespond(client daemonClient, args []string) error {

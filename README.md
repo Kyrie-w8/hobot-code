@@ -59,7 +59,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.15.0
+  | sh -s -- --version 0.16.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -152,10 +152,18 @@ hobot task attach <task-id>                 # 重放历史并持续查看输出
 hobot task send <task-id> "继续处理下一项"  # 同一 Agent 多轮续接
 hobot task abort <task-id>                  # 中断当前一轮，保留 worker
 hobot task respond <task-id> <request-id> yes
+hobot task approvals <task-id>              # 查看待处理或已失效的审批
+hobot task resume <task-id> ["继续任务"]     # 从已落盘的 Pi 对话显式恢复
+hobot task rename <task-id> build-rdk
+hobot task archive <task-id>
+hobot task list --all
+hobot task delete <task-id> --yes            # 必须先停止并归档
 hobot task stop <task-id>
 ```
 
-首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多并行两个后台任务；板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`，且不会自动重放可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
+首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多并行两个后台任务；板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`。此时 `resume` 只会重新打开同一 Pi 对话，不会自动重放 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
+
+未来的 Hobot Studio 通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。
 
 脚本化调用沿用 Pi：
 
@@ -205,7 +213,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.15.0
+hobot update --version 0.16.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

@@ -118,7 +118,7 @@ func startDaemon(cfg config) error {
 }
 
 func readClientLine(reader io.Reader) ([]byte, error) {
-	return readBoundedLine(reader, maxRequestBytes+1024)
+	return readBoundedLine(reader, maxResponseBytes)
 }
 
 func (client daemonClient) subscribe(taskID string, after uint64, follow, human bool) error {
@@ -136,7 +136,7 @@ func (client daemonClient) subscribe(taskID string, after uint64, follow, human 
 		return err
 	}
 	scanner := bufio.NewScanner(connection)
-	scanner.Buffer(make([]byte, 64*1024), maxRequestBytes+1024)
+	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
 	first := true
 	renderer := humanEventRenderer{}
 	for scanner.Scan() {
@@ -259,22 +259,34 @@ func printJSON(value any) error {
 	return nil
 }
 
-func taskList(client daemonClient) error {
-	result, err := client.call("task.list", nil)
+func taskList(client daemonClient, includeArchived bool) error {
+	var result json.RawMessage
+	var err error
+	if includeArchived {
+		result, err = client.call("task.page", pageTaskParams{Limit: 200, IncludeArchived: true})
+	} else {
+		result, err = client.call("task.list", nil)
+	}
 	if err != nil {
 		return err
 	}
 	var tasks []taskMetadata
-	if err := json.Unmarshal(result, &tasks); err != nil {
+	if includeArchived {
+		var page taskPage
+		if err := json.Unmarshal(result, &page); err != nil {
+			return err
+		}
+		tasks = page.Tasks
+	} else if err := json.Unmarshal(result, &tasks); err != nil {
 		return err
 	}
 	if len(tasks) == 0 {
 		fmt.Println("No background Hobot Code tasks.")
 		return nil
 	}
-	fmt.Println("ID\tSTATUS\tPID\tNAME\tWORKSPACE")
+	fmt.Println("ID\tSTATUS\tPID\tARCHIVED\tNAME\tWORKSPACE")
 	for _, current := range tasks {
-		fmt.Printf("%s\t%s\t%d\t%s\t%s\n", current.ID, current.Status, current.PID, current.Name, current.Cwd)
+		fmt.Printf("%s\t%s\t%d\t%t\t%s\t%s\n", current.ID, current.Status, current.PID, current.ArchivedAt != nil, current.Name, current.Cwd)
 	}
 	return nil
 }
@@ -287,4 +299,57 @@ func protocolCommand(client daemonClient, taskID string, command json.RawMessage
 func isConnectionFailure(err error) bool {
 	var operation *net.OpError
 	return errors.As(err, &operation) || strings.Contains(err.Error(), "no such file or directory")
+}
+
+func runStdioBridge(cfg config) error {
+	return bridgeStreams(cfg, os.Stdin, os.Stdout)
+}
+
+func bridgeStreams(cfg config, input io.Reader, output io.Writer) error {
+	client := daemonClient{cfg: cfg}
+	if err := client.ensureStarted(); err != nil {
+		return err
+	}
+	reader := bufio.NewReaderSize(input, 64*1024)
+	for {
+		line, err := readBoundedRecord(reader, maxRequestBytes)
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !json.Valid(line) {
+			return fmt.Errorf("bridge input must be one valid JSON object per line")
+		}
+		connection, err := net.DialTimeout("unix", cfg.SocketPath, time.Second)
+		if err != nil {
+			return err
+		}
+		if err := writeAll(connection, append(append([]byte(nil), line...), '\n')); err != nil {
+			_ = connection.Close()
+			return err
+		}
+		if _, err := io.Copy(output, connection); err != nil {
+			_ = connection.Close()
+			return err
+		}
+		if err := connection.Close(); err != nil {
+			return err
+		}
+	}
+}
+
+func writeAll(writer io.Writer, value []byte) error {
+	for len(value) > 0 {
+		written, err := writer.Write(value)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		value = value[written:]
+	}
+	return nil
 }

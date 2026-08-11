@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.0
+
+- Add capability negotiation and schema-2 normalized Hobot events while preserving protocol-1 envelopes and raw Pi RPC events for compatibility.
+- Persist bounded approval requests, expose pending-approval recovery, and record normalized approval lifecycle events without moving permission decisions off the board.
+- Bind background tasks to Pi session files and add explicit, side-effect-safe task resume after daemon or board interruption without replaying prompts, approvals, or tool calls.
+- Add task rename, archive, unarchive, guarded deletion, task/event pagination, and configurable retained-task limits.
+- Add `hobot bridge --stdio` for authenticated SSH transport to future desktop clients without opening a TCP listener or exporting model credentials.
+- Fix a worker shutdown race that could misclassify an explicitly stopped task as failed when its RPC pipe closed.
+
 ## 0.15.0
 
 - Add the per-user Go `agentd` control plane for background, multi-turn Pi RPC tasks that survive CLI and SSH client disconnects.

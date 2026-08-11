@@ -24,15 +24,16 @@ type daemonServer struct {
 }
 
 type daemonInfo struct {
-	Version         string    `json:"version"`
-	Protocol        int       `json:"protocol"`
-	PID             int       `json:"pid"`
-	StartedAt       time.Time `json:"startedAt"`
-	ActiveTasks     int       `json:"activeTasks"`
-	MaximumTasks    int       `json:"maximumTasks"`
-	SocketPath      string    `json:"socketPath"`
-	StateRoot       string    `json:"stateRoot"`
-	BackgroundTasks bool      `json:"backgroundTasks"`
+	Version         string         `json:"version"`
+	Protocol        int            `json:"protocol"`
+	PID             int            `json:"pid"`
+	StartedAt       time.Time      `json:"startedAt"`
+	ActiveTasks     int            `json:"activeTasks"`
+	MaximumTasks    int            `json:"maximumTasks"`
+	SocketPath      string         `json:"socketPath"`
+	StateRoot       string         `json:"stateRoot"`
+	BackgroundTasks bool           `json:"backgroundTasks"`
+	Capabilities    capabilityInfo `json:"capabilities"`
 }
 
 func newDaemonServer(cfg config) (*daemonServer, error) {
@@ -46,10 +47,21 @@ func newDaemonServer(cfg config) (*daemonServer, error) {
 }
 
 func (server *daemonServer) info() daemonInfo {
+	capabilities := server.capabilities()
 	return daemonInfo{
 		Version: version, Protocol: protocolVersion, PID: os.Getpid(), StartedAt: server.started,
 		ActiveTasks: server.manager.activeCount(), MaximumTasks: server.cfg.MaxTasks,
 		SocketPath: server.cfg.SocketPath, StateRoot: server.cfg.StateRoot, BackgroundTasks: true,
+		Capabilities: capabilities,
+	}
+}
+
+func (server *daemonServer) capabilities() capabilityInfo {
+	return capabilityInfo{
+		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion, EventSchema: eventSchemaVersion,
+		Capabilities: append([]string(nil), protocolCapabilities...), MaximumRequest: maxRequestBytes,
+		MaximumResponse: maxResponseBytes, MaximumPrompt: maxPromptBytes, MaximumTasks: server.cfg.MaxTasks,
+		MaximumRetained: server.cfg.MaxRetainedTasks,
 	}
 }
 
@@ -168,6 +180,12 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, server.info()))
+	case "capabilities":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, server.capabilities()))
 	case "daemon.shutdown":
 		var params struct {
 			Force bool `json:"force,omitempty"`
@@ -200,6 +218,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, server.manager.list()))
+	case "task.page":
+		var params pageTaskParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		page, err := server.manager.page(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_page_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, page))
 	case "task.get":
 		var params taskIDParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -227,6 +257,65 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, map[string]bool{"accepted": true}))
+	case "task.approvals":
+		var params taskIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, current.snapshot().Approvals))
+	case "task.resume":
+		var params resumeTaskParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.resume(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_resume_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.rename":
+		var params renameTaskParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.rename(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_rename_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.archive":
+		var params archiveTaskParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.archive(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_archive_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.delete":
+		var params taskIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		if err := server.manager.delete(params.TaskID); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_delete_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, map[string]bool{"deleted": true}))
 	case "task.stop":
 		var params taskIDParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -244,6 +333,26 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		_ = writeJSON(connection, success(req.ID, map[string]bool{"stopping": true}))
 	case "task.subscribe":
 		server.subscribe(connection, req)
+	case "task.events":
+		var params eventPageParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
+			return
+		}
+		if params.Limit == 0 {
+			params.Limit = 200
+		}
+		page, err := current.eventPage(params.After, params.Limit)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "event_log_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, page))
 	default:
 		_ = writeJSON(connection, failure(req.ID, "method_not_found", fmt.Errorf("unknown method: %s", req.Method)))
 	}
@@ -285,7 +394,10 @@ func (server *daemonServer) subscribe(connection *net.UnixConn, req request) {
 }
 
 func readBoundedLine(reader io.Reader, maximum int) ([]byte, error) {
-	buffered := bufio.NewReaderSize(reader, 64*1024)
+	return readBoundedRecord(bufio.NewReaderSize(reader, 64*1024), maximum)
+}
+
+func readBoundedRecord(buffered *bufio.Reader, maximum int) ([]byte, error) {
 	var result bytes.Buffer
 	for {
 		fragment, prefix, err := buffered.ReadLine()

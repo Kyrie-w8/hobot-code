@@ -27,7 +27,7 @@ func testConfig(t *testing.T) config {
 		TasksRoot: filepath.Join(root, "agentd", "tasks"), SessionDir: filepath.Join(root, "sessions"),
 		SocketPath: filepath.Join(socketRoot, "agentd.sock"), PIDPath: filepath.Join(root, "agentd", "agentd.pid"),
 		LogPath: filepath.Join(root, "agentd", "agentd.log"), AgentBinary: worker,
-		MaxTasks: 1, MaxEventSize: 1024 * 1024,
+		MaxTasks: 1, MaxRetainedTasks: 20, MaxEventSize: 1024 * 1024,
 	}
 	if err := preparePaths(cfg); err != nil {
 		t.Fatal(err)
@@ -137,6 +137,21 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	info, err := os.Stat(cfg.SocketPath)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("socket permissions: info=%v err=%v", info, err)
+	}
+	ping, err := client.ping()
+	if err != nil || ping.Capabilities.EventSchema != eventSchemaVersion || len(ping.Capabilities.Capabilities) == 0 {
+		t.Fatalf("capability negotiation failed: info=%+v err=%v", ping, err)
+	}
+	bridgeInput := bytes.NewBufferString(
+		`{"protocol":1,"id":"bridge-1","method":"capabilities","params":{}}` + "\n" +
+			`{"protocol":1,"id":"bridge-2","method":"ping","params":{}}` + "\n",
+	)
+	var bridgeOutput bytes.Buffer
+	if err := bridgeStreams(cfg, bridgeInput, &bridgeOutput); err != nil {
+		t.Fatalf("stdio bridge failed: %v", err)
+	}
+	if bytes.Count(bridgeOutput.Bytes(), []byte{'\n'}) != 2 || !bytes.Contains(bridgeOutput.Bytes(), []byte(`"id":"bridge-2"`)) {
+		t.Fatalf("unexpected bridge output: %s", bridgeOutput.String())
 	}
 	result, err := client.call("task.start", startTaskParams{Name: "rpc", Cwd: cfg.StateRoot, Prompt: "test"})
 	if err != nil {
@@ -271,5 +286,112 @@ func TestRecoveryRejectsSymlinkedState(t *testing.T) {
 	}
 	if _, err := manager.get(id); err == nil {
 		t.Fatal("expected symlinked metadata to be ignored during recovery")
+	}
+}
+
+func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.start(startTaskParams{Name: "resumable", Cwd: cfg.StateRoot, Prompt: "approval-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := manager.get(metadata.ID)
+	waitForStatus(t, current, statusWaiting)
+	state := current.snapshot()
+	if state.SessionFile == "" || state.SessionID != "fake-session" {
+		t.Fatalf("session binding was not persisted: %+v", state)
+	}
+	if len(state.Approvals) != 1 || !state.Approvals[0].Active {
+		t.Fatalf("pending approval was not persisted: %+v", state.Approvals)
+	}
+	if err := current.sendCommand(json.RawMessage(`{"type":"extension_ui_response","id":"approval-1","confirmed":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusIdle)
+	events, _, cancel, err := current.subscribe(0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	foundThinkingOrText := false
+	foundApproval := false
+	foundResolved := false
+	for _, event := range events {
+		if event.Normalized == nil || event.Normalized.Schema != eventSchemaVersion {
+			continue
+		}
+		switch event.Normalized.Type {
+		case "assistant.text.delta":
+			foundThinkingOrText = true
+		case "approval.requested":
+			foundApproval = true
+		case "approval.resolved":
+			foundResolved = true
+		}
+	}
+	if !foundApproval || !foundResolved {
+		t.Fatalf("normalized approval lifecycle missing: requested=%v resolved=%v", foundApproval, foundResolved)
+	}
+	page, err := readEventPage(current.events, metadata.ID, 0, 2)
+	if err != nil || len(page.Events) != 2 || !page.HasMore || page.NextAfter != page.Events[1].Sequence {
+		t.Fatalf("unexpected event page: page=%+v err=%v", page, err)
+	}
+	_ = foundThinkingOrText
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+	resumed, err := manager.resume(resumeTaskParams{TaskID: metadata.ID, Prompt: "continued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.ResumeCount != 1 {
+		t.Fatalf("unexpected resume count: %+v", resumed)
+	}
+	waitForStatus(t, current, statusIdle)
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+}
+
+func TestTaskLifecycleManagementAndPagination(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.start(startTaskParams{Name: "managed", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := manager.get(metadata.ID)
+	waitForStatus(t, current, statusIdle)
+	if _, err := manager.rename(renameTaskParams{TaskID: metadata.ID, Name: "renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+	if _, err := manager.archive(archiveTaskParams{TaskID: metadata.ID, Archive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.list()) != 0 {
+		t.Fatal("archived task should be hidden from the compatibility list")
+	}
+	page, err := manager.page(pageTaskParams{Limit: 1, IncludeArchived: true})
+	if err != nil || len(page.Tasks) != 1 || page.Tasks[0].Name != "renamed" {
+		t.Fatalf("unexpected task page: page=%+v err=%v", page, err)
+	}
+	if err := manager.delete(metadata.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.get(metadata.ID); err == nil {
+		t.Fatal("deleted task remained registered")
 	}
 }

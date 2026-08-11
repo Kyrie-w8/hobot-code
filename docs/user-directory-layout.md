@@ -43,7 +43,7 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 | `goals/goals.db` | 持久目标状态和事件 |
 | `audit/hooks.jsonl` | 脱敏后的 Hook 审计 |
 | `agentd/agentd.log`、`agentd/agentd.pid` | 当前用户后台服务日志与 PID |
-| `agentd/tasks/<task-id>/metadata.json` | 后台任务状态、工作目录和事件序号 |
+| `agentd/tasks/<task-id>/metadata.json` | 后台任务状态、Pi session 绑定、归档信息、有界审批和事件序号 |
 | `agentd/tasks/<task-id>/events.jsonl` | 可按序号重放的 Pi RPC 事件 |
 | `agentd/tasks/<task-id>/worker.stderr.log` | 有大小上限的 worker 诊断输出 |
 | `legacy-sessions` | 从旧系统布局归档、不再作为活动会话加载的历史会话 |

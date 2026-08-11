@@ -37,16 +37,22 @@ var taskNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 var taskIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
 
 type taskMetadata struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Cwd          string     `json:"cwd"`
-	Status       taskStatus `json:"status"`
-	PID          int        `json:"pid,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
-	LastSequence uint64     `json:"lastSequence"`
-	LogTruncated bool       `json:"logTruncated,omitempty"`
-	LastError    string     `json:"lastError,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Cwd          string            `json:"cwd"`
+	Status       taskStatus        `json:"status"`
+	PID          int               `json:"pid,omitempty"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+	LastSequence uint64            `json:"lastSequence"`
+	LogTruncated bool              `json:"logTruncated,omitempty"`
+	LastError    string            `json:"lastError,omitempty"`
+	SessionFile  string            `json:"sessionFile,omitempty"`
+	SessionID    string            `json:"sessionId,omitempty"`
+	Approved     bool              `json:"approved,omitempty"`
+	ResumeCount  int               `json:"resumeCount,omitempty"`
+	ArchivedAt   *time.Time        `json:"archivedAt,omitempty"`
+	Approvals    []pendingApproval `json:"pendingApprovals,omitempty"`
 }
 
 type task struct {
@@ -81,6 +87,32 @@ type startTaskParams struct {
 	Approve bool   `json:"approve,omitempty"`
 }
 
+type resumeTaskParams struct {
+	TaskID string `json:"taskId"`
+	Prompt string `json:"prompt,omitempty"`
+}
+
+type renameTaskParams struct {
+	TaskID string `json:"taskId"`
+	Name   string `json:"name"`
+}
+
+type archiveTaskParams struct {
+	TaskID  string `json:"taskId"`
+	Archive bool   `json:"archive"`
+}
+
+type pageTaskParams struct {
+	Cursor          string `json:"cursor,omitempty"`
+	Limit           int    `json:"limit,omitempty"`
+	IncludeArchived bool   `json:"includeArchived,omitempty"`
+}
+
+type taskPage struct {
+	Tasks      []taskMetadata `json:"tasks"`
+	NextCursor string         `json:"nextCursor,omitempty"`
+}
+
 type commandTaskParams struct {
 	TaskID  string          `json:"taskId"`
 	Command json.RawMessage `json:"command"`
@@ -94,6 +126,18 @@ type subscribeParams struct {
 	TaskID string `json:"taskId"`
 	After  uint64 `json:"after,omitempty"`
 	Follow bool   `json:"follow,omitempty"`
+}
+
+type eventPageParams struct {
+	TaskID string `json:"taskId"`
+	After  uint64 `json:"after,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+type eventPage struct {
+	Events    []taskEvent `json:"events"`
+	NextAfter uint64      `json:"nextAfter,omitempty"`
+	HasMore   bool        `json:"hasMore"`
 }
 
 func newTaskManager(cfg config) (*taskManager, error) {
@@ -120,6 +164,9 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			metadata.PID = 0
 			metadata.UpdatedAt = time.Now().UTC()
 			metadata.LastError = "agentd restarted; an in-flight worker was not replayed"
+			for index := range metadata.Approvals {
+				metadata.Approvals[index].Active = false
+			}
 		}
 		current := &task{
 			manager:     manager,
@@ -205,6 +252,12 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if manager.activeCount() >= manager.cfg.MaxTasks {
 		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
 	}
+	manager.mu.RLock()
+	retained := len(manager.tasks)
+	manager.mu.RUnlock()
+	if retained >= manager.cfg.MaxRetainedTasks {
+		return taskMetadata{}, fmt.Errorf("retained task limit reached (%d); archive and delete old tasks", manager.cfg.MaxRetainedTasks)
+	}
 	cwd, err := normalizeWorkingDirectory(params.Cwd)
 	if err != nil {
 		return taskMetadata{}, err
@@ -238,7 +291,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 		stderr:  filepath.Join(dir, "worker.stderr.log"),
 		metadata: taskMetadata{
 			ID: id, Name: name, Cwd: cwd, Status: statusStarting,
-			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
@@ -256,15 +309,18 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	manager.tasks[id] = current
 	manager.mu.Unlock()
 	keepDirectory = true
-	if err := current.launch(params.Prompt, params.Approve); err != nil {
+	if err := current.launch(params.Prompt, params.Approve, ""); err != nil {
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
 	return current.snapshot(), nil
 }
 
-func (current *task) launch(prompt string, approve bool) error {
+func (current *task) launch(prompt string, approve bool, sessionFile string) error {
 	args := []string{"--mode", "rpc", "--session-dir", current.manager.cfg.SessionDir, "--name", current.metadata.Name}
+	if sessionFile != "" {
+		args = append(args, "--session", sessionFile)
+	}
 	if approve {
 		args = append(args, "--approve")
 	} else {
@@ -295,6 +351,8 @@ func (current *task) launch(prompt string, approve bool) error {
 	current.stdin = stdin
 	current.metadata.PID = command.Process.Pid
 	current.metadata.UpdatedAt = time.Now().UTC()
+	current.stopping = false
+	current.interrupted = false
 	current.mu.Unlock()
 	if err := current.saveMetadata(); err != nil {
 		_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
@@ -305,12 +363,19 @@ func (current *task) launch(prompt string, approve bool) error {
 	go current.consumeStdout(stdout)
 	go current.consumeStderr(stderr)
 	go current.wait()
-	startCommand, _ := json.Marshal(map[string]any{
-		"id": "agentd-start", "type": "prompt", "message": prompt,
-	})
-	if err := current.sendCommand(startCommand); err != nil {
+	stateCommand, _ := json.Marshal(map[string]any{"id": "agentd-state", "type": "get_state"})
+	if err := current.writeWorkerCommand(stateCommand); err != nil {
 		_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
 		return err
+	}
+	if prompt != "" {
+		startCommand, _ := json.Marshal(map[string]any{
+			"id": "agentd-start", "type": "prompt", "message": prompt,
+		})
+		if err := current.sendCommand(startCommand); err != nil {
+			_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
+			return err
+		}
 	}
 	return nil
 }
@@ -327,7 +392,12 @@ func (current *task) consumeStdout(reader io.Reader) {
 		current.recordEvent(append(json.RawMessage(nil), line...))
 	}
 	if err := scanner.Err(); err != nil {
-		current.failWorker("worker event stream failed: " + err.Error())
+		current.mu.Lock()
+		expected := current.stopping || current.interrupted || current.metadata.Status == statusStopped || current.metadata.Status == statusInterrupted
+		current.mu.Unlock()
+		if !expected {
+			current.failWorker("worker event stream failed: " + err.Error())
+		}
 	}
 }
 
@@ -399,8 +469,15 @@ func (current *task) failWorker(message string) {
 
 func (current *task) recordEvent(raw json.RawMessage) {
 	var header struct {
-		Type   string `json:"type"`
-		Method string `json:"method"`
+		Type    string `json:"type"`
+		Method  string `json:"method"`
+		Command string `json:"command"`
+		Success bool   `json:"success"`
+		ID      string `json:"id"`
+		Data    struct {
+			SessionFile string `json:"sessionFile"`
+			SessionID   string `json:"sessionId"`
+		} `json:"data"`
 	}
 	_ = json.Unmarshal(raw, &header)
 
@@ -413,17 +490,27 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	case "agent_settled":
 		current.metadata.Status = statusIdle
 	case "extension_ui_request":
-		if header.Method == "confirm" || header.Method == "select" || header.Method == "input" || header.Method == "editor" {
+		if approval, ok := approvalFromEvent(raw); ok {
 			current.metadata.Status = statusWaiting
+			current.upsertApprovalLocked(approval)
+		}
+	case "response":
+		if header.Success && header.Command == "get_state" {
+			current.metadata.SessionFile = header.Data.SessionFile
+			current.metadata.SessionID = header.Data.SessionID
+			if current.metadata.Status == statusStarting {
+				current.metadata.Status = statusIdle
+			}
 		}
 	}
 	event := taskEvent{
-		Protocol: protocolVersion,
-		Kind:     "event",
-		TaskID:   current.metadata.ID,
-		Sequence: current.metadata.LastSequence,
-		Time:     time.Now().UTC(),
-		Event:    raw,
+		Protocol:   protocolVersion,
+		Kind:       "event",
+		TaskID:     current.metadata.ID,
+		Sequence:   current.metadata.LastSequence,
+		Time:       time.Now().UTC(),
+		Event:      raw,
+		Normalized: normalizeWorkerEvent(raw),
 	}
 	encoded, _ := json.Marshal(event)
 	wasTruncated := current.metadata.LogTruncated
@@ -452,9 +539,22 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		}
 	}
 	current.mu.Unlock()
-	if logBecameTruncated || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" {
+	if logBecameTruncated || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" || header.Type == "response" {
 		_ = current.saveMetadata()
 	}
+}
+
+func (current *task) upsertApprovalLocked(approval pendingApproval) {
+	for index := range current.metadata.Approvals {
+		if current.metadata.Approvals[index].ID == approval.ID {
+			current.metadata.Approvals[index] = approval
+			return
+		}
+	}
+	if len(current.metadata.Approvals) >= maximumPendingApprovals {
+		current.metadata.Approvals = current.metadata.Approvals[1:]
+	}
+	current.metadata.Approvals = append(current.metadata.Approvals, approval)
 }
 
 func (current *task) sendCommand(command json.RawMessage) error {
@@ -486,27 +586,65 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		}
 	case "abort":
 	case "extension_ui_response":
-		if header.ID == "" || status != statusWaiting {
+		if header.ID == "" || status != statusWaiting || !current.hasActiveApproval(header.ID) {
 			return fmt.Errorf("task is not waiting for an approval response")
 		}
 	default:
 		return fmt.Errorf("unsupported worker command: %s", header.Type)
 	}
-	current.writeMu.Lock()
-	defer current.writeMu.Unlock()
-	if _, err := stdin.Write(append(append([]byte(nil), command...), '\n')); err != nil {
+	if err := current.writeWorkerCommand(command); err != nil {
 		return err
 	}
 	if header.Type == "extension_ui_response" {
 		current.mu.Lock()
-		if current.metadata.Status == statusWaiting {
+		for index := range current.metadata.Approvals {
+			if current.metadata.Approvals[index].ID == header.ID {
+				current.metadata.Approvals[index].Active = false
+			}
+		}
+		if current.metadata.Status == statusWaiting && !current.hasActiveApprovalLocked("") {
 			current.metadata.Status = statusRunning
 			current.metadata.UpdatedAt = time.Now().UTC()
 		}
 		current.mu.Unlock()
 		_ = current.saveMetadata()
+		resolved, _ := json.Marshal(map[string]any{"type": "hobot_approval_resolved", "id": header.ID})
+		current.recordEvent(resolved)
 	}
 	return nil
+}
+
+func (current *task) writeWorkerCommand(command json.RawMessage) error {
+	current.mu.Lock()
+	stdin := current.stdin
+	current.mu.Unlock()
+	if stdin == nil {
+		return fmt.Errorf("task worker is not running")
+	}
+	current.writeMu.Lock()
+	defer current.writeMu.Unlock()
+	_, err := stdin.Write(append(append([]byte(nil), command...), '\n'))
+	return err
+}
+
+func (current *task) hasActiveApproval(id string) bool {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	return current.hasActiveApprovalLocked(id)
+}
+
+func (current *task) hasActiveApprovalLocked(id string) bool {
+	now := time.Now()
+	for index := range current.metadata.Approvals {
+		approval := &current.metadata.Approvals[index]
+		if approval.Active && approval.TimeoutMS > 0 && now.After(approval.RequestedAt.Add(time.Duration(approval.TimeoutMS)*time.Millisecond)) {
+			approval.Active = false
+		}
+		if approval.Active && (id == "" || approval.ID == id) {
+			return true
+		}
+	}
+	return false
 }
 
 func (current *task) stop() error {
@@ -572,12 +710,12 @@ func (current *task) setTerminal(status taskStatus, message string) {
 func (current *task) snapshot() taskMetadata {
 	current.mu.Lock()
 	defer current.mu.Unlock()
-	return current.metadata
+	return cloneMetadata(current.metadata)
 }
 
 func (current *task) saveMetadata() error {
 	current.mu.Lock()
-	metadata := current.metadata
+	metadata := cloneMetadata(current.metadata)
 	current.mu.Unlock()
 	encoded, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
@@ -617,11 +755,239 @@ func (manager *taskManager) list() []taskMetadata {
 	manager.mu.RLock()
 	result := make([]taskMetadata, 0, len(manager.tasks))
 	for _, current := range manager.tasks {
-		result = append(result, current.snapshot())
+		metadata := current.summary()
+		if metadata.ArchivedAt == nil {
+			result = append(result, metadata)
+		}
 	}
 	manager.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
 	return result
+}
+
+func (current *task) summary() taskMetadata {
+	metadata := current.snapshot()
+	metadata.Approvals = nil
+	return metadata
+}
+
+func cloneMetadata(metadata taskMetadata) taskMetadata {
+	copy := metadata
+	copy.Approvals = append([]pendingApproval(nil), metadata.Approvals...)
+	for index := range copy.Approvals {
+		copy.Approvals[index].Options = append([]string(nil), metadata.Approvals[index].Options...)
+		if copy.Approvals[index].Active && copy.Approvals[index].TimeoutMS > 0 &&
+			time.Now().After(copy.Approvals[index].RequestedAt.Add(time.Duration(copy.Approvals[index].TimeoutMS)*time.Millisecond)) {
+			copy.Approvals[index].Active = false
+		}
+	}
+	if metadata.ArchivedAt != nil {
+		value := *metadata.ArchivedAt
+		copy.ArchivedAt = &value
+	}
+	return copy
+}
+
+func (manager *taskManager) page(params pageTaskParams) (taskPage, error) {
+	if params.Limit == 0 {
+		params.Limit = 50
+	}
+	if params.Limit < 1 || params.Limit > 200 {
+		return taskPage{}, fmt.Errorf("task page limit must be between 1 and 200")
+	}
+	manager.mu.RLock()
+	all := make([]taskMetadata, 0, len(manager.tasks))
+	for _, current := range manager.tasks {
+		metadata := current.summary()
+		if params.IncludeArchived || metadata.ArchivedAt == nil {
+			all = append(all, metadata)
+		}
+	}
+	manager.mu.RUnlock()
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].ID > all[j].ID
+		}
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
+	start := 0
+	if params.Cursor != "" {
+		found := false
+		for index := range all {
+			if all[index].ID == params.Cursor {
+				start = index + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return taskPage{}, fmt.Errorf("task page cursor does not exist: %s", params.Cursor)
+		}
+	}
+	end := start + params.Limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page := taskPage{Tasks: all[start:end]}
+	if end < len(all) && end > start {
+		page.NextCursor = all[end-1].ID
+	}
+	return page, nil
+}
+
+func (manager *taskManager) rename(params renameTaskParams) (taskMetadata, error) {
+	if !taskNamePattern.MatchString(params.Name) {
+		return taskMetadata{}, fmt.Errorf("task name must start with a letter or digit and use at most 64 letters, digits, _ or -")
+	}
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	current.metadata.Name = params.Name
+	current.metadata.UpdatedAt = time.Now().UTC()
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		return taskMetadata{}, err
+	}
+	return current.snapshot(), nil
+}
+
+func (manager *taskManager) archive(params archiveTaskParams) (taskMetadata, error) {
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	if isLiveStatus(current.metadata.Status) {
+		current.mu.Unlock()
+		return taskMetadata{}, fmt.Errorf("stop the task before changing its archive state")
+	}
+	if params.Archive {
+		now := time.Now().UTC()
+		current.metadata.ArchivedAt = &now
+	} else {
+		current.metadata.ArchivedAt = nil
+	}
+	current.metadata.UpdatedAt = time.Now().UTC()
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		return taskMetadata{}, err
+	}
+	return current.snapshot(), nil
+}
+
+func (manager *taskManager) delete(id string) error {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	current, err := manager.get(id)
+	if err != nil {
+		return err
+	}
+	current.mu.Lock()
+	if isLiveStatus(current.metadata.Status) {
+		current.mu.Unlock()
+		return fmt.Errorf("stop the task before deleting it")
+	}
+	if current.metadata.ArchivedAt == nil {
+		current.mu.Unlock()
+		return fmt.Errorf("archive the task before deleting it")
+	}
+	current.mu.Unlock()
+	if err := validateTaskDirectory(manager.cfg.TasksRoot, current.dir, id); err != nil {
+		return err
+	}
+	manager.mu.Lock()
+	delete(manager.tasks, id)
+	manager.mu.Unlock()
+	if err := os.RemoveAll(current.dir); err != nil {
+		manager.mu.Lock()
+		manager.tasks[id] = current
+		manager.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func validateTaskDirectory(root, dir, id string) error {
+	expected := filepath.Join(root, id)
+	if dir != expected || !taskIDPattern.MatchString(id) {
+		return fmt.Errorf("refusing to delete an invalid task directory")
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("task directory is not a real directory: %s", dir)
+	}
+	return nil
+}
+
+func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	if len(params.Prompt) > maxPromptBytes {
+		return taskMetadata{}, fmt.Errorf("task prompt must contain at most %d bytes", maxPromptBytes)
+	}
+	if manager.activeCount() >= manager.cfg.MaxTasks {
+		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
+	}
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	metadata := current.snapshot()
+	if isLiveStatus(metadata.Status) {
+		return taskMetadata{}, fmt.Errorf("task is already running")
+	}
+	if metadata.ArchivedAt != nil {
+		return taskMetadata{}, fmt.Errorf("unarchive the task before resuming it")
+	}
+	sessionFile, err := validateSessionFile(manager.cfg.SessionDir, metadata.SessionFile)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	current.metadata.Status = statusStarting
+	current.metadata.PID = 0
+	current.metadata.LastError = ""
+	current.metadata.ResumeCount++
+	for index := range current.metadata.Approvals {
+		current.metadata.Approvals[index].Active = false
+	}
+	current.metadata.UpdatedAt = time.Now().UTC()
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		return taskMetadata{}, err
+	}
+	if err := current.launch(params.Prompt, metadata.Approved, sessionFile); err != nil {
+		current.setTerminal(statusFailed, err.Error())
+		return current.snapshot(), err
+	}
+	return current.snapshot(), nil
+}
+
+func validateSessionFile(sessionRoot, value string) (string, error) {
+	if !filepath.IsAbs(value) || value == "" {
+		return "", fmt.Errorf("task has no resumable Pi session")
+	}
+	physicalRoot, err := filepath.EvalSymlinks(sessionRoot)
+	if err != nil {
+		return "", err
+	}
+	physical, err := filepath.EvalSymlinks(value)
+	if err != nil {
+		return "", fmt.Errorf("Pi session is unavailable: %w", err)
+	}
+	relative, err := filepath.Rel(physicalRoot, physical)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("Pi session is outside the configured session directory")
+	}
+	if _, err := privateRegularFileInfo(physical, maxRequestBytes*32); err != nil {
+		return "", fmt.Errorf("Pi session is unsafe: %w", err)
+	}
+	return physical, nil
 }
 
 func (current *task) subscribe(after uint64, follow bool) ([]taskEvent, <-chan taskEvent, func(), error) {
@@ -649,30 +1015,61 @@ func (current *task) subscribe(after uint64, follow bool) ([]taskEvent, <-chan t
 	return replayed, channel, cancel, nil
 }
 
+func (current *task) eventPage(after uint64, limit int) (eventPage, error) {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	return readEventPage(current.events, current.metadata.ID, after, limit)
+}
+
 func readEvents(path, taskID string, after uint64) ([]taskEvent, error) {
+	page, err := readEventPage(path, taskID, after, 0)
+	return page.Events, err
+}
+
+func readEventPage(path, taskID string, after uint64, limit int) (eventPage, error) {
+	if limit < 0 || limit > 1000 {
+		return eventPage{}, fmt.Errorf("event page limit must be between 1 and 1000")
+	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return eventPage{}, err
 	}
 	defer file.Close()
 	result := make([]taskEvent, 0)
+	resultBytes := 0
 	lastSequence := uint64(0)
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), maxRequestBytes+1024)
+	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
 	for scanner.Scan() {
 		var event taskEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, fmt.Errorf("corrupt task event log: %w", err)
+			return eventPage{}, fmt.Errorf("corrupt task event log: %w", err)
 		}
 		if event.Protocol != protocolVersion || event.Kind != "event" || event.TaskID != taskID || event.Sequence != lastSequence+1 {
-			return nil, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+			return eventPage{}, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
 		}
 		lastSequence = event.Sequence
-		if event.Sequence > after {
+		eventBytes := len(scanner.Bytes()) + 1
+		pageBudgetReached := limit > 0 && len(result) > 0 && resultBytes+eventBytes > maxResponseBytes-64*1024
+		if event.Sequence > after && !pageBudgetReached && (limit == 0 || len(result) < limit) {
 			result = append(result, event)
+			resultBytes += eventBytes
+		} else if event.Sequence > after && limit > 0 {
+			page := eventPage{Events: result, HasMore: true}
+			if len(result) > 0 {
+				page.NextAfter = result[len(result)-1].Sequence
+			}
+			return page, nil
 		}
 	}
-	return result, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return eventPage{}, err
+	}
+	page := eventPage{Events: result}
+	if len(result) > 0 {
+		page.NextAfter = result[len(result)-1].Sequence
+	}
+	return page, nil
 }
 
 func (manager *taskManager) interruptAll() {

@@ -10,22 +10,25 @@ import (
 )
 
 const (
-	defaultMaxTasks     = 2
-	maximumMaxTasks     = 8
-	defaultMaxEventSize = int64(64 * 1024 * 1024)
+	defaultMaxTasks      = 2
+	maximumMaxTasks      = 8
+	defaultRetainedTasks = 200
+	maximumRetainedTasks = 1000
+	defaultMaxEventSize  = int64(64 * 1024 * 1024)
 )
 
 type config struct {
-	StateRoot    string
-	AgentdRoot   string
-	TasksRoot    string
-	SessionDir   string
-	SocketPath   string
-	PIDPath      string
-	LogPath      string
-	AgentBinary  string
-	MaxTasks     int
-	MaxEventSize int64
+	StateRoot        string
+	AgentdRoot       string
+	TasksRoot        string
+	SessionDir       string
+	SocketPath       string
+	PIDPath          string
+	LogPath          string
+	AgentBinary      string
+	MaxTasks         int
+	MaxRetainedTasks int
+	MaxEventSize     int64
 }
 
 func loadConfig() (config, error) {
@@ -78,18 +81,20 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("HOBOT_CODE_AGENT_BINARY must be an absolute path")
 	}
 	maxTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_BACKGROUND_TASKS"), defaultMaxTasks, 1, maximumMaxTasks)
+	maxRetainedTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_RETAINED_TASKS"), defaultRetainedTasks, 10, maximumRetainedTasks)
 
 	return config{
-		StateRoot:    filepath.Clean(stateRoot),
-		AgentdRoot:   filepath.Clean(agentdRoot),
-		TasksRoot:    filepath.Join(agentdRoot, "tasks"),
-		SessionDir:   filepath.Clean(sessionDir),
-		SocketPath:   filepath.Clean(socketPath),
-		PIDPath:      filepath.Join(agentdRoot, "agentd.pid"),
-		LogPath:      filepath.Join(agentdRoot, "agentd.log"),
-		AgentBinary:  filepath.Clean(agentBinary),
-		MaxTasks:     maxTasks,
-		MaxEventSize: defaultMaxEventSize,
+		StateRoot:        filepath.Clean(stateRoot),
+		AgentdRoot:       filepath.Clean(agentdRoot),
+		TasksRoot:        filepath.Join(agentdRoot, "tasks"),
+		SessionDir:       filepath.Clean(sessionDir),
+		SocketPath:       filepath.Clean(socketPath),
+		PIDPath:          filepath.Join(agentdRoot, "agentd.pid"),
+		LogPath:          filepath.Join(agentdRoot, "agentd.log"),
+		AgentBinary:      filepath.Clean(agentBinary),
+		MaxTasks:         maxTasks,
+		MaxRetainedTasks: maxRetainedTasks,
+		MaxEventSize:     defaultMaxEventSize,
 	}, nil
 }
 

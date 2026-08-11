@@ -372,7 +372,7 @@ export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 
 umask "$original_umask"
 case "${1:-}" in
-  daemon|task) exec /usr/local/lib/hobot-code/agentd "$@" ;;
+  daemon|task|bridge) exec /usr/local/lib/hobot-code/agentd "$@" ;;
 esac
 if [ "${1:-}" = persistent ]; then
   handle_persistent_command "$@"
