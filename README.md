@@ -60,7 +60,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.17.1
+  | sh -s -- --version 0.18.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -80,7 +80,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
-桌面应用要求板端 Hobot Code 提供 event schema 2 和 `hobot bridge --stdio`。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
+桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 
 消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；中文输入法确认候选词时不会误触发发送。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。
 
@@ -223,7 +223,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.17.1
+hobot update --version 0.18.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

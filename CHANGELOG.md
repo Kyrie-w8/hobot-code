@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.0
+
+- Rebuild Hobot Studio around a conversation-first two-column workspace with a wider reading surface, optional task details, clearer task state, responsive composition, and restrained Codex-style visual hierarchy.
+- Persist every user prompt as a private schema-3 normalized task event so desktop conversations retain user turns across refresh, reconnect, resume, and restart.
+- Group fragmented thinking, tool execution, notices, and assistant text into coherent Agent turns; keep thinking and tool details collapsible while rendering answers as safe GitHub-flavored Markdown.
+- Add user-message copy and edit-and-send-again actions, auto-growing drafts that remain editable while the Agent works, explicit stop/send states, bottom-follow behavior, and a new-output jump control.
+- Replace protocol-shaped error text and lifecycle noise with user-facing task states while retaining raw bounded events on the board for diagnostics.
+
 ## 0.17.1
 
 - Make Enter send the desktop composer while Shift+Enter inserts a newline and IME composition remains uninterrupted.

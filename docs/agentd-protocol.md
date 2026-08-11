@@ -32,13 +32,13 @@
 {"protocol":1,"kind":"event","taskId":"...","sequence":12,"time":"2026-08-11T12:00:00Z","event":{"type":"message_update"}}
 ```
 
-`id` 由客户端生成，用于关联响应；`sequence` 在单个任务内严格递增，用于断线后的增量重放。外层协议仍为 v1，可选的 `normalized` 字段使用独立的事件 schema v2：
+`id` 由客户端生成，用于关联响应；`sequence` 在单个任务内严格递增，用于断线后的增量重放。外层协议仍为 v1，可选的 `normalized` 字段使用独立的事件 schema v3：
 
 ```json
-{"protocol":1,"kind":"event","taskId":"...","sequence":13,"time":"2026-08-11T12:00:01Z","event":{"type":"message_update"},"normalized":{"schema":2,"type":"assistant.text.delta","data":{"delta":"done"}}}
+{"protocol":1,"kind":"event","taskId":"...","sequence":13,"time":"2026-08-11T12:00:01Z","event":{"type":"message_update"},"normalized":{"schema":3,"type":"assistant.text.delta","data":{"delta":"done"}}}
 ```
 
-`event` 保留原始 Pi RPC 内容或以 `hobot_` 开头的 agentd 内部生命周期事件，用于同版诊断和向后兼容；新客户端应优先消费 `normalized`。标准事件覆盖 Agent 状态、思考与正文增量、消息完成、工具生命周期、审批生命周期、重试、压缩和扩展错误。标准工具事件不复制 Shell 命令或完整工具输出。
+`event` 保留原始 Pi RPC 内容或以 `hobot_` 开头的 agentd 内部生命周期事件，用于同版诊断和向后兼容；新客户端应优先消费 `normalized`。标准事件覆盖用户消息、Agent 状态、思考与正文增量、消息完成、工具生命周期、审批生命周期、重试、压缩和扩展错误。schema 3 增加了持久化的 `user.message`，使客户端能在断线重连后重建完整对话轮次。标准工具事件不复制 Shell 命令或完整工具输出。
 
 ## 方法
 

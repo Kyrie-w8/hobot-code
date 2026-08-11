@@ -5,17 +5,17 @@ html, body, #root {
   overflow: hidden;
 }
 
-html { background: #101214; }
+html { background: #191919; }
 
 body {
-  color: #edf1f2;
-  background: #101214;
+  color: #f1f1ef;
+  background: #191919;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 ::selection {
-  background: rgba(89, 199, 188, 0.3);
+  background: rgba(89, 199, 168, 0.34);
   color: #ffffff;
 }

@@ -12,18 +12,19 @@ declare global {
 const mockBoard: Board = {id: 's100-demo', name: 'RDK S100', host: '10.112.10.98', user: 'root', port: 22};
 const now = new Date();
 const mockTasks: Task[] = [
-  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'running', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 128, sessionId: '019fef9b-695f-7e9d'},
+  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 128, sessionId: '019fef9b-695f-7e9d'},
   {id: '04acf83b820b934e12345678', name: 'camera-pipeline', cwd: '/root/tros_ws', status: 'waiting', pid: 842244, createdAt: new Date(now.getTime() - 18 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 72, pendingApprovals: [{id: 'approval-demo', method: 'confirm', title: 'Allow bash?', message: 'Run the camera device inspection command on RDK S100.', active: true}]},
   {id: 'f30bb47e8d552f1812345678', name: 'deploy-review', cwd: '/root/models', status: 'idle', pid: 841992, createdAt: new Date(now.getTime() - 70 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 53},
 ];
 
 const mockEvents = (taskId: string): EventPage => ({
   events: [
-    {protocol: 1, kind: 'event', taskId, sequence: 121, time: new Date(now.getTime() - 48_000).toISOString(), event: {type: 'message_update'}, normalized: {schema: 2, type: 'assistant.thinking.delta', data: {delta: 'Inspecting the BPU runtime and benchmark workspace before changing the deployment configuration.'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 122, time: new Date(now.getTime() - 36_000).toISOString(), event: {type: 'tool_execution_start'}, normalized: {schema: 2, type: 'tool.started', data: {toolCallId: 'tool-1', toolName: 'bash'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 123, time: new Date(now.getTime() - 21_000).toISOString(), event: {type: 'tool_execution_end'}, normalized: {schema: 2, type: 'tool.completed', data: {toolCallId: 'tool-1', toolName: 'bash', isError: false}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 124, time: new Date(now.getTime() - 8_000).toISOString(), event: {type: 'message_update'}, normalized: {schema: 2, type: 'assistant.text.delta', data: {delta: 'The S100 runtime is healthy. I am running the final latency pass now.'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 125, time: new Date(now.getTime() - 2_000).toISOString(), event: {type: 'task.running'}, normalized: {schema: 2, type: 'task.running'}},
+    {protocol: 1, kind: 'event', taskId, sequence: 120, time: new Date(now.getTime() - 55_000).toISOString(), event: {type: 'hobot_user_prompt'}, normalized: {schema: 3, type: 'user.message', data: {text: 'Inspect the S100 runtime, then run a final latency pass.'}}},
+    {protocol: 1, kind: 'event', taskId, sequence: 121, time: new Date(now.getTime() - 48_000).toISOString(), event: {type: 'message_update'}, normalized: {schema: 3, type: 'assistant.thinking.delta', data: {delta: 'Inspecting the BPU runtime and benchmark workspace before changing the deployment configuration.'}}},
+    {protocol: 1, kind: 'event', taskId, sequence: 122, time: new Date(now.getTime() - 36_000).toISOString(), event: {type: 'tool_execution_start'}, normalized: {schema: 3, type: 'tool.started', data: {toolCallId: 'tool-1', toolName: 'bash'}}},
+    {protocol: 1, kind: 'event', taskId, sequence: 123, time: new Date(now.getTime() - 21_000).toISOString(), event: {type: 'tool_execution_end'}, normalized: {schema: 3, type: 'tool.completed', data: {toolCallId: 'tool-1', toolName: 'bash', isError: false}}},
+    {protocol: 1, kind: 'event', taskId, sequence: 124, time: new Date(now.getTime() - 8_000).toISOString(), event: {type: 'message_update'}, normalized: {schema: 3, type: 'assistant.text.delta', data: {delta: 'The S100 runtime is healthy. The final latency pass completed successfully.'}}},
+    {protocol: 1, kind: 'event', taskId, sequence: 125, time: new Date(now.getTime() - 2_000).toISOString(), event: {type: 'task.idle'}, normalized: {schema: 3, type: 'task.idle'}},
   ],
   nextAfter: 125,
   hasMore: false,
@@ -33,7 +34,7 @@ const mockBackend: Backend = {
   ListBoards: async () => [mockBoard],
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
-  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.17.1', pid: 834124, startedAt: now.toISOString(), activeTasks: 2, maximumTasks: 2, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 2, capabilities: ['events.normalized.v2', 'tasks.resume', 'tasks.restart', 'bridge.stdio'], maximumActiveTasks: 2, maximumRetainedTasks: 200}}),
+  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.18.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 200}}),
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
   GetTask: async (_board: string, taskId: string) => mockTasks.find((task) => task.id === taskId),
