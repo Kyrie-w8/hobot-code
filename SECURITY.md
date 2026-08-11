@@ -62,7 +62,7 @@ Pi、`fd` 与 `ripgrep` 发行产物按锁文件中的 SHA256 校验；`agentd` 
 
 ## 报告安全问题
 
-请不要在公开 issue 中披露尚未修复的漏洞、有效凭据或可直接复现的设备破坏步骤。优先使用 GitHub 的[私有安全漏洞报告](https://github.com/Kyrie-w8/hobot-code/security/advisories/new)；若仓库尚未启用该入口，只创建不含漏洞细节的公开 issue，请求维护者提供私下沟通方式。报告应包含：
+请不要在公开 issue 中披露尚未修复的漏洞、有效凭据或可直接复现的设备破坏步骤。优先使用 GitHub 的[私有安全漏洞报告](https://github.com/bryant-w/hobot-code/security/advisories/new)；若仓库尚未启用该入口，只创建不含漏洞细节的公开 issue，请求维护者提供私下沟通方式。报告应包含：
 
 - 受影响版本或提交。
 - 板卡型号与 RDK OS 版本。

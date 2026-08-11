@@ -6,6 +6,7 @@
 - Let every project create multiple conversations, derive readable Unicode titles from the first instruction, and support inline conversation renaming.
 - Add per-task Review, Ask, and Developer approval modes whose private policies remain enforced on the RDK board with high-risk operations guarded.
 - Isolate board switches in Studio by replacing the selected task and event stream atomically, closing the previous SSH client, and ignoring late watcher errors.
+- Move release, module, CI, and security URLs to the repository's new `bryant-w/hobot-code` owner so installers do not depend on a legacy username redirect.
 - Document the current attachment boundary: image/document transport remains disabled until secure SSH staging, validation, and session replay are implemented end to end.
 
 ## 0.19.1

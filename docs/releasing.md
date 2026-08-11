@@ -43,7 +43,7 @@ git push origin "v$version"
 
 ```bash
 gh attestation verify hobot-code-<version>-linux-arm64.tar.gz \
-  --repo Kyrie-w8/hobot-code
+  --repo bryant-w/hobot-code
 ```
 
 板端一键安装器还会通过 HTTPS 下载归档及同版本 SHA256，要求校验文件只包含目标归档的一条记录，并在解压前检查所有归档路径和文件类型。
@@ -53,6 +53,6 @@ gh attestation verify hobot-code-<version>-linux-arm64.tar.gz \
 遵循 SemVer：修复使用 patch，向后兼容的新能力使用 minor，不兼容的配置、协议或命令变化使用 major。预发布版本使用 `-beta.N` 或 `-rc.N`；GitHub 的 latest 入口不会选择 prerelease，因此一键安装默认只取得最新稳定版本，预发布版必须显式指定：
 
 ```bash
-curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
+curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
   | sh -s -- --version <prerelease-version>
 ```

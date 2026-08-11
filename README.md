@@ -1,6 +1,6 @@
 # Hobot Code
 
-[![CI](https://github.com/Kyrie-w8/hobot-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Kyrie-w8/hobot-code/actions/workflows/ci.yml)
+[![CI](https://github.com/bryant-w/hobot-code/actions/workflows/ci.yml/badge.svg)](https://github.com/bryant-w/hobot-code/actions/workflows/ci.yml)
 
 面向地瓜机器人 RDK 的开发 Agent。Hobot Code 在板端提供基于 [Pi](https://github.com/earendil-works/pi) 的原生 TUI 和常驻任务服务，在 Mac 上提供同名桌面应用；两个入口共享同一套模型、工具、审批、Skills、会话和 RDK 专业知识。
 
@@ -51,7 +51,7 @@ Hobot Code 不维护 Pi 的叉路 TUI。终端交互来自固定版本的 Pi，�
 在 RDK X5、S100 或 S600 上执行：
 
 ```bash
-curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh | sh
+curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh | sh
 ```
 
 板端需要先安装 `curl`。安装器只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。
@@ -59,11 +59,11 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 安装指定版本：
 
 ```bash
-curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
+curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
   | sh -s -- --version 0.20.0
 ```
 
-无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
+无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
 
 ```bash
 cd /tmp
@@ -78,7 +78,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 ### Mac 桌面应用
 
-从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
+从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
 桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 

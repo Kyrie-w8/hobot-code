@@ -1,3 +1,3 @@
-module github.com/Kyrie-w8/hobot-code/agentd
+module github.com/bryant-w/hobot-code/agentd
 
 go 1.23.0

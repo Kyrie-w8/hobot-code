@@ -1,10 +1,10 @@
-module github.com/Kyrie-w8/hobot-code/studio
+module github.com/bryant-w/hobot-code/studio
 
 go 1.23.0
 
 require github.com/wailsapp/wails/v2 v2.12.0
 
-require github.com/Kyrie-w8/hobot-code/sdk/go v0.0.0
+require github.com/bryant-w/hobot-code/sdk/go v0.0.0
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
@@ -37,4 +37,4 @@ require (
 	golang.org/x/text v0.22.0 // indirect
 )
 
-replace github.com/Kyrie-w8/hobot-code/sdk/go => ../sdk/go
+replace github.com/bryant-w/hobot-code/sdk/go => ../sdk/go

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repository=${HOBOT_CODE_REPOSITORY:-Kyrie-w8/hobot-code}
+repository=${HOBOT_CODE_REPOSITORY:-bryant-w/hobot-code}
 release_base=${HOBOT_CODE_RELEASE_BASE_URL:-https://github.com/$repository/releases}
 action=install
 requested_version=

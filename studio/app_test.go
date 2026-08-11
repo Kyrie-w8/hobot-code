@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kyrie-w8/hobot-code/sdk/go/hobot"
+	"github.com/bryant-w/hobot-code/sdk/go/hobot"
 )
 
 func TestBoardStoreRoundTrip(t *testing.T) {

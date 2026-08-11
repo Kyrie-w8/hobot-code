@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Kyrie-w8/hobot-code/sdk/go/hobot"
+	"github.com/bryant-w/hobot-code/sdk/go/hobot"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
