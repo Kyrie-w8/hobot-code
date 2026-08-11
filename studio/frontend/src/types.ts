@@ -54,8 +54,11 @@ export type Task = {
   updatedAt: string;
   lastSequence: number;
   lastError?: string;
+  sessionFile?: string;
   sessionId?: string;
+  approved?: boolean;
   resumeCount?: number;
+  restartCount?: number;
   archivedAt?: string;
   pendingApprovals?: Approval[];
 };

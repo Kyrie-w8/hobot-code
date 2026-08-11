@@ -261,6 +261,46 @@ func TestWorkerCommandValidation(t *testing.T) {
 	waitForStatus(t, current, statusStopped)
 }
 
+func TestTaskRestartWithoutSession(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.start(startTaskParams{Name: "restartable", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := manager.get(metadata.ID)
+	waitForStatus(t, current, statusIdle)
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+	current.mu.Lock()
+	current.metadata.SessionFile = ""
+	current.metadata.SessionID = ""
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := manager.restart(resumeTaskParams{TaskID: metadata.ID, Prompt: "fresh session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.RestartCount != 1 || restarted.ResumeCount != 0 {
+		t.Fatalf("unexpected restart counters: %+v", restarted)
+	}
+	waitForStatus(t, current, statusIdle)
+	if state := current.snapshot(); state.SessionFile == "" || state.SessionID == "" {
+		t.Fatalf("restart did not bind a fresh session: %+v", state)
+	}
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+}
+
 func TestRecoveryRejectsSymlinkedState(t *testing.T) {
 	cfg := testConfig(t)
 	id := "00112233445566778899aabb"

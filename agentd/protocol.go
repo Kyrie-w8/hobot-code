@@ -22,6 +22,7 @@ var protocolCapabilities = []string{
 	"tasks.page",
 	"events.page",
 	"tasks.resume",
+	"tasks.restart",
 	"bridge.stdio",
 }
 

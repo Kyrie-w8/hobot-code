@@ -25,6 +25,9 @@ while IFS= read -r line; do
     *'"method":"task.page"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"tasks":[{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"idle","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:01Z","lastSequence":7}]}}\n' "$id"
       ;;
+    *'"method":"task.restart"'*)
+      printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"starting","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:02Z","lastSequence":7,"restartCount":1}}\n' "$id"
+      ;;
     *'"method":"task.subscribe"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"replayed":0,"following":true}}\n' "$id"
       printf '%%s\n' '{"protocol":1,"kind":"event","taskId":"00112233445566778899aabb","sequence":8,"time":"2026-08-11T00:00:02Z","event":{"type":"agent_settled"},"normalized":{"schema":2,"type":"task.idle"}}'
@@ -58,6 +61,10 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	page, err := client.Tasks(ctx, false, "", 50)
 	if err != nil || len(page.Tasks) != 1 || page.Tasks[0].Name != "build" {
 		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	restarted, err := client.RestartTask(ctx, page.Tasks[0].ID, "start fresh")
+	if err != nil || restarted.RestartCount != 1 || restarted.Status != "starting" {
+		t.Fatalf("restarted=%+v err=%v", restarted, err)
 	}
 	content, err := os.ReadFile(starts)
 	if err != nil || string(content) != "start\n" {

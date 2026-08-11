@@ -6,6 +6,7 @@ import {
   RefreshCw, RotateCcw, Search, Server, ShieldCheck, SquareTerminal, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
+import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import type {Approval, Board, Connection, Task, TaskEvent} from './types';
 import './App.css';
 
@@ -15,8 +16,6 @@ const statusLabel: Record<string, string> = {
 };
 
 const statusTone = (status: string) => `status status-${status}`;
-const terminal = new Set(['stopped', 'failed', 'interrupted']);
-
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -30,6 +29,7 @@ function App() {
   const [showBoard, setShowBoard] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
+  const [watchRevision, setWatchRevision] = useState(0);
   const startupStarted = useRef(false);
 
   const boardId = connection?.board.id ?? '';
@@ -103,7 +103,7 @@ function App() {
       active = false;
       void api.stopWatch(boardId, selectedTask.id);
     };
-  }, [boardId, selectedTask?.id]);
+  }, [boardId, selectedTask?.id, watchRevision]);
 
   useEffect(() => {
     if (!boardId) return;
@@ -118,6 +118,9 @@ function App() {
 
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const timelineEvents = useMemo(() => coalesceEvents(events), [events]);
+  const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
+  const composerBlocked = busy || (selectedTask ? composerIsBlocked(selectedTask.status) : true);
+  const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
 
   async function submitPrompt(event: FormEvent) {
     event.preventDefault();
@@ -126,10 +129,16 @@ function App() {
     setBusy(true);
     setError('');
     try {
-      if (terminal.has(selectedTask.status)) await api.resumeTask(boardId, selectedTask.id, prompt);
+      let nextTask: Task | undefined;
+      if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt);
+      else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt);
       else await api.sendPrompt(boardId, selectedTask.id, prompt);
       setComposer('');
       await refreshTasks();
+      if (nextTask) {
+        setSelectedTask(nextTask);
+        setWatchRevision((revision) => revision + 1);
+      }
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -223,7 +232,7 @@ function App() {
               <span className="workspace-path">{selectedTask.cwd}</span>
             </div>
             <div className="task-actions">
-              {terminal.has(selectedTask.status) ? <button className="secondary-button" onClick={() => document.querySelector<HTMLTextAreaElement>('#composer')?.focus()}><RotateCcw size={15} /> Resume</button> :
+              {terminalStatuses.has(selectedTask.status) ? <button className="secondary-button" onClick={() => document.querySelector<HTMLTextAreaElement>('#composer')?.focus()}><RotateCcw size={15} /> {selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button> :
                 <button className="secondary-button" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><CircleStop size={15} /> Stop</button>}
             </div>
           </div>
@@ -239,10 +248,23 @@ function App() {
           </section>
 
           <form className="composer" onSubmit={submitPrompt}>
-            <textarea id="composer" value={composer} onChange={(event) => setComposer(event.target.value)} placeholder={terminal.has(selectedTask.status) ? 'Resume this task with a new instruction' : 'Message the agent'} rows={2} disabled={busy || selectedTask.status === 'running' || selectedTask.status === 'waiting'} />
+            <textarea
+              id="composer"
+              value={composer}
+              onChange={(event) => setComposer(event.target.value)}
+              onKeyDown={(event) => {
+                const isComposing = event.nativeEvent.isComposing || event.keyCode === 229;
+                if (!shouldSubmitComposer(event.key, event.shiftKey, isComposing)) return;
+                event.preventDefault();
+                if (!composerBlocked && composer.trim()) event.currentTarget.form?.requestSubmit();
+              }}
+              placeholder={selectedComposerMode === 'resume' ? 'Resume this task with a new instruction' : selectedComposerMode === 'restart' ? 'Start a new session in this task' : 'Message the agent'}
+              rows={2}
+              disabled={composerBlocked}
+            />
             <div className="composer-footer">
-              <span>{terminal.has(selectedTask.status) ? 'Resume session' : selectedTask.status === 'idle' ? 'Ready' : statusLabel[selectedTask.status]}</span>
-              <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || busy || selectedTask.status === 'running' || selectedTask.status === 'waiting'}><Play size={15} fill="currentColor" /></button>
+              <span>{selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : selectedTask.status === 'idle' ? 'Ready' : statusLabel[selectedTask.status]}</span>
+              <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><Play size={15} fill="currentColor" /></button>
             </div>
           </form>
         </> : <div className="main-empty"><Bot size={30} /><span>Select or create a task</span></div>}
@@ -256,6 +278,7 @@ function App() {
             <InfoRow label="PID" value={selectedTask.pid ? String(selectedTask.pid) : '—'} mono />
             <InfoRow label="Events" value={String(selectedTask.lastSequence)} mono />
             <InfoRow label="Resumes" value={String(selectedTask.resumeCount ?? 0)} mono />
+            <InfoRow label="Restarts" value={String(selectedTask.restartCount ?? 0)} mono />
             <InfoRow label="Session" value={selectedTask.sessionId ? selectedTask.sessionId.slice(0, 12) : '—'} mono copy={selectedTask.sessionId} />
           </InspectorSection>
           <InspectorSection title="Workspace">
@@ -266,7 +289,7 @@ function App() {
           <div className="board-identity"><Server size={18} /><div><strong>{connection.board.name}</strong><span>{connection.board.user}@{connection.board.host}</span></div></div>
           <div className="metrics-grid">
             <Metric icon={<Cpu size={15} />} label="Agentd" value={`v${connection.daemon?.version ?? '—'}`} />
-            <Metric icon={<Activity size={15} />} label="Tasks" value={`${connection.daemon?.activeTasks ?? 0}/${connection.daemon?.maximumTasks ?? 0}`} />
+            <Metric icon={<Activity size={15} />} label="Tasks" value={`${activeTaskCount}/${connection.daemon?.maximumTasks ?? 0}`} />
             <Metric icon={<MemoryStick size={15} />} label="Schema" value={`v${connection.capabilities?.eventSchema ?? '—'}`} />
             <Metric icon={<ShieldCheck size={15} />} label="SSH" value="Verified" />
           </div>

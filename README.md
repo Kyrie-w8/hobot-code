@@ -60,7 +60,7 @@ curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/Kyrie-w8/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.17.0
+  | sh -s -- --version 0.17.1
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -81,6 +81,8 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 从 [GitHub Releases](https://github.com/Kyrie-w8/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
 桌面应用要求板端 Hobot Code 提供 event schema 2 和 `hobot bridge --stdio`。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
+
+消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；中文输入法确认候选词时不会误触发发送。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。
 
 目标用户必须已经存在并拥有可解析的 home 目录。root 默认会逐次确认 Shell、写入和编辑；如需让显式 `allow` 规则在 root 下生效，可执行 `/permissions root policy`。权限文件会在每次工具调用前重新读取，因此设置会立即同步到同一用户已打开的其他会话。破坏性命令、工作区外写入和关键系统路径仍受保护。
 
@@ -161,6 +163,7 @@ hobot task abort <task-id>                  # 中断当前一轮，保留 worker
 hobot task respond <task-id> <request-id> yes
 hobot task approvals <task-id>              # 查看待处理或已失效的审批
 hobot task resume <task-id> ["继续任务"]     # 从已落盘的 Pi 对话显式恢复
+hobot task restart <task-id> "重新开始"      # 保留任务记录，创建全新会话
 hobot task rename <task-id> build-rdk
 hobot task archive <task-id>
 hobot task list --all
@@ -220,7 +223,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.17.0
+hobot update --version 0.17.1
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

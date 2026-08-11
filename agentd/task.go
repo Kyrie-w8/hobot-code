@@ -51,6 +51,7 @@ type taskMetadata struct {
 	SessionID    string            `json:"sessionId,omitempty"`
 	Approved     bool              `json:"approved,omitempty"`
 	ResumeCount  int               `json:"resumeCount,omitempty"`
+	RestartCount int               `json:"restartCount,omitempty"`
 	ArchivedAt   *time.Time        `json:"archivedAt,omitempty"`
 	Approvals    []pendingApproval `json:"pendingApprovals,omitempty"`
 }
@@ -968,9 +969,51 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	return current.snapshot(), nil
 }
 
+func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
+		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	}
+	if manager.activeCount() >= manager.cfg.MaxTasks {
+		return taskMetadata{}, fmt.Errorf("background task limit reached (%d)", manager.cfg.MaxTasks)
+	}
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	metadata := current.snapshot()
+	if isLiveStatus(metadata.Status) {
+		return taskMetadata{}, fmt.Errorf("task is already running")
+	}
+	if metadata.ArchivedAt != nil {
+		return taskMetadata{}, fmt.Errorf("unarchive the task before restarting it")
+	}
+	current.mu.Lock()
+	current.metadata.Status = statusStarting
+	current.metadata.PID = 0
+	current.metadata.LastError = ""
+	current.metadata.SessionFile = ""
+	current.metadata.SessionID = ""
+	current.metadata.RestartCount++
+	for index := range current.metadata.Approvals {
+		current.metadata.Approvals[index].Active = false
+	}
+	current.metadata.UpdatedAt = time.Now().UTC()
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		return taskMetadata{}, err
+	}
+	if err := current.launch(params.Prompt, metadata.Approved, ""); err != nil {
+		current.setTerminal(statusFailed, err.Error())
+		return current.snapshot(), err
+	}
+	return current.snapshot(), nil
+}
+
 func validateSessionFile(sessionRoot, value string) (string, error) {
 	if !filepath.IsAbs(value) || value == "" {
-		return "", fmt.Errorf("task has no resumable Pi session")
+		return "", fmt.Errorf("task has no resumable Hobot Code session")
 	}
 	physicalRoot, err := filepath.EvalSymlinks(sessionRoot)
 	if err != nil {
@@ -978,14 +1021,14 @@ func validateSessionFile(sessionRoot, value string) (string, error) {
 	}
 	physical, err := filepath.EvalSymlinks(value)
 	if err != nil {
-		return "", fmt.Errorf("Pi session is unavailable: %w", err)
+		return "", fmt.Errorf("Hobot Code session is unavailable: %w", err)
 	}
 	relative, err := filepath.Rel(physicalRoot, physical)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("Pi session is outside the configured session directory")
+		return "", fmt.Errorf("Hobot Code session is outside the configured session directory")
 	}
 	if _, err := privateRegularFileInfo(physical, maxRequestBytes*32); err != nil {
-		return "", fmt.Errorf("Pi session is unsafe: %w", err)
+		return "", fmt.Errorf("Hobot Code session is unsafe: %w", err)
 	}
 	return physical, nil
 }

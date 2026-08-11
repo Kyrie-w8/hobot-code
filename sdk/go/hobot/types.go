@@ -90,6 +90,7 @@ type Task struct {
 	SessionID        string     `json:"sessionId,omitempty"`
 	Approved         bool       `json:"approved,omitempty"`
 	ResumeCount      int        `json:"resumeCount,omitempty"`
+	RestartCount     int        `json:"restartCount,omitempty"`
 	ArchivedAt       *time.Time `json:"archivedAt,omitempty"`
 	PendingApprovals []Approval `json:"pendingApprovals,omitempty"`
 }

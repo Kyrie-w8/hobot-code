@@ -21,6 +21,7 @@ sdk-check:
 
 studio-check: sdk-check
 	cd studio/frontend && npm ci --ignore-scripts --no-audit --no-fund
+	cd studio/frontend && npm test
 	cd studio/frontend && npm run build
 	cd studio && GOCACHE="$(STUDIO_GO_CACHE)" go test -race ./...
 	cd studio && GOCACHE="$(STUDIO_GO_CACHE)" go vet ./...

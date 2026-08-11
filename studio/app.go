@@ -301,6 +301,16 @@ func (app *App) ResumeTask(boardID, taskID, prompt string) (hobot.Task, error) {
 	return client.ResumeTask(ctx, taskID, prompt)
 }
 
+func (app *App) RestartTask(boardID, taskID, prompt string) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.RestartTask(ctx, taskID, prompt)
+}
+
 func (app *App) RespondApproval(boardID, taskID, approvalID string, response map[string]any) error {
 	client, err := app.client(boardID)
 	if err != nil {

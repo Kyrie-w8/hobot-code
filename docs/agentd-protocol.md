@@ -55,6 +55,7 @@
 | `task.archive` | `{taskId, archive}` | 归档或取消归档终态任务 |
 | `task.delete` | `{taskId}` | 删除已归档的终态任务及本地日志 |
 | `task.resume` | `{taskId, prompt?}` | 重新打开已校验的 Pi session，可选发送新 Prompt |
+| `task.restart` | `{taskId, prompt}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
 | `task.approvals` | `{taskId}` | 有界待审批队列，包含活跃和已失效项 |
 | `task.stop` | `{taskId}` | 终止 worker 进程组 |
@@ -73,7 +74,7 @@ starting -> running -> idle -> running
 agentd 停止或重启时的活动状态 -> interrupted
 ```
 
-`idle` 表示 worker 仍在等待下一轮输入，不是任务进程已经退出。`waiting` 表示 Agent 正在等待确认、选择或补充输入。`stopped`、`failed` 和 `interrupted` 为终态。它们不会自动重启 worker；具有安全 Pi session 绑定的未归档任务可通过 `task.resume` 显式返回 `starting`。
+`idle` 表示 worker 仍在等待下一轮输入，不是任务进程已经退出。`waiting` 表示 Agent 正在等待确认、选择或补充输入。`stopped`、`failed` 和 `interrupted` 为终态。它们不会自动重启 worker；具有安全 session 绑定的未归档任务可通过 `task.resume` 续接上下文，没有可用 session 或需要明确丢弃上下文时可通过 `task.restart` 启动新会话。
 
 ## 持久化与恢复
 
@@ -89,7 +90,7 @@ tasks/<task-id>/worker.stderr.log
 
 目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务最多 64 MiB，worker stderr 最多保留 1 MiB；达到上限后仍持续排空进程管道，避免 worker 因反压卡死。
 
-客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用 Pi `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。
+客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。
 
 ## SSH 标准输入桥接
 

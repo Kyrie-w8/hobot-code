@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.1
+
+- Make Enter send the desktop composer while Shift+Enter inserts a newline and IME composition remains uninterrupted.
+- Distinguish resumable stopped tasks from tasks without a saved session; the latter now restart explicitly with a fresh Hobot Code session instead of failing with `task_resume_failed`.
+- Add the `task.restart` board protocol and CLI operation while preserving the task ID, workspace, approval policy, event history, and separate restart accounting.
+- Reload and resubscribe to task events after resume or restart, and derive the board's active-task count from the live task list instead of the initial connection snapshot.
+
 ## 0.17.0
 
 - Add the Hobot Code macOS application for connecting to RDK boards, managing persistent Agent tasks, following normalized event streams, and handling approvals without moving credentials or permission decisions off the board.

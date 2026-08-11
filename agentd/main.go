@@ -31,6 +31,7 @@ Usage:
   hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
   hobot task approvals TASK_ID
   hobot task resume TASK_ID [PROMPT]
+  hobot task restart TASK_ID PROMPT
   hobot task rename TASK_ID NAME
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
@@ -253,6 +254,20 @@ func runTaskCLI(cfg config, args []string) error {
 			return err
 		}
 		fmt.Printf("Resumed background task %s (%s).\n", metadata.ID, metadata.Name)
+		return nil
+	case "restart":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: hobot task restart TASK_ID PROMPT")
+		}
+		result, err := client.call("task.restart", resumeTaskParams{TaskID: args[1], Prompt: strings.Join(args[2:], " ")})
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		fmt.Printf("Restarted background task %s (%s) with a new session.\n", metadata.ID, metadata.Name)
 		return nil
 	case "rename":
 		if len(args) != 3 {

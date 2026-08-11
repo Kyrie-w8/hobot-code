@@ -281,6 +281,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.restart":
+		var params resumeTaskParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.restart(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_restart_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
 	case "task.rename":
 		var params renameTaskParams
 		if err := decodeParams(req.Params, &params); err != nil {

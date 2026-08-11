@@ -65,6 +65,12 @@ func (client *Client) ResumeTask(ctx context.Context, taskID, prompt string) (Ta
 	return task, err
 }
 
+func (client *Client) RestartTask(ctx context.Context, taskID, prompt string) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.restart", map[string]any{"taskId": taskID, "prompt": prompt}, &task)
+	return task, err
+}
+
 func (client *Client) Approvals(ctx context.Context, taskID string) ([]Approval, error) {
 	var approvals []Approval
 	err := client.Call(ctx, "task.approvals", map[string]any{"taskId": taskID}, &approvals)
