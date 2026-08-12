@@ -44,6 +44,7 @@ type Board struct {
 type BoardConnection struct {
 	Board        Board               `json:"board"`
 	Connected    bool                `json:"connected"`
+	Reconnected  bool                `json:"reconnected,omitempty"`
 	Daemon       *hobot.DaemonInfo   `json:"daemon,omitempty"`
 	Capabilities *hobot.Capabilities `json:"capabilities,omitempty"`
 	Error        string              `json:"error,omitempty"`
@@ -247,7 +248,11 @@ func (app *App) RefreshBoard(boardID string) (BoardConnection, error) {
 		}
 		app.disconnect(boardID)
 	}
-	return app.ConnectBoard(boardID)
+	connection, connectErr := app.ConnectBoard(boardID)
+	if connectErr == nil {
+		connection.Reconnected = true
+	}
+	return connection, connectErr
 }
 
 func (app *App) GetSystemSnapshot(boardID string) (hobot.SystemSnapshot, error) {

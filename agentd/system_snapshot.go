@@ -204,7 +204,7 @@ func listBPUDevices() []string {
 	devices := []string{}
 	for _, entry := range entries {
 		name := strings.ToLower(entry.Name())
-		if strings.HasPrefix(name, "bpu") || strings.HasPrefix(name, "hobot") || strings.HasPrefix(name, "dnn") {
+		if name == "bpu" || strings.HasPrefix(name, "bpu_core") || strings.HasPrefix(name, "dnn") {
 			devices = append(devices, filepath.Join("/dev", entry.Name()))
 		}
 	}
@@ -214,10 +214,22 @@ func listBPUDevices() []string {
 func detectRDKUtilities() map[string]bool {
 	result := map[string]bool{}
 	for _, name := range []string{"hrut_somstatus", "hrt_model_exec", "rdkos_info"} {
-		_, err := exec.LookPath(name)
-		result[name] = err == nil
+		result[name] = commandAvailable(name)
 	}
 	return result
+}
+
+func commandAvailable(name string) bool {
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+	for _, root := range []string{"/usr/hobot/bin", "/usr/local/bin", "/usr/sbin", "/usr/bin"} {
+		info, err := os.Stat(filepath.Join(root, name))
+		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func readUptimeSeconds() uint64 {

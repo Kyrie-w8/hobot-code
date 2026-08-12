@@ -269,11 +269,11 @@ async function getBoardSnapshot(includeProcesses = false): Promise<BoardSnapshot
     readText(["/etc/version"]),
     readText(["/etc/os-release"]),
     readText(["/proc/meminfo"]),
-    listMatching("/dev", /^(bpu|hobot|ion|dnn)/i),
+    listMatching("/dev", /^(bpu(?:_core\d+)?|dnn\d*)$/i),
     readThermals(),
-    commandExists(["/usr/bin/hrut_somstatus", "/usr/local/bin/hrut_somstatus"]),
-    commandExists(["/usr/bin/hrt_model_exec", "/usr/local/bin/hrt_model_exec"]),
-    commandExists(["/usr/bin/rdkos_info", "/usr/local/bin/rdkos_info"]),
+    commandExists(["/usr/hobot/bin/hrut_somstatus", "/usr/local/bin/hrut_somstatus", "/usr/sbin/hrut_somstatus", "/usr/bin/hrut_somstatus"]),
+    commandExists(["/usr/hobot/bin/hrt_model_exec", "/usr/local/bin/hrt_model_exec", "/usr/sbin/hrt_model_exec", "/usr/bin/hrt_model_exec"]),
+    commandExists(["/usr/hobot/bin/rdkos_info", "/usr/local/bin/rdkos_info", "/usr/sbin/rdkos_info", "/usr/bin/rdkos_info"]),
   ]);
 
   const os = parseOsRelease(osRelease);

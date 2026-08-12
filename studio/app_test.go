@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,16 @@ import (
 
 	"github.com/bryant-w/hobot-code/sdk/go/hobot"
 )
+
+func TestBoardConnectionSerializesReconnectState(t *testing.T) {
+	encoded, err := json.Marshal(BoardConnection{Connected: true, Reconnected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"reconnected":true`) {
+		t.Fatalf("reconnect state missing from Studio response: %s", encoded)
+	}
+}
 
 func TestBoardStoreRoundTrip(t *testing.T) {
 	store := &boardStore{path: filepath.Join(t.TempDir(), "boards.json")}

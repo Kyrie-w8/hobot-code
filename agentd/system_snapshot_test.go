@@ -48,3 +48,9 @@ func TestCollectSystemSnapshotIsBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandAvailableRejectsMissingUtility(t *testing.T) {
+	if commandAvailable("hobot-code-command-that-does-not-exist") {
+		t.Fatal("missing command was reported as available")
+	}
+}

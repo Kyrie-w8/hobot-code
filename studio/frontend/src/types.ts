@@ -28,6 +28,7 @@ export type DaemonInfo = {
 export type Connection = {
   board: Board;
   connected: boolean;
+  reconnected?: boolean;
   daemon?: DaemonInfo;
   capabilities?: Capabilities;
   error?: string;

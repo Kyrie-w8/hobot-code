@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {boardHealth, capacityPair, durationLabel, maximumTemperature, temperatureTone} from './board-health.js';
+import {boardHealth, bpuCoreLabel, capacityPair, durationLabel, loadLabel, maximumTemperature, temperatureTone} from './board-health.js';
 
 function snapshot(overrides = {}) {
   return {
@@ -9,7 +9,9 @@ function snapshot(overrides = {}) {
     thermalZones: [{name: 'cpu', celsius: 54}],
     memory: {totalBytes: 8 * 1024 ** 3, availableBytes: 4 * 1024 ** 3},
     disk: {totalBytes: 64 * 1024 ** 3, availableBytes: 32 * 1024 ** 3},
-    bpuDevices: ['/dev/bpu0'],
+    cpuCores: 6,
+    loadAverage: [2.5, 2, 1],
+    bpuDevices: ['/dev/bpu', '/dev/bpu_core0'],
     rdkUtilities: {hrt_model_exec: true},
     ...overrides,
   };
@@ -19,6 +21,8 @@ test('healthy RDK reports no readiness issues', () => {
   assert.deepEqual(boardHealth(snapshot()), {tone: 'healthy', issues: []});
   assert.equal(maximumTemperature(snapshot()), '54.0 C');
   assert.equal(temperatureTone(snapshot()), 'healthy');
+  assert.equal(bpuCoreLabel(snapshot()), '1 core ready');
+  assert.equal(loadLabel(snapshot()), '2.50 / 6');
 });
 
 test('thermal, storage, memory, and BPU failures produce actionable issues', () => {

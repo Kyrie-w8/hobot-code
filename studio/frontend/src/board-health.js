@@ -65,6 +65,17 @@ export function temperatureTone(snapshot) {
   return 'healthy';
 }
 
+export function bpuCoreLabel(snapshot) {
+  const cores = snapshot.bpuDevices.filter((device) => /\/bpu_core\d+$/.test(device));
+  const count = cores.length || (snapshot.bpuDevices.some((device) => /\/bpu$/.test(device)) ? 1 : 0);
+  return count ? `${count} core${count === 1 ? '' : 's'} ready` : 'Not detected';
+}
+
+export function loadLabel(snapshot) {
+  const load = snapshot.loadAverage[0];
+  return Number.isFinite(load) ? `${load.toFixed(2)} / ${snapshot.cpuCores || '-'}` : '-';
+}
+
 function ratio(available, total) {
   return total > 0 ? available / total : 1;
 }

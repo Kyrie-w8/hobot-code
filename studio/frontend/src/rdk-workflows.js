@@ -29,6 +29,6 @@ const workflows = [
 export function rdkWorkflows(boardId) {
   const preferred = boardId === 'unknown'
     ? ['diagnose', 'deploy-model', 'camera']
-    : ['diagnose', 'deploy-model', 'benchmark', 'camera'];
+    : ['diagnose', 'deploy-model', 'benchmark', 'camera', 'tros'];
   return preferred.map((id) => workflows.find((workflow) => workflow.id === id));
 }
