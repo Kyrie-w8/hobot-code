@@ -173,7 +173,16 @@ test("release layout covers installer inputs and linked documentation", async (t
   for (const name of ["extensions", "skills", "knowledge", "prompts", "licenses"]) {
     assert.ok(REQUIRED_PACKAGE_DIRECTORIES.includes(name), `missing package directory contract: ${name}`);
   }
-  for (const name of ["agentd-protocol.md", "architecture.md", "configuration.md", "prime-agent-crush-review.md", "releasing.md", "user-directory-layout.md"]) {
+  for (const name of [
+    "agentd-protocol.md",
+    "architecture.md",
+    "cache-efficiency.md",
+    "compatibility.md",
+    "configuration.md",
+    "model-capabilities.md",
+    "releasing.md",
+    "user-directory-layout.md",
+  ]) {
     assert.ok(REQUIRED_PACKAGE_PATHS.includes(`docs/${name}`), `missing packaged documentation: ${name}`);
   }
 
