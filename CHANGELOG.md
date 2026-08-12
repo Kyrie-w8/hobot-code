@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.3
+
+- Make historical message editing replace the visible conversation timeline: retain context before the edited prompt, discard later turns from the new timeline, and keep the replacement in the main conversation instead of presenting it as a Side Agent.
+- Stop the superseded idle worker before starting an edited timeline, preserve internal session ancestry for recovery, and bound copied event history on complete user-turn boundaries.
+- Fold successive edits into one project conversation while keeping genuine Side Agents as independent sibling conversations.
+
 ## 0.23.2
 
 - Recover each task's next event sequence from its durable log after an agentd restart, preventing stale metadata from appending duplicate sequence numbers and breaking Studio reconnects.

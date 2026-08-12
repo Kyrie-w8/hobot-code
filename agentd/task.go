@@ -526,6 +526,9 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if params.Kind != "side" && params.Kind != "edit" {
 		return taskMetadata{}, fmt.Errorf("task fork kind must be side or edit")
 	}
+	if params.Kind == "edit" && params.Sequence == 0 {
+		return taskMetadata{}, fmt.Errorf("edited task fork requires a user message sequence")
+	}
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
 	}
@@ -575,6 +578,14 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			_ = os.Remove(forkFile)
 		}
 	}()
+	if params.Kind == "edit" {
+		if _, err := source.stopIfIdle(); err != nil {
+			return taskMetadata{}, fmt.Errorf("stop edited task: %w", err)
+		}
+		if isLiveStatus(source.snapshot().Status) {
+			return taskMetadata{}, fmt.Errorf("task must be idle or stopped before editing its history")
+		}
+	}
 	if err := manager.ensureActiveSlot(); err != nil {
 		return taskMetadata{}, err
 	}
@@ -584,13 +595,12 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	}
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
-		suffix := "side"
 		if params.Kind == "edit" {
-			suffix = "branch"
+			name = parent.Name
+		} else {
+			base := truncateTaskTitle(parent.Name, 54)
+			name = base + "-side"
 		}
-		base := parent.Name
-		base = truncateTaskTitle(base, 54)
-		name = base + "-" + suffix
 	}
 	name, err = validateTaskName(name)
 	if err != nil {
@@ -632,7 +642,14 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
-	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+	if params.Kind == "edit" {
+		eventBytes, lastSequence, err := writeEditEventHistory(current.events, source.events, parent.ID, id, params.Sequence, manager.cfg.MaxEventSize)
+		if err != nil {
+			return taskMetadata{}, fmt.Errorf("copy edited conversation history: %w", err)
+		}
+		current.eventBytes = eventBytes
+		current.metadata.LastSequence = lastSequence
+	} else if err := os.WriteFile(current.events, nil, 0o600); err != nil {
 		return taskMetadata{}, err
 	}
 	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
@@ -651,6 +668,73 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		return current.snapshot(), err
 	}
 	return current.snapshot(), nil
+}
+
+// Editing creates a new session branch internally, but it remains the same
+// conversation to the user. Preserve the visible timeline before the selected
+// prompt and let launch() append the replacement prompt as the next event.
+func writeEditEventHistory(targetPath, sourcePath, sourceTaskID, targetTaskID string, before uint64, maximumBytes int64) (int64, uint64, error) {
+	events, err := readEvents(sourcePath, sourceTaskID, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	prefix := make([]taskEvent, 0)
+	foundBoundary := false
+	for _, event := range events {
+		if event.Sequence == before {
+			foundBoundary = true
+			break
+		}
+		if event.Sequence > before {
+			break
+		}
+		prefix = append(prefix, event)
+	}
+	if !foundBoundary {
+		return 0, 0, fmt.Errorf("selected message event is missing: %d", before)
+	}
+	// Keep the newest half of the prior timeline so the edited conversation has
+	// enough durable-log capacity for its replacement turn and later follow-ups.
+	historyBudget := maximumBytes / 2
+	start := len(prefix)
+	used := int64(0)
+	for index := len(prefix) - 1; index >= 0; index-- {
+		event := prefix[index]
+		event.TaskID = targetTaskID
+		event.Sequence = 1
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return 0, 0, err
+		}
+		if used+int64(len(encoded)+1) > historyBudget {
+			break
+		}
+		used += int64(len(encoded) + 1)
+		start = index
+	}
+	for start < len(prefix) && (prefix[start].Normalized == nil || prefix[start].Normalized.Type != "user.message") {
+		start++
+	}
+	var output bytes.Buffer
+	lastSequence := uint64(0)
+	for _, event := range prefix[start:] {
+		event.TaskID = targetTaskID
+		lastSequence++
+		event.Sequence = lastSequence
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return 0, 0, err
+		}
+		output.Write(encoded)
+		output.WriteByte('\n')
+	}
+	if int64(output.Len()) > historyBudget {
+		return 0, 0, fmt.Errorf("edited conversation history exceeds %d bytes", historyBudget)
+	}
+	if err := os.WriteFile(targetPath, output.Bytes(), 0o600); err != nil {
+		return 0, 0, err
+	}
+	return int64(output.Len()), lastSequence, nil
 }
 
 func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLine) (string, error) {

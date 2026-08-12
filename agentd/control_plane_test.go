@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +110,72 @@ func TestHistoricalForkIgnoresPromptsFromOlderTaskSessions(t *testing.T) {
 	leaf, err := current.sessionLeafBeforePrompt(2, lines)
 	if err != nil || leaf != "model" {
 		t.Fatalf("historical session lookup failed: leaf=%q err=%v", leaf, err)
+	}
+}
+
+func TestEditEventHistoryKeepsOnlyEventsBeforeReplacedPrompt(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source-events.jsonl")
+	targetPath := filepath.Join(root, "target-events.jsonl")
+	events := []taskEvent{
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 1, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "first"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 2, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "assistant.text.delta", Data: map[string]any{"delta": "first answer"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 3, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "replace me"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 4, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "assistant.text.delta", Data: map[string]any{"delta": "remove me"}}},
+	}
+	var content bytes.Buffer
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		content.Write(encoded)
+		content.WriteByte('\n')
+	}
+	if err := os.WriteFile(sourcePath, content.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eventBytes, lastSequence, err := writeEditEventHistory(targetPath, sourcePath, "source", "edited", 3, 1<<20)
+	if err != nil || eventBytes <= 0 || lastSequence != 2 {
+		t.Fatalf("copy edit history failed: bytes=%d sequence=%d err=%v", eventBytes, lastSequence, err)
+	}
+	copied, err := readEvents(targetPath, "edited", 0)
+	if err != nil || len(copied) != 2 {
+		t.Fatalf("unexpected copied history: events=%+v err=%v", copied, err)
+	}
+	if copied[0].Sequence != 1 || copied[1].Sequence != 2 || copied[0].TaskID != "edited" || copied[1].TaskID != "edited" {
+		t.Fatalf("copied history was not rebound to the edit task: %+v", copied)
+	}
+	if text, _ := copied[1].Normalized.Data["delta"].(string); text != "first answer" {
+		t.Fatalf("pre-edit assistant context was lost: %q", text)
+	}
+}
+
+func TestEditEventHistoryTruncatesAtAUserTurn(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source-events.jsonl")
+	targetPath := filepath.Join(root, "target-events.jsonl")
+	events := []taskEvent{
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 1, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "old"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 2, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "assistant.text.delta", Data: map[string]any{"delta": strings.Repeat("x", 600)}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 3, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "recent"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 4, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "assistant.text.delta", Data: map[string]any{"delta": "recent answer"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "source", Sequence: 5, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "replace"}}},
+	}
+	var content bytes.Buffer
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		content.Write(encoded)
+		content.WriteByte('\n')
+	}
+	if err := os.WriteFile(sourcePath, content.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := writeEditEventHistory(targetPath, sourcePath, "source", "edited", 5, 1600); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := readEvents(targetPath, "edited", 0)
+	if err != nil || len(copied) != 2 {
+		t.Fatalf("unexpected bounded edit history: events=%+v err=%v", copied, err)
+	}
+	if copied[0].Normalized.Type != "user.message" || copied[0].Normalized.Data["text"] != "recent" {
+		t.Fatalf("bounded history began in the middle of a turn: %+v", copied)
 	}
 }

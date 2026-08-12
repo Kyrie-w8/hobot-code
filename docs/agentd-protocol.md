@@ -63,7 +63,7 @@
 | `task.delete` | `{taskId}` | 删除已归档的终态任务及本地日志 |
 | `task.resume` | `{taskId, prompt?, images?}` | 重新打开已校验的 Pi session，可选发送新 Prompt 与图片 |
 | `task.restart` | `{taskId, prompt, images?}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
-| `task.fork` | `{taskId, sequence?, prompt, images?, name?, kind, model?, permissionMode?}` | 从已稳定上下文或指定用户消息之前创建独立任务分支 |
+| `task.fork` | `{taskId, sequence?, prompt, images?, name?, kind, model?, permissionMode?}` | `side` 从最新稳定上下文创建独立任务；`edit` 从指定用户消息之前创建替换时间线 |
 | `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为终态任务持久化下次 Resume 使用的模型 |
 | `task.permissions` | `{taskId, mode}` | 为 idle 或终态任务设置独立的 `review`、`ask` 或 `developer` 权限策略 |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
@@ -102,7 +102,7 @@ tasks/<task-id>/worker.stderr.log
 
 目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整；worker stderr 最多保留 1 MiB。达到上限后仍持续排空进程管道，避免 worker 因反压卡死。
 
-客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源任务：它根据 session 树的 `parentId` 链物化私有分支文件。指定 `sequence` 时截止到该条 `user.message` 之前；未指定时取最新已稳定叶节点，不会复制未完成的用户/工具轮次。
+客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源 session 文件：它根据 session 树的 `parentId` 链物化私有分支文件。`side` 取最新已稳定叶节点并作为独立 Agent 展示；`edit` 要求指定 `sequence`，停止被替代的空闲 worker，继承该条 `user.message` 之前的可见历史，并把修改后的 Prompt 作为同一会话的新时间线。旧时间线仍以内部任务记录保留，但 Studio 会折叠它，不会将编辑操作展示成 Side Agent。
 
 ## SSH 标准输入桥接
 
