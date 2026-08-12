@@ -371,7 +371,7 @@ func acceleratorFromIONAt(memory aiMemorySnapshot, procRoot string) acceleratorS
 		processBytesByHeap[client.Heap] += client.Bytes
 	}
 	for _, heap := range memory.Heaps {
-		if heap.CapacityBytes == 0 || !isHbmemPool(heap.Name) {
+		if !isHbmemPool(heap.Name) || (heap.CapacityBytes == 0 && heap.AllocatedBytes == 0) {
 			continue
 		}
 		used := heap.AllocatedBytes
@@ -380,7 +380,7 @@ func acceleratorFromIONAt(memory aiMemorySnapshot, procRoot string) acceleratorS
 			processBytes = used
 		}
 		free := uint64(0)
-		if used < heap.CapacityBytes {
+		if heap.CapacityBytes > 0 && used < heap.CapacityBytes {
 			free = heap.CapacityBytes - used
 		}
 		result.HbmemPools = append(result.HbmemPools, acceleratorMemoryPoolSnapshot{

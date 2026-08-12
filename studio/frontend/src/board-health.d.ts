@@ -6,6 +6,7 @@ export type ResourceMetric = {key: string; label: string; value: string; percent
 export type AcceleratorMemoryMetric = {key: string; label: string; value: string; detail?: string; percent?: number; available?: boolean};
 
 export function boardHealth(snapshot: SystemSnapshot | null): {tone: HealthTone; issues: HealthIssue[]};
+export function orphanedIONNotice(bytes: number): {warning: boolean; label: string} | null;
 export function capacityPair(available: number, total: number): string;
 export function systemResourceMetrics(snapshot: SystemSnapshot): ResourceMetric[];
 export function acceleratorMemoryMetrics(snapshot: SystemSnapshot): AcceleratorMemoryMetric[];

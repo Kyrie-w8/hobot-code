@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, systemResourceMetrics} from './board-health.js';
+import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, orphanedIONNotice, systemResourceMetrics} from './board-health.js';
 
 function snapshot(overrides = {}) {
   return {
@@ -25,6 +25,19 @@ test('healthy RDK reports no readiness issues', () => {
   assert.deepEqual(bpuUtilization(snapshot()), {available: true, average: 42, peak: 42, peakCore: 0});
   assert.equal(bpuTemperature(snapshot({thermalZones: [{name: 'pvt_bpu', celsius: 52.5}]})), '52.5 C');
   assert.equal(bpuFrequency(snapshot()), '1 GHz / 1.5 GHz');
+});
+
+test('small retained ION buffers stay informational and material orphaned memory warns', () => {
+  const small = snapshot({aiMemory: {...snapshot().aiMemory, ionOrphanedBytes: 4 * 1024 ** 2}});
+  assert.deepEqual(boardHealth(small), {tone: 'healthy', issues: []});
+  assert.deepEqual(orphanedIONNotice(small.aiMemory.ionOrphanedBytes), {
+    warning: false,
+    label: '4 MiB retained ION buffers · below alert threshold',
+  });
+
+  const material = snapshot({aiMemory: {...snapshot().aiMemory, ionOrphanedBytes: 32 * 1024 ** 2}});
+  assert.equal(boardHealth(material).tone, 'warning');
+  assert.equal(orphanedIONNotice(material.aiMemory.ionOrphanedBytes)?.warning, true);
 });
 
 test('thermal, storage, memory, and BPU failures produce actionable issues', () => {
@@ -72,6 +85,17 @@ test('monitor fallback does not present estimated ownership as exact', () => {
     {name: 'carveout', totalBytes: 512 * 1024 ** 2, usedBytes: 1 * 1024 ** 2, freeBytes: 511 * 1024 ** 2},
   ]}}));
   assert.equal(metrics[0].detail, undefined);
+});
+
+test('S600 allocation-only carveout remains visible without inventing a capacity', () => {
+  const metrics = acceleratorMemoryMetrics(snapshot({accelerator: {available: true, source: 'ion-debugfs', hbmemPools: [
+    {name: 'carveout', totalBytes: 0, usedBytes: 2.4 * 1024 ** 3, freeBytes: 0, processBytes: 2.4 * 1024 ** 3, systemBytes: 0},
+    {name: 'ion_cma', totalBytes: 1024 ** 3, usedBytes: 0, freeBytes: 1024 ** 3},
+  ]}}));
+  assert.deepEqual(metrics.map(({label, value, percent, available}) => ({label, value, percent, available})), [
+    {label: 'BPU / codec memory', value: '2.4 GiB allocated', percent: undefined, available: false},
+    {label: 'DMA buffers', value: '0 MiB / 1 GiB used', percent: 0, available: true},
+  ]);
 });
 
 test('accelerator memory falls back without inventing a capacity', () => {

@@ -1,4 +1,5 @@
 const GIB = 1024 ** 3;
+const ORPHANED_ION_WARNING_BYTES = 32 * 1024 ** 2;
 
 export function boardHealth(snapshot) {
   if (!snapshot) return {tone: 'neutral', issues: []};
@@ -33,7 +34,7 @@ export function boardHealth(snapshot) {
   }
 
   const orphaned = snapshot.aiMemory?.ionOrphanedBytes ?? 0;
-  if (orphaned > 0) {
+  if (orphaned >= ORPHANED_ION_WARNING_BYTES) {
     issues.push({tone: 'warning', label: `${formatBytes(orphaned)} of orphaned ION buffers were detected. Check long-running media or accelerator processes.`});
   }
 
@@ -46,6 +47,17 @@ export function boardHealth(snapshot) {
     ? 'danger'
     : issues.some((issue) => issue.tone === 'warning') ? 'warning' : 'healthy';
   return {tone, issues};
+}
+
+export function orphanedIONNotice(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  const warning = bytes >= ORPHANED_ION_WARNING_BYTES;
+  return {
+    warning,
+    label: warning
+      ? `${formatBytes(bytes)} orphaned ION buffers`
+      : `${formatBytes(bytes)} retained ION buffers · below alert threshold`,
+  };
 }
 
 export function capacityPair(available, total) {
@@ -83,11 +95,12 @@ export function acceleratorMemoryMetrics(snapshot) {
 	const accelerator = snapshot.accelerator;
 	if (accelerator?.available && accelerator.hbmemPools?.length) {
 		const exact = accelerator.source === 'ion-debugfs';
-		return accelerator.hbmemPools.filter((pool) => pool.totalBytes > 0).sort((left, right) => hbmemPoolPriority(left.name) - hbmemPoolPriority(right.name)).map((pool) => ({
+		return accelerator.hbmemPools.filter((pool) => pool.totalBytes > 0 || pool.usedBytes > 0).sort((left, right) => hbmemPoolPriority(left.name) - hbmemPoolPriority(right.name)).map((pool) => ({
 			key: `hbmem-${pool.name}`, label: hbmemPoolLabel(pool.name),
-			value: `${formatBytes(pool.usedBytes)} / ${formatBytes(pool.totalBytes)} used`,
+			value: pool.totalBytes > 0 ? `${formatBytes(pool.usedBytes)} / ${formatBytes(pool.totalBytes)} used` : `${formatBytes(pool.usedBytes)} allocated`,
 			detail: exact && pool.usedBytes > 0 ? `${formatBytes(pool.processBytes ?? 0)} apps · ${formatBytes(pool.systemBytes ?? 0)} system` : undefined,
-			percent: clampPercent(pool.usedBytes / pool.totalBytes * 100), available: true,
+			percent: pool.totalBytes > 0 ? clampPercent(pool.usedBytes / pool.totalBytes * 100) : undefined,
+			available: pool.totalBytes > 0,
 		}));
 	}
   const memory = snapshot.aiMemory;

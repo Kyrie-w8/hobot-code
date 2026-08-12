@@ -177,6 +177,19 @@ func TestSanitizeIONHeapCapacitiesRejectsImpossibleDriverValues(t *testing.T) {
 	}
 }
 
+func TestAcceleratorFromIONKeepsAllocationWhenDriverCapacityIsAnAddressWindow(t *testing.T) {
+	got := acceleratorFromIONAt(aiMemorySnapshot{Heaps: []aiMemoryHeapSnapshot{
+		{Name: "carveout", AllocatedBytes: 2 * 1024 * 1024 * 1024},
+		{Name: "ion_cma", CapacityBytes: 1024 * 1024 * 1024},
+	}}, t.TempDir())
+	if !got.Available || len(got.HbmemPools) != 2 {
+		t.Fatalf("allocation-only pool was dropped: %+v", got)
+	}
+	if got.HbmemPools[0].Name != "carveout" || got.HbmemPools[0].TotalBytes != 0 || got.HbmemPools[0].UsedBytes != 2*1024*1024*1024 {
+		t.Fatalf("unexpected allocation-only pool: %+v", got.HbmemPools[0])
+	}
+}
+
 func TestReadBPUCoresReportsStatusAndFindsSystemDevfreq(t *testing.T) {
 	root := t.TempDir()
 	platformRoot := filepath.Join(root, "platform")

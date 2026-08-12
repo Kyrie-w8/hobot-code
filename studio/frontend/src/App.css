@@ -430,6 +430,7 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .resource-bar.available .resource-track i { background: var(--accent); }
 .memory-footnote { margin: 8px 0 0; color: var(--text-dim); font-size: 9px; line-height: 1.4; }
 .memory-warning { display: flex; align-items: center; gap: 6px; margin-top: 9px; color: var(--amber); font-size: 9px; }
+.memory-warning.minor { color: var(--text-dim); }
 .accelerator-processes { display: grid; gap: 7px; }
 .accelerator-process { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.018); }
 .accelerator-process > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
