@@ -185,15 +185,36 @@ type DeploymentInspection struct {
 }
 
 type DeploymentRecord struct {
-	Schema     int                `json:"schema"`
-	Cwd        string             `json:"cwd"`
-	Board      string             `json:"board"`
-	BoardID    string             `json:"boardId"`
-	RDKOS      string             `json:"rdkOsVersion"`
-	Goal       string             `json:"goal"`
-	Artifact   DeploymentArtifact `json:"artifact"`
-	ReportPath string             `json:"reportPath"`
-	CreatedAt  time.Time          `json:"createdAt"`
+	Schema     int                  `json:"schema"`
+	Cwd        string               `json:"cwd"`
+	Board      string               `json:"board"`
+	BoardID    string               `json:"boardId"`
+	RDKOS      string               `json:"rdkOsVersion"`
+	Goal       string               `json:"goal"`
+	Artifact   DeploymentArtifact   `json:"artifact"`
+	ReportPath string               `json:"reportPath"`
+	CreatedAt  time.Time            `json:"createdAt"`
+	Acceptance DeploymentAcceptance `json:"acceptance,omitempty"`
+}
+
+type DeploymentMetricRequirement struct {
+	Name       string  `json:"name"`
+	Unit       string  `json:"unit"`
+	Threshold  float64 `json:"threshold"`
+	Comparator string  `json:"comparator"`
+}
+type DeploymentAcceptance struct {
+	Profile                     string                        `json:"profile"`
+	Dataset                     string                        `json:"dataset,omitempty"`
+	MinimumAccuracySamples      int                           `json:"minimumAccuracySamples"`
+	Metrics                     []DeploymentMetricRequirement `json:"metrics,omitempty"`
+	MinimumWarmupIterations     int                           `json:"minimumWarmupIterations"`
+	MinimumMeasuredIterations   int                           `json:"minimumMeasuredIterations"`
+	MaximumModelP95LatencyMS    float64                       `json:"maximumModelP95LatencyMs,omitempty"`
+	MaximumEndToEndP95LatencyMS float64                       `json:"maximumEndToEndP95LatencyMs,omitempty"`
+	MinimumThroughput           float64                       `json:"minimumThroughput"`
+	MaximumTemperatureC         float64                       `json:"maximumTemperatureC"`
+	MinimumMemoryAvailableBytes uint64                        `json:"minimumMemoryAvailableBytes"`
 }
 
 type DeploymentReport struct {
@@ -234,8 +255,13 @@ type DeploymentMetric struct {
 
 type DeploymentResourceSample struct {
 	CapturedAt                 time.Time `json:"capturedAt"`
+	AIAllocationAvailable      bool      `json:"aiAllocationAvailable"`
+	BPUUtilizationAvailable    bool      `json:"bpuUtilizationAvailable"`
+	TemperatureAvailable       bool      `json:"temperatureAvailable"`
 	SystemMemoryUsedBytes      uint64    `json:"systemMemoryUsedBytes,omitempty"`
 	SystemMemoryAvailableBytes uint64    `json:"systemMemoryAvailableBytes,omitempty"`
+	AIAllocationSource         string    `json:"aiAllocationSource,omitempty"`
+	AIAllocatedBytes           uint64    `json:"aiAllocatedBytes,omitempty"`
 	IONAllocatedBytes          uint64    `json:"ionAllocatedBytes,omitempty"`
 	BPUUtilizationPercent      float64   `json:"bpuUtilizationPercent,omitempty"`
 	CPULoadPercent             float64   `json:"cpuLoadPercent,omitempty"`
@@ -268,6 +294,7 @@ type StartDeploymentRequest struct {
 	Name           string `json:"name,omitempty"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
+	Profile        string `json:"profile,omitempty"`
 }
 
 type Approval struct {

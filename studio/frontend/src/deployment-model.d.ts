@@ -4,3 +4,4 @@ export function preferredDeploymentArtifact(artifacts: DeploymentArtifact[]): De
 export function deploymentCanStart(artifact: DeploymentArtifact | null | undefined): boolean;
 export function deploymentCompatibilityLabel(value: string): string;
 export function deploymentPhaseLabel(value: string): string;
+export function deploymentProfileFor(artifact: DeploymentArtifact | null | undefined, boardId: string): string;

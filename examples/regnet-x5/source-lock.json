@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "model": {
+    "name": "torchvision RegNet-X-400MF",
+    "weights": "IMAGENET1K_V2",
+    "weightsUrl": "https://download.pytorch.org/models/regnet_x_400mf-62229a5f.pth",
+    "weightsSha256": "62229a5ff3d944ad793b874a78d77a2b32fae1d392b4084b3449316e58fd3e5a",
+    "documentation": "https://docs.pytorch.org/vision/main/models/generated/torchvision.models.regnet_x_400mf.html"
+  },
+  "dRoboticsModelZooAudit": {
+    "repository": "https://github.com/D-Robotics/rdk_model_zoo",
+    "branch": "rdk_x5",
+    "commit": "76a1abc878b52f381aed7fbf62f35307d984cc72",
+    "gitTreePathCount": 1125,
+    "gitTreeTruncated": false,
+    "regnetPathCount": 0,
+    "mobileonePathCount": 29
+  },
+  "dataset": {
+    "name": "Imagenette2-160",
+    "url": "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-160.tgz",
+    "archiveSha256": "64d0c4859f35a461889e0147755a999a48b49bf38a7e0f9bd27003f10db02fe5",
+    "seed": 20260812,
+    "calibrationSamples": 100,
+    "evaluationSamples": 200
+  },
+  "conversion": {
+    "containerImage": "ccr-29eug8s3-pub.cnc.bj.baidubce.com/aitools/ai_toolchain_ubuntu_20_x5_gpu:v1.2.8",
+    "containerDigest": "sha256:bb706c129bafb4d36d2c338c957369cc5fdb51e0eb65ad5c927b3fda4023ad3f",
+    "hbMapperVersion": "1.24.3",
+    "ptqConfigSha256": "027a4ad4e91b9abf1ab74b773577bfb0b8d85f63b7ed1c27da9d74dadc6a94a3",
+    "calibrationFileSetSha256": "24689306bfe0945286c45b9d8f00a178f1d0a6504b2f0da5e22e31950eede7ea",
+    "calibrationDigestFormat": "SHA256 of sorted sha256sum records using paths relative to calibration root"
+  }
+}

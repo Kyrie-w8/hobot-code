@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, preferredDeploymentArtifact} from './deployment-model.js';
+import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 
 const artifact = (name, compatibility) => ({name, compatibility});
 
@@ -18,4 +18,10 @@ test('deployment labels distinguish verified completion from incomplete reports'
   assert.equal(deploymentCompatibilityLabel('mismatch'), 'Different board');
   assert.equal(deploymentPhaseLabel('passed'), 'Verified deployment');
   assert.equal(deploymentPhaseLabel('invalid-report'), 'Report rejected');
+});
+
+test('known X5 source models bind their frozen acceptance profile', () => {
+  assert.equal(deploymentProfileFor(artifact('regnet_x_400mf_224.onnx', 'conversion-required'), 'x5'), 'regnet-x-400mf-x5');
+  assert.equal(deploymentProfileFor(artifact('regnet_x_400mf_224.onnx', 'conversion-required'), 's100'), '');
+  assert.equal(deploymentProfileFor(artifact('custom.onnx', 'conversion-required'), 'x5'), '');
 });

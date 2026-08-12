@@ -1,4 +1,4 @@
-.PHONY: check release pi-release pi-check agentd-check agentd-release sdk-check studio-check studio-macos-release clean
+.PHONY: check release pi-release pi-check agentd-check agentd-release sdk-check examples-check studio-check studio-macos-release clean
 
 VERSION := $(shell sed -n '1p' VERSION)
 GO_CACHE ?= $(CURDIR)/dist/go-cache
@@ -18,6 +18,12 @@ agentd-release: agentd-check
 sdk-check:
 	cd sdk/go && GOCACHE="$(SDK_GO_CACHE)" go test -race ./...
 	cd sdk/go && GOCACHE="$(SDK_GO_CACHE)" go vet ./...
+
+examples-check:
+	sh -n examples/regnet-x5/convert_x5.sh
+	node -e 'JSON.parse(require("fs").readFileSync("examples/regnet-x5/source-lock.json", "utf8"))'
+	PYTHONPYCACHEPREFIX="$(CURDIR)/dist/pycache" python3 -m unittest examples/regnet-x5/test_validate_x5.py
+	PYTHONPYCACHEPREFIX="$(CURDIR)/dist/pycache" python3 -m compileall -q examples
 
 studio-check: sdk-check
 	cd studio/frontend && npm ci --ignore-scripts --no-audit --no-fund
@@ -41,7 +47,7 @@ pi-check:
 	node scripts/validate-version.mjs
 	node scripts/validate-package.mjs --source .
 
-check: pi-check agentd-check sdk-check
+check: pi-check agentd-check sdk-check examples-check
 
 pi-release: pi-check agentd-release
 	HOBOT_CODE_AGENTD_BINARY="$(AGENTD_BINARY)" ./scripts/package-pi.sh

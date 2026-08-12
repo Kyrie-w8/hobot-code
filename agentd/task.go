@@ -70,18 +70,20 @@ type task struct {
 	events  string
 	stderr  string
 
-	mu          sync.Mutex
-	metadata    taskMetadata
-	command     *exec.Cmd
-	stdin       io.WriteCloser
-	workerDone  chan struct{}
-	writeMu     sync.Mutex
-	streamWG    sync.WaitGroup
-	stopping    bool
-	interrupted bool
-	eventBytes  int64
-	subscribers map[uint64]chan taskEvent
-	nextSubID   uint64
+	mu                 sync.Mutex
+	metadata           taskMetadata
+	command            *exec.Cmd
+	stdin              io.WriteCloser
+	workerDone         chan struct{}
+	writeMu            sync.Mutex
+	streamWG           sync.WaitGroup
+	stopping           bool
+	interrupted        bool
+	eventBytes         int64
+	subscribers        map[uint64]chan taskEvent
+	nextSubID          uint64
+	pendingSessionFile string
+	pendingSessionID   string
 }
 
 type taskManager struct {
@@ -205,6 +207,18 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			continue
 		}
 		metadata.PermissionMode, _ = normalizePermissionMode(metadata.PermissionMode)
+		legacyMetadataCleared := false
+		if metadata.Model != "" && validPersistedModel(metadata.Model) == "" {
+			metadata.Model = ""
+			legacyMetadataCleared = true
+		}
+		if metadata.SessionFile != "" {
+			if _, err := validateSessionFile(cfg.SessionDir, metadata.SessionFile); err != nil {
+				metadata.SessionFile = ""
+				metadata.SessionID = ""
+				legacyMetadataCleared = true
+			}
+		}
 		if isLiveStatus(metadata.Status) {
 			metadata.Status = statusInterrupted
 			metadata.PID = 0
@@ -233,7 +247,7 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			current.metadata.LastSequence = lastSequence
 		}
 		manager.tasks[metadata.ID] = current
-		if metadata.Status == statusInterrupted || repaired || sequenceRecovered {
+		if metadata.Status == statusInterrupted || repaired || sequenceRecovered || legacyMetadataCleared {
 			_ = current.saveMetadata()
 		}
 	}
@@ -989,18 +1003,23 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		}
 	case "response":
 		if header.Success && header.Command == "get_state" {
-			current.metadata.SessionFile = header.Data.SessionFile
-			current.metadata.SessionID = header.Data.SessionID
+			current.pendingSessionFile = header.Data.SessionFile
+			current.pendingSessionID = header.Data.SessionID
 			if current.metadata.Status == statusStarting {
 				current.metadata.Status = statusIdle
 			}
 			if header.Data.Model != nil {
-				current.metadata.Model = joinModel(header.Data.Model.Provider, header.Data.Model.ID)
+				if model := workerModelSelection(header.Data.Model.Provider, header.Data.Model.ID); model != "" {
+					current.metadata.Model = model
+				}
 			}
 		} else if header.Success && header.Command == "set_model" {
-			current.metadata.Model = joinModel(header.Data.Provider, header.Data.ID)
+			if model := workerModelSelection(header.Data.Provider, header.Data.ID); model != "" {
+				current.metadata.Model = model
+			}
 		}
 	}
+	sessionBound := current.bindPendingSessionLocked()
 	event := taskEvent{
 		Protocol:   protocolVersion,
 		Kind:       "event",
@@ -1037,9 +1056,39 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		}
 	}
 	current.mu.Unlock()
-	if logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" || header.Type == "response" {
+	if sessionBound || logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" || header.Type == "response" {
 		_ = current.saveMetadata()
 	}
+}
+
+func workerModelSelection(provider, id string) string {
+	if strings.EqualFold(strings.TrimSpace(provider), "unknown") || strings.EqualFold(strings.TrimSpace(id), "unknown") {
+		return ""
+	}
+	return joinModel(provider, id)
+}
+
+func validPersistedModel(value string) string {
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return workerModelSelection(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+}
+
+func (current *task) bindPendingSessionLocked() bool {
+	if current.pendingSessionFile == "" || current.pendingSessionID == "" {
+		return false
+	}
+	physical, err := validateSessionFile(current.manager.cfg.SessionDir, current.pendingSessionFile)
+	if err != nil {
+		return false
+	}
+	current.metadata.SessionFile = physical
+	current.metadata.SessionID = current.pendingSessionID
+	current.pendingSessionFile = ""
+	current.pendingSessionID = ""
+	return true
 }
 
 func (current *task) upsertApprovalLocked(approval pendingApproval) {
@@ -1681,6 +1730,8 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	current.metadata.LastError = ""
 	current.metadata.SessionFile = ""
 	current.metadata.SessionID = ""
+	current.pendingSessionFile = ""
+	current.pendingSessionID = ""
 	current.metadata.RestartCount++
 	for index := range current.metadata.Approvals {
 		current.metadata.Approvals[index].Active = false

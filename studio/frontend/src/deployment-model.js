@@ -15,3 +15,12 @@ export function deploymentCompatibilityLabel(value) {
 export function deploymentPhaseLabel(value) {
   return ({checking: 'Checking report', running: 'Deployment running', passed: 'Verified deployment', partial: 'Partially completed', failed: 'Deployment failed', incomplete: 'Report missing', 'invalid-report': 'Report rejected'})[value] ?? value;
 }
+
+export function deploymentProfileFor(artifact, boardId) {
+  if (!artifact || boardId !== 'x5') return '';
+  const name = artifact.name.toLowerCase();
+  if (name.includes('regnet') && name.includes('400mf')) return 'regnet-x-400mf-x5';
+  if (name.includes('rt_igev') || name.includes('rt-igev')) return 'rt-igev-x5';
+  if (name.includes('mobileone') && name.includes('s0')) return 'mobileone-s0-x5';
+  return '';
+}

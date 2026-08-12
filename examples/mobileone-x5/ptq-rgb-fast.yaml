@@ -1,0 +1,29 @@
+model_parameters:
+  onnx_model: './mobileone_s0_224.onnx'
+  march: 'bayes-e'
+  output_model_file_prefix: 'mobileone_s0_224_rgb_fast_x5'
+  working_dir: './ptq_rgb_fast_output'
+  layer_out_dump: false
+
+input_parameters:
+  input_name: 'image'
+  input_type_train: 'rgb'
+  input_layout_train: 'NCHW'
+  input_type_rt: 'rgb'
+  input_layout_rt: 'NHWC'
+  input_shape: '1x3x224x224'
+  norm_type: 'no_preprocess'
+
+calibration_parameters:
+  cal_data_dir: './data_imagenette/calibration/featuremap'
+  cal_data_type: 'float32'
+  preprocess_on: false
+  calibration_type: 'default'
+  per_channel: false
+
+compiler_parameters:
+  compile_mode: 'latency'
+  optimize_level: 'O3'
+  core_num: 1
+  debug: false
+  jobs: 16

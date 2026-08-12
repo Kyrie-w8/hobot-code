@@ -23,7 +23,7 @@ Usage:
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
   hobot deploy inspect [--cwd DIR]
-  hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] ARTIFACT
+  hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--profile PROFILE] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] ARTIFACT
   hobot deploy status TASK_ID
   hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
   hobot task list [--all]
@@ -127,6 +127,7 @@ func runDeploymentCLI(cfg config, args []string) error {
 		name := flags.String("name", "", "task name")
 		model := flags.String("model", "", "agent model")
 		permissions := flags.String("permissions", "ask", "task permission mode")
+		profile := flags.String("profile", "", "frozen acceptance profile")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -137,7 +138,7 @@ func runDeploymentCLI(cfg config, args []string) error {
 		if err != nil {
 			return err
 		}
-		params := deploymentStartParams{Cwd: workingDirectory, ArtifactPath: flags.Arg(0), Goal: *goal, Name: *name, Model: *model, PermissionMode: *permissions}
+		params := deploymentStartParams{Cwd: workingDirectory, ArtifactPath: flags.Arg(0), Goal: *goal, Name: *name, Model: *model, PermissionMode: *permissions, Profile: *profile}
 		result, err := client.call("deployment.start", params)
 		if err != nil {
 			return err

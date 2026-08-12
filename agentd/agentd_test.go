@@ -683,6 +683,94 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 	waitForStatus(t, current, statusStopped)
 }
 
+func TestSessionBindingWaitsForARealPrivateSessionFile(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00112233445566778899aabb"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{
+		manager:     manager,
+		dir:         dir,
+		events:      filepath.Join(dir, "events.jsonl"),
+		stderr:      filepath.Join(dir, "worker.stderr.log"),
+		metadata:    taskMetadata{ID: id, Name: "late-session", Cwd: cfg.StateRoot, Status: statusStarting},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := filepath.Join(cfg.SessionDir, "late.jsonl")
+	current.recordEvent(mustJSON(map[string]any{
+		"type": "response", "command": "get_state", "success": true,
+		"data": map[string]any{
+			"sessionFile": session,
+			"sessionId":   "late-session",
+			"model":       map[string]string{"provider": "unknown", "id": "unknown"},
+		},
+	}))
+	state := current.snapshot()
+	if state.SessionFile != "" || state.SessionID != "" || state.Model != "" {
+		t.Fatalf("unavailable session or placeholder model was persisted: %+v", state)
+	}
+	if err := os.WriteFile(session, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current.recordEvent(json.RawMessage(`{"type":"agent_start"}`))
+	state = current.snapshot()
+	physicalSession, err := filepath.EvalSymlinks(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SessionFile != physicalSession || state.SessionID != "late-session" {
+		t.Fatalf("real session was not bound after creation: %+v", state)
+	}
+}
+
+func TestManagerRecoveryClearsUnavailableSessionBinding(t *testing.T) {
+	cfg := testConfig(t)
+	id := "00112233445566778899aabb"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	metadata := taskMetadata{
+		ID: id, Name: "stale-session", Cwd: cfg.StateRoot, Status: statusStopped,
+		SessionFile: filepath.Join(cfg.SessionDir, "missing.jsonl"), SessionID: "missing", Model: "unknown/unknown",
+	}
+	encoded, _ := json.MarshalIndent(metadata, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := manager.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := current.snapshot()
+	if state.SessionFile != "" || state.SessionID != "" || state.Model != "" {
+		t.Fatalf("recovery retained unavailable legacy metadata: %+v", state)
+	}
+	persisted, err := readPrivateRegularFile(filepath.Join(dir, "metadata.json"), maxRequestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persisted, []byte("missing.jsonl")) {
+		t.Fatalf("recovery did not persist the cleared binding: %s", persisted)
+	}
+}
+
 func TestTaskLifecycleManagementAndPagination(t *testing.T) {
 	cfg := testConfig(t)
 	manager, err := newTaskManager(cfg)
