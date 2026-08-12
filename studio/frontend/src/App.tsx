@@ -19,7 +19,6 @@ import {markdownRemarkPlugins} from './markdown-config.js';
 import {rdkWorkflows} from './rdk-workflows.js';
 import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 import {shouldToggleMaximise} from './titlebar-policy.js';
-import {WindowToggleMaximise} from '../wailsjs/runtime/runtime.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
 import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent} from './types';
 import './App.css';
@@ -637,7 +636,7 @@ function App() {
 
   return (
     <div className={`studio-shell ${showInspector ? '' : 'inspector-hidden'} ${isMacOS ? 'platform-macos' : ''}`}>
-      <header className="titlebar" onDoubleClick={(event) => { if (shouldToggleMaximise(event.nativeEvent)) WindowToggleMaximise(); }}>
+      <header className="titlebar" onDoubleClick={(event) => { if (shouldToggleMaximise(event.nativeEvent)) window.runtime?.WindowToggleMaximise?.(); }}>
         <div className="brand-lockup"><div className="brand-mark" aria-label="Hobot Code">H</div><span>Hobot Code</span></div>
         <button className="board-switcher" onClick={() => setShowBoard(true)} disabled={busy}>
           <span className={`connection-dot ${connectionState}`} />

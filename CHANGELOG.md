@@ -6,6 +6,7 @@
 - Produce a self-describing support document with RDK identity and telemetry, daemon limits, fixed utility availability, structured health checks, and pseudonymous task summaries.
 - Exclude conversations, prompts, tool inputs and outputs, environment variables, credentials, project files, raw logs, hostnames, local paths, and raw error messages from support documents by construction, with regression tests for representative secrets.
 - Let Hobot Studio generate, integrity-check, and save a support document through the existing SSH bridge without weakening board-side authorization or exposing a new network service.
+- Keep Studio reproducibly buildable from a clean checkout by using the Wails runtime injected into the webview instead of importing ignored generated bindings.
 
 ## 0.23.7
 

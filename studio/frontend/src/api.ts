@@ -7,7 +7,10 @@ type Backend = Record<string, (...args: any[]) => Promise<any>>;
 declare global {
   interface Window {
     go?: { main?: { App?: Backend } };
-    runtime?: { EventsOn?: (name: string, callback: (...args: any[]) => void) => () => void };
+    runtime?: {
+      EventsOn?: (name: string, callback: (...args: any[]) => void) => () => void;
+      WindowToggleMaximise?: () => void;
+    };
   }
 }
 
