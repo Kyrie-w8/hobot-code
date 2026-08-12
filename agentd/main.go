@@ -13,6 +13,7 @@ import (
 )
 
 var version = "dev"
+var releaseMarker = "HOBOT_CODE_AGENTD_VERSION=dev;"
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Hobot Code background task service
@@ -67,6 +68,9 @@ func run(args []string) error {
 		}
 		return runStdioBridge(cfg)
 	case "version", "--version", "-v":
+		if releaseMarker == "" {
+			return fmt.Errorf("agentd release marker is missing")
+		}
 		fmt.Println(version)
 		return nil
 	case "help", "--help", "-h":

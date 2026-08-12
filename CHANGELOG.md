@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.2
+
+- Bind the packaged agentd binary to the product version with an embedded release marker, reject stale binaries during packaging, and fail installation when the CLI, daemon, and archive versions differ.
+
 ## 0.22.1
 
 - Make release metadata generation and package validation execute reliably through symbolic directory paths, preventing macOS `/tmp` path aliases from producing archives without `BUILD_INFO.json` or `MANIFEST.sha256`.

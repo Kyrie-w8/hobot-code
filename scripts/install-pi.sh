@@ -440,8 +440,13 @@ for config_name in settings.json models.json permissions.json memory.json goals.
 done
 install -m 0644 "$package_dir/config/hobot.env.example" "$new_runtime/default-config/hobot.env.example"
 install -m 0644 "$package_dir/config/tmux.conf" "$new_runtime/tmux.conf"
-"$new_runtime/hobot" --version >/dev/null
-"$new_runtime/agentd" version >/dev/null
+runtime_version=$("$new_runtime/hobot" --version)
+agentd_version=$("$new_runtime/agentd" version)
+if [ "$runtime_version" != "$version" ] || [ "$agentd_version" != "$version" ]; then
+  printf 'Installed component version mismatch: package=%s runtime=%s agentd=%s\n' \
+    "$version" "$runtime_version" "$agentd_version" >&2
+  exit 1
+fi
 
 if [ -d "$legacy_config" ]; then
   cp -a "$legacy_config" "$backup_dir/legacy-etc-hobot-code"

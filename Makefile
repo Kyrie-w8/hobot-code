@@ -13,7 +13,7 @@ agentd-check:
 
 agentd-release: agentd-check
 	mkdir -p dist
-	cd agentd && GOCACHE="$(GO_CACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -buildvcs=false -trimpath -ldflags '-s -w -X main.version=$(VERSION)' -o "$(AGENTD_BINARY)" .
+	cd agentd && GOCACHE="$(GO_CACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -buildvcs=false -trimpath -ldflags '-s -w -X main.version=$(VERSION) -X main.releaseMarker=HOBOT_CODE_AGENTD_VERSION=$(VERSION);' -o "$(AGENTD_BINARY)" .
 
 sdk-check:
 	cd sdk/go && GOCACHE="$(SDK_GO_CACHE)" go test -race ./...

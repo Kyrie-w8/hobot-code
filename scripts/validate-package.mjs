@@ -310,8 +310,9 @@ export async function validatePackageMetadata(rootDirectory) {
   }
 }
 
-export async function validateAgentdBinary(rootDirectory) {
-  const file = await open(resolve(rootDirectory, "agentd"), "r");
+export async function validateAgentdBinary(rootDirectory, expectedVersion = "") {
+  const binaryPath = resolve(rootDirectory, "agentd");
+  const file = await open(binaryPath, "r");
   const header = Buffer.alloc(20);
   let bytesRead;
   try {
@@ -331,6 +332,12 @@ export async function validateAgentdBinary(rootDirectory) {
   ) {
     throw new Error("agentd must be a little-endian Linux ARM64 ELF binary");
   }
+  if (expectedVersion) {
+    const marker = Buffer.from(`HOBOT_CODE_AGENTD_VERSION=${expectedVersion};`, "utf8");
+    if (!(await readFile(binaryPath)).includes(marker)) {
+      throw new Error(`agentd release marker does not match VERSION ${expectedVersion}`);
+    }
+  }
 }
 
 export async function validatePackage(rootDirectory, { sourceOnly = false } = {}) {
@@ -339,7 +346,8 @@ export async function validatePackage(rootDirectory, { sourceOnly = false } = {}
   await validateSourceSyntax(root);
   await validateRelativeImports(root);
   if (sourceOnly) return;
-  await validateAgentdBinary(root);
+  const expectedVersion = (await readFile(resolve(root, "VERSION"), "utf8")).trim();
+  await validateAgentdBinary(root, expectedVersion);
   await validatePackageMetadata(root);
   await verifyManifest(root);
 }

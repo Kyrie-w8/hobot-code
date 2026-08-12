@@ -239,8 +239,10 @@ test("release validation accepts only Linux ARM64 agentd binaries", async (t) =>
   const header = Buffer.alloc(64);
   header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
   header.writeUInt16LE(183, 18);
-  await writeFile(join(root, "agentd"), header);
-  await validateAgentdBinary(root);
+  const marker = Buffer.from("HOBOT_CODE_AGENTD_VERSION=0.22.2;");
+  await writeFile(join(root, "agentd"), Buffer.concat([header, marker]));
+  await validateAgentdBinary(root, "0.22.2");
+  await assert.rejects(() => validateAgentdBinary(root, "0.22.1"), /release marker does not match/);
   header.writeUInt16LE(62, 18);
   await writeFile(join(root, "agentd"), header);
   await assert.rejects(() => validateAgentdBinary(root), /Linux ARM64 ELF/);
@@ -504,6 +506,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /could not prune old Hobot Code backup/);
   assert.match(installer, /package_dir\/agentd/);
   assert.match(installer, /new_runtime\/agentd/);
+  assert.match(installer, /Installed component version mismatch/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
   assert.doesNotMatch(installer, /\/usr\/local\/bin\/hobot --version/);
   assert.match(rollback, /LAST_BACKUP/);
