@@ -5,3 +5,4 @@ export function approvalPresentation(approval: Approval): {
   detail: string;
   remembersExactCall: boolean;
 };
+export function approvalResponse(method: Approval['method'], action: 'confirm' | 'deny' | 'cancel' | 'submit' | 'select', value?: string): Record<string, unknown>;

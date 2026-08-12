@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
+import {buildConversation, elapsedLabel, failurePresentation, recentEventsAfter} from './conversation-model.js';
 
 const event = (sequence, type, data = {}, raw = {}) => ({
   protocol: 1, kind: 'event', taskId: 'task', sequence,
@@ -45,6 +45,33 @@ test('conversation separates turns at each persisted user message', () => {
 
 test('lifecycle noise alone does not create conversation items', () => {
   assert.deepEqual(buildConversation([event(1, 'task.running'), event(2, 'task.idle')]), []);
+});
+
+test('a failed message remains visible even without assistant text', () => {
+  const result = buildConversation([
+    event(1, 'user.message', {text: 'Run the task'}),
+    event(2, 'assistant.message.completed', {errorMessage: 'HTTP 400: Unsupported model: kimi/missing'}),
+    event(3, 'task.idle'),
+  ]);
+  assert.equal(result.length, 2);
+  assert.equal(result[1].kind, 'assistant');
+  assert.equal(result[1].failure.category, 'model');
+  assert.equal(result[1].failure.title, 'The selected model is unavailable');
+  assert.doesNotMatch(result[1].failure.message, /kimi|HTTP 400/);
+});
+
+test('failure presentation classifies common failures without exposing raw details', () => {
+  const cases = [
+    ['Bearer sk-private HTTP 401 unauthorized', 'authentication'],
+    ['HTTP 429 quota exceeded', 'rate-limit'],
+    ['gateway stream ended before message_stop request_id=private', 'connection'],
+    ['unexpected provider detail /root/private', 'unknown'],
+  ];
+  for (const [raw, category] of cases) {
+    const view = failurePresentation(raw);
+    assert.equal(view.category, category);
+    assert.doesNotMatch(`${view.title} ${view.message}`, /sk-private|request_id|\/root\/private|provider detail/);
+  }
 });
 
 test('elapsed labels remain compact', () => {

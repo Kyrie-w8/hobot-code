@@ -568,7 +568,17 @@ fi
 transaction_complete=1
 prune_install_backups "$backup_dir"
 rm -rf "$legacy_config" "$legacy_state" || printf 'Warning: legacy directories could not be removed after a successful install.\n' >&2
-printf 'Installed Hobot Code %s. Run: hobot\n' "$version"
+if awk '
+  index($0, "ANTHROPIC_AUTH_TOKEN=") == 1 { value=substr($0, 22) }
+  END {
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+    exit value != "" && value != "\"\"" && value != "\047\047" ? 0 : 1
+  }
+' "$config_root/hobot.env"; then
+  printf 'Installed Hobot Code %s. Run: hobot\n' "$version"
+else
+  printf 'Installed Hobot Code %s. Configure your model first: hobot setup\n' "$version"
+fi
 printf 'User config: %s\n' "$config_root"
 printf 'User state: %s\n' "$state_root"
 printf 'Rollback: hobot-rollback\n'

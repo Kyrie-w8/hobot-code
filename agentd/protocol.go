@@ -32,15 +32,17 @@ var protocolCapabilities = []string{
 	"tasks.images",
 	"models.capabilities.v1",
 	"models.health.v1",
+	"configuration.fingerprint.v1",
 	"workspaces.browse",
 	"bridge.stdio",
 }
 
 type request struct {
-	Protocol int             `json:"protocol"`
-	ID       string          `json:"id"`
-	Method   string          `json:"method"`
-	Params   json.RawMessage `json:"params,omitempty"`
+	Protocol          int             `json:"protocol"`
+	ID                string          `json:"id"`
+	Method            string          `json:"method"`
+	Params            json.RawMessage `json:"params,omitempty"`
+	ConfigFingerprint string          `json:"configFingerprint,omitempty"`
 }
 
 type response struct {

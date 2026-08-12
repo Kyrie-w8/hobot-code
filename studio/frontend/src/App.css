@@ -246,6 +246,7 @@ button:disabled { cursor: default; opacity: 0.42; }
 .status-idle { color: var(--green); }
 .status-failed, .status-interrupted { color: var(--red); }
 .stream-status { display: inline-flex; min-width: 0; align-items: center; gap: 4px; color: var(--amber); font-size: 9px; font-weight: 560; white-space: nowrap; }
+.stream-status.stream-failed { color: var(--red); }
 .primary-button, .secondary-button, .danger-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 620; cursor: pointer; }
 .primary-button { border: 1px solid var(--accent); background: var(--accent); color: #10241f; }
 .primary-button:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
@@ -318,6 +319,11 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .tool-detail pre { max-height: 260px; margin: 0; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--chrome); color: var(--text-soft); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 .turn-notice, .agent-progress { display: flex; min-height: 28px; align-items: center; gap: 7px; color: var(--text-muted); font-size: 11px; }
 .turn-notice.notice-error { color: var(--red); }
+.turn-failure { display: grid; gap: 7px; margin: 12px 0 4px; padding: 12px; border: 1px solid rgba(220, 125, 120, 0.38); border-radius: var(--radius); background: rgba(220, 125, 120, 0.075); color: var(--text-soft); }
+.turn-failure-heading { display: flex; align-items: center; gap: 8px; color: #efaaa5; }
+.turn-failure-heading strong { font-size: 12px; }
+.turn-failure p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.turn-failure-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .agent-progress.immediate { min-height: 40px; margin: -16px 0 26px; }
 .agent-progress.immediate small { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .loading-conversation { display: flex; min-height: 200px; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
@@ -379,6 +385,10 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .approval-icon { display: grid; width: 28px; height: 28px; place-items: center; color: var(--amber); }
 .approval-detail { overflow: auto; max-height: 180px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.18); color: var(--text-soft); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
 .approval-scope { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.approval-input { width: 100%; min-height: 34px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); outline: 0; background: rgba(0, 0, 0, 0.18); color: var(--text); font-size: 12px; line-height: 1.45; }
+.approval-input:focus { border-color: rgba(215, 180, 107, 0.58); box-shadow: 0 0 0 3px rgba(215, 180, 107, 0.07); }
+.approval-input::placeholder { color: var(--text-dim); }
+.approval-editor { min-height: 92px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .approval-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .approval-actions button { white-space: nowrap; }
 

@@ -19,3 +19,10 @@ export function approvalPresentation(approval) {
       && approval.options.some((option) => /exact call/i.test(String(option))),
   };
 }
+
+export function approvalResponse(method, action, value = '') {
+  if (action === 'cancel') return {cancelled: true};
+  if (method === 'confirm') return {confirmed: action === 'confirm'};
+  if (method === 'select' || method === 'input' || method === 'editor') return {value: String(value)};
+  throw new Error('Unsupported approval method.');
+}

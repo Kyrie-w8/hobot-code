@@ -19,6 +19,21 @@ import (
 type daemonClient struct{ cfg config }
 
 func (client daemonClient) call(method string, params any) (json.RawMessage, error) {
+	if daemonMethodNeedsCurrentConfiguration(method) {
+		supported, err := client.checkConfiguration(method)
+		if err != nil {
+			return nil, err
+		}
+		return client.callInternal(method, params, supported)
+	}
+	return client.callUnchecked(method, params)
+}
+
+func (client daemonClient) callUnchecked(method string, params any) (json.RawMessage, error) {
+	return client.callInternal(method, params, false)
+}
+
+func (client daemonClient) callInternal(method string, params any, includeConfigFingerprint bool) (json.RawMessage, error) {
 	connection, err := net.DialTimeout("unix", client.cfg.SocketPath, time.Second)
 	if err != nil {
 		return nil, err
@@ -26,6 +41,9 @@ func (client daemonClient) call(method string, params any) (json.RawMessage, err
 	defer connection.Close()
 	requestID := fmt.Sprintf("cli-%d", time.Now().UnixNano())
 	req := request{Protocol: protocolVersion, ID: requestID, Method: method}
+	if includeConfigFingerprint {
+		req.ConfigFingerprint = client.cfg.ConfigFingerprint
+	}
 	if params != nil {
 		req.Params, err = json.Marshal(params)
 		if err != nil {
@@ -35,7 +53,7 @@ func (client daemonClient) call(method string, params any) (json.RawMessage, err
 	if err := writeJSON(connection, req); err != nil {
 		return nil, err
 	}
-	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = connection.SetReadDeadline(time.Now().Add(daemonCallTimeout(method)))
 	line, err := readClientLine(connection)
 	if err != nil {
 		return nil, err
@@ -62,14 +80,56 @@ func (client daemonClient) call(method string, params any) (json.RawMessage, err
 	return envelope.Result, nil
 }
 
+func daemonCallTimeout(method string) time.Duration {
+	if method == "models.health" {
+		return modelHealthRequestTimeout + 3*time.Second
+	}
+	return 10 * time.Second
+}
+
+func daemonMethodNeedsCurrentConfiguration(method string) bool {
+	switch method {
+	case "models.list", "models.health", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork":
+		return true
+	default:
+		return false
+	}
+}
+
+func (client daemonClient) checkConfiguration(method string) (bool, error) {
+	info, err := client.ping()
+	if err != nil {
+		return false, err
+	}
+	if client.cfg.ConfigFingerprint == "" || !containsCapability(info.Capabilities.Capabilities, "configuration.fingerprint.v1") {
+		return false, nil
+	}
+	if info.ConfigurationCurrent == nil {
+		return true, fmt.Errorf("agentd advertised configuration drift detection but omitted its comparison result; run `hobot daemon restart` before %s", method)
+	}
+	if *info.ConfigurationCurrent {
+		return true, nil
+	}
+	return true, fmt.Errorf("Hobot Code configuration changed since agentd started; run `hobot daemon restart` before %s", method)
+}
+
 func (client daemonClient) ping() (daemonInfo, error) {
-	result, err := client.call("ping", nil)
+	result, err := client.callUnchecked("ping", nil)
 	if err != nil {
 		return daemonInfo{}, err
 	}
 	var info daemonInfo
 	if err := json.Unmarshal(result, &info); err != nil {
 		return daemonInfo{}, err
+	}
+	if client.cfg.ConfigFingerprint != "" && containsCapability(info.Capabilities.Capabilities, "configuration.fingerprint.v1") {
+		result, err = client.callInternal("ping", nil, true)
+		if err != nil {
+			return daemonInfo{}, err
+		}
+		if err := json.Unmarshal(result, &info); err != nil {
+			return daemonInfo{}, err
+		}
 	}
 	return info, nil
 }
@@ -122,6 +182,10 @@ func readClientLine(reader io.Reader) ([]byte, error) {
 }
 
 func (client daemonClient) subscribe(taskID string, after uint64, follow, human bool) error {
+	return client.subscribeWithIO(taskID, after, follow, human, strings.NewReader(""), os.Stdout, false)
+}
+
+func (client daemonClient) subscribeWithIO(taskID string, after uint64, follow, human bool, input io.Reader, output io.Writer, interactive bool) error {
 	connection, err := net.DialTimeout("unix", client.cfg.SocketPath, time.Second)
 	if err != nil {
 		return err
@@ -138,7 +202,9 @@ func (client daemonClient) subscribe(taskID string, after uint64, follow, human 
 	scanner := bufio.NewScanner(connection)
 	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
 	first := true
-	renderer := humanEventRenderer{}
+	renderer := newHumanEventRenderer(taskID, input, output, interactive, func(command json.RawMessage) error {
+		return protocolCommand(client, taskID, command)
+	})
 	for scanner.Scan() {
 		line := bytes.TrimSuffix(scanner.Bytes(), []byte{'\r'})
 		if first {
@@ -160,20 +226,35 @@ func (client daemonClient) subscribe(taskID string, after uint64, follow, human 
 			return err
 		}
 		if human {
-			renderer.render(event)
+			if err := renderer.render(event); err != nil {
+				return err
+			}
 		} else {
-			fmt.Println(string(line))
+			fmt.Fprintln(output, string(line))
 		}
 	}
 	return scanner.Err()
 }
 
-type humanEventRenderer struct{ stream string }
+type humanEventRenderer struct {
+	stream      string
+	taskID      string
+	input       *bufio.Scanner
+	output      io.Writer
+	interactive bool
+	respond     func(json.RawMessage) error
+}
 
-func (renderer *humanEventRenderer) render(record taskEvent) {
+func newHumanEventRenderer(taskID string, input io.Reader, output io.Writer, interactive bool, respond func(json.RawMessage) error) *humanEventRenderer {
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 1024), 16*1024)
+	return &humanEventRenderer{taskID: taskID, input: scanner, output: output, interactive: interactive, respond: respond}
+}
+
+func (renderer *humanEventRenderer) render(record taskEvent) error {
 	var event map[string]any
 	if json.Unmarshal(record.Event, &event) != nil {
-		return
+		return nil
 	}
 	eventType, _ := event["type"].(string)
 	switch eventType {
@@ -184,16 +265,16 @@ func (renderer *humanEventRenderer) render(record taskEvent) {
 		case "thinking_delta":
 			if renderer.stream != "thinking" {
 				renderer.endStream()
-				fmt.Print("[thinking] ")
+				fmt.Fprint(renderer.output, "[thinking] ")
 				renderer.stream = "thinking"
 			}
-			fmt.Print(delta)
+			fmt.Fprint(renderer.output, delta)
 		case "text_delta":
 			if renderer.stream != "text" {
 				renderer.endStream()
 				renderer.stream = "text"
 			}
-			fmt.Print(delta)
+			fmt.Fprint(renderer.output, delta)
 		}
 	case "tool_execution_start":
 		renderer.endStream()
@@ -201,27 +282,181 @@ func (renderer *humanEventRenderer) render(record taskEvent) {
 		if name == "" {
 			name, _ = event["name"].(string)
 		}
-		fmt.Printf("[tool] %s\n", name)
+		fmt.Fprintf(renderer.output, "[tool] %s\n", safeAttachText(name, "tool", 80))
 	case "extension_ui_request":
 		renderer.endStream()
-		method, _ := event["method"].(string)
-		if method == "confirm" || method == "select" || method == "input" || method == "editor" {
-			fmt.Printf("[approval %s] %v (request %v)\n", method, event["title"], event["id"])
-		}
+		return renderer.renderApproval(event)
 	case "agent_settled":
 		renderer.endStream()
-		fmt.Print("[settled]\n")
+		fmt.Fprint(renderer.output, "[settled]\n")
 	case "extension_error":
 		renderer.endStream()
-		fmt.Printf("[extension error] %v\n", event["error"])
+		fmt.Fprint(renderer.output, "[extension error]\n")
 	}
+	return nil
 }
 
 func (renderer *humanEventRenderer) endStream() {
 	if renderer.stream != "" {
-		fmt.Println()
+		fmt.Fprintln(renderer.output)
 		renderer.stream = ""
 	}
+}
+
+func (renderer *humanEventRenderer) renderApproval(event map[string]any) error {
+	method, _ := event["method"].(string)
+	if method != "confirm" && method != "select" && method != "input" && method != "editor" {
+		return nil
+	}
+	requestID, _ := event["id"].(string)
+	if requestID == "" || len(requestID) > 256 {
+		fmt.Fprintln(renderer.output, "[approval] Invalid request identifier; use `hobot task approvals TASK_ID` to inspect pending requests.")
+		return nil
+	}
+	title, _ := event["title"].(string)
+	title = safeAttachText(title, "Approval required", 120)
+	options := attachApprovalOptions(event["options"])
+	fmt.Fprintf(renderer.output, "[approval %s] %s\n", method, title)
+	if method == "select" {
+		for index, option := range options {
+			fmt.Fprintf(renderer.output, "  %d. %s\n", index+1, safeAttachText(option, "option", 120))
+		}
+	}
+	if !renderer.interactive {
+		renderer.printResponseCommand(requestID, method)
+		return nil
+	}
+	response, answered := renderer.promptApproval(requestID, method, options)
+	if !answered {
+		renderer.printResponseCommand(requestID, method)
+		return nil
+	}
+	if renderer.respond == nil {
+		return fmt.Errorf("approval responder is unavailable")
+	}
+	if err := renderer.respond(response); err != nil {
+		return fmt.Errorf("send approval response: %w", err)
+	}
+	fmt.Fprintln(renderer.output, "[approval sent]")
+	return nil
+}
+
+func (renderer *humanEventRenderer) promptApproval(requestID, method string, options []string) (json.RawMessage, bool) {
+	switch method {
+	case "confirm":
+		for {
+			fmt.Fprint(renderer.output, "Allow? [y/N]: ")
+			value, ok := renderer.scanInput()
+			if !ok {
+				return nil, false
+			}
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "y", "yes":
+				return approvalResponse(requestID, "confirmed", true), true
+			case "", "n", "no":
+				return approvalResponse(requestID, "confirmed", false), true
+			default:
+				fmt.Fprintln(renderer.output, "Enter y or n.")
+			}
+		}
+	case "select":
+		if len(options) == 0 {
+			return nil, false
+		}
+		for {
+			fmt.Fprintf(renderer.output, "Choose [1-%d]: ", len(options))
+			value, ok := renderer.scanInput()
+			if !ok {
+				return nil, false
+			}
+			selection, err := strconv.Atoi(strings.TrimSpace(value))
+			if err == nil && selection >= 1 && selection <= len(options) {
+				return approvalResponse(requestID, "value", options[selection-1]), true
+			}
+			fmt.Fprintln(renderer.output, "Enter one of the listed numbers.")
+		}
+	case "input":
+		fmt.Fprint(renderer.output, "Response (one line): ")
+		value, ok := renderer.scanInput()
+		if !ok {
+			return nil, false
+		}
+		return approvalResponse(requestID, "value", value), true
+	case "editor":
+		fmt.Fprintln(renderer.output, "Enter response; finish with a line containing only a period (.).")
+		lines := make([]string, 0, 8)
+		for {
+			value, ok := renderer.scanInput()
+			if !ok {
+				return nil, false
+			}
+			if value == "." {
+				return approvalResponse(requestID, "value", strings.Join(lines, "\n")), true
+			}
+			lines = append(lines, value)
+		}
+	default:
+		return nil, false
+	}
+}
+
+func (renderer *humanEventRenderer) scanInput() (string, bool) {
+	if !renderer.input.Scan() {
+		return "", false
+	}
+	return renderer.input.Text(), true
+}
+
+func (renderer *humanEventRenderer) printResponseCommand(requestID, method string) {
+	if method == "confirm" {
+		fmt.Fprintf(renderer.output, "Allow: hobot task respond %s %s yes\n", shellQuote(renderer.taskID), shellQuote(requestID))
+		fmt.Fprintf(renderer.output, "Deny: hobot task respond %s %s no\n", shellQuote(renderer.taskID), shellQuote(requestID))
+		return
+	}
+	fmt.Fprintf(renderer.output, "Respond: hobot task respond %s %s VALUE\n", shellQuote(renderer.taskID), shellQuote(requestID))
+}
+
+func approvalResponse(requestID, field string, value any) json.RawMessage {
+	command := map[string]any{"type": "extension_ui_response", "id": requestID, field: value}
+	return mustJSON(command)
+}
+
+func attachApprovalOptions(value any) []string {
+	raw, ok := value.([]any)
+	if !ok || len(raw) > 50 {
+		return nil
+	}
+	options := make([]string, 0, len(raw))
+	for _, item := range raw {
+		option, ok := item.(string)
+		if !ok || option == "" {
+			return nil
+		}
+		options = append(options, option)
+	}
+	return options
+}
+
+func safeAttachText(value, fallback string, maximumRunes int) string {
+	value = strings.TrimSpace(strings.SplitN(value, "\n", 2)[0])
+	value = strings.Map(func(current rune) rune {
+		if current < 0x20 || current == 0x7f {
+			return ' '
+		}
+		return current
+	}, value)
+	if value == "" {
+		return fallback
+	}
+	runes := []rune(value)
+	if len(runes) > maximumRunes {
+		value = string(runes[:maximumRunes]) + "..."
+	}
+	return value
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func mustJSON(value any) json.RawMessage {
@@ -301,6 +536,15 @@ func isConnectionFailure(err error) bool {
 	return errors.As(err, &operation) || strings.Contains(err.Error(), "no such file or directory")
 }
 
+func containsCapability(capabilities []string, wanted string) bool {
+	for _, capability := range capabilities {
+		if capability == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func runStdioBridge(cfg config) error {
 	return bridgeStreams(cfg, os.Stdin, os.Stdout)
 }
@@ -309,6 +553,10 @@ func bridgeStreams(cfg config, input io.Reader, output io.Writer) error {
 	client := daemonClient{cfg: cfg}
 	if err := client.ensureStarted(); err != nil {
 		return err
+	}
+	configurationChecks := false
+	if info, err := client.ping(); err == nil && cfg.ConfigFingerprint != "" {
+		configurationChecks = containsCapability(info.Capabilities.Capabilities, "configuration.fingerprint.v1")
 	}
 	reader := bufio.NewReaderSize(input, 64*1024)
 	for {
@@ -321,6 +569,17 @@ func bridgeStreams(cfg config, input io.Reader, output io.Writer) error {
 		}
 		if !json.Valid(line) {
 			return fmt.Errorf("bridge input must be one valid JSON object per line")
+		}
+		var bridged map[string]json.RawMessage
+		if err := json.Unmarshal(line, &bridged); err != nil {
+			return fmt.Errorf("bridge input must be one valid JSON object per line")
+		}
+		if configurationChecks {
+			bridged["configFingerprint"] = mustJSON(cfg.ConfigFingerprint)
+		}
+		line, err = json.Marshal(bridged)
+		if err != nil {
+			return err
 		}
 		connection, err := net.DialTimeout("unix", cfg.SocketPath, time.Second)
 		if err != nil {

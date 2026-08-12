@@ -10,6 +10,7 @@ const (
 	maximumApprovalPrefill    = 16 * 1024
 	maximumApprovalOptionText = 1024
 	maximumPendingApprovals   = 16
+	maximumAssistantErrorText = 8 * 1024
 )
 
 type pendingApproval struct {
@@ -65,6 +66,9 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 		}
 		normalizedType = "assistant.message.completed"
 		copyEventFields(data, message, "usage", "stopReason", "timestamp")
+		if errorMessage, _ := message["errorMessage"].(string); errorMessage != "" {
+			data["errorMessage"] = boundedValue(errorMessage, maximumAssistantErrorText)
+		}
 	case "tool_execution_start":
 		normalizedType = "tool.started"
 		copyEventFields(data, event, "toolCallId", "toolName")

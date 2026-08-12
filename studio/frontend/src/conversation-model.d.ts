@@ -12,9 +12,11 @@ export type AssistantConversationItem = {
   kind: 'assistant'; key: string; sequence: number; startedAt: string; endedAt: string;
   thinking: string; text: string; tools: ToolActivity[];
   notices: Array<{type: string; label: string; time: string}>; completed: boolean;
+  failure: null | {category: string; title: string; message: string};
 };
 export type ConversationItem = UserConversationItem | AssistantConversationItem;
 
 export function buildConversation(events: TaskEvent[]): ConversationItem[];
 export function elapsedLabel(start: string, end: string): string;
 export function recentEventsAfter(lastSequence: number, windowSize?: number): number;
+export function failurePresentation(value: string): {category: string; title: string; message: string};

@@ -21,7 +21,7 @@ export function buildConversation(events) {
   const finishAssistant = (time) => {
     if (!assistant) return;
     assistant.endedAt = time ?? assistant.endedAt;
-    if (assistant.thinking || assistant.text || assistant.tools.length || assistant.notices.length) {
+    if (assistant.thinking || assistant.text || assistant.tools.length || assistant.notices.length || assistant.failure) {
       items.push(assistant);
     }
     assistant = null;
@@ -40,6 +40,7 @@ export function buildConversation(events) {
         tools: [],
         notices: [],
         completed: false,
+        failure: null,
       };
     }
     assistant.endedAt = event.time;
@@ -74,7 +75,10 @@ export function buildConversation(events) {
     const turn = ensureAssistant(event);
     if (type === 'assistant.thinking.delta') turn.thinking += String(data.delta ?? '');
     else if (type === 'assistant.text.delta') turn.text += String(data.delta ?? '');
-    else if (type === 'assistant.message.completed') turn.completed = true;
+    else if (type === 'assistant.message.completed') {
+      turn.completed = true;
+      if (data.errorMessage) turn.failure = failurePresentation(String(data.errorMessage));
+    }
     else if (type.startsWith('tool.')) updateTool(turn, event, type, data);
     else if (type === 'approval.requested') turn.notices.push({type: 'approval', label: 'Approval requested', time: event.time});
     else if (type === 'approval.resolved') turn.notices.push({type: 'approval', label: 'Approval resolved', time: event.time});
@@ -86,6 +90,24 @@ export function buildConversation(events) {
   }
   finishAssistant(events[events.length - 1]?.time);
   return items;
+}
+
+export function failurePresentation(value) {
+  const message = String(value ?? '').replace(/^Error:\s*/i, '').slice(0, 8192);
+  const normalized = message.toLowerCase();
+  if (/unsupported model|model.*not (found|available)|invalid.*model|unknown model/.test(normalized)) {
+    return {category: 'model', title: 'The selected model is unavailable', message: 'Check this model or choose another one, then try again.'};
+  }
+  if (/unauthori[sz]ed|forbidden|invalid.*(token|credential|api key)|authentication|\b401\b|\b403\b/.test(normalized)) {
+    return {category: 'authentication', title: 'Model authentication failed', message: 'Check the board model credentials, then try again.'};
+  }
+  if (/rate.?limit|too many requests|\b429\b|quota/.test(normalized)) {
+    return {category: 'rate-limit', title: 'The model is temporarily busy', message: 'Wait a moment, then try again.'};
+  }
+  if (/timed? out|deadline exceeded|stream ended|message_stop|connection|network|gateway|\b5\d\d\b/.test(normalized)) {
+    return {category: 'connection', title: 'The model connection was interrupted', message: 'Check model availability, then retry this request.'};
+  }
+  return {category: 'unknown', title: 'This response could not be completed', message: 'Retry the request. If it fails again, check the selected model.'};
 }
 
 function updateTool(turn, event, type, data) {

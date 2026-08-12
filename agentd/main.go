@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,7 +28,7 @@ Usage:
   hobot deploy inspect [--cwd DIR]
   hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--profile PROFILE] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] ARTIFACT
   hobot deploy status TASK_ID
-  hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
+  hobot task start [--name NAME] [--cwd DIR] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--trust-project] -- PROMPT
   hobot task list [--all]
   hobot task show TASK_ID
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
@@ -484,31 +485,18 @@ func runTaskCLI(cfg config, args []string) error {
 }
 
 func runTaskStart(client daemonClient, args []string) error {
-	flags := flag.NewFlagSet("task start", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	name := flags.String("name", "", "task name")
-	cwd := flags.String("cwd", "", "working directory")
-	approve := flags.Bool("approve", false, "trust project resources")
-	if err := flags.Parse(args); err != nil {
+	defaultCwd, err := os.Getwd()
+	if err != nil {
 		return err
 	}
-	promptArgs := flags.Args()
-	if len(promptArgs) > 0 && promptArgs[0] == "--" {
-		promptArgs = promptArgs[1:]
+	options, err := parseTaskStartArgs(args, defaultCwd, os.Stderr)
+	if err != nil {
+		return err
 	}
-	if len(promptArgs) == 0 {
-		return fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT")
+	if options.usedApproveAlias {
+		fmt.Fprintln(os.Stderr, "Note: --approve is a compatibility alias for --trust-project; it does not bypass tool permissions.")
 	}
-	workingDirectory := *cwd
-	if workingDirectory == "" {
-		var err error
-		workingDirectory, err = os.Getwd()
-		if err != nil {
-			return err
-		}
-	}
-	params := startTaskParams{Name: *name, Cwd: workingDirectory, Prompt: strings.Join(promptArgs, " "), Approve: *approve}
-	result, err := client.call("task.start", params)
+	result, err := client.call("task.start", options.params)
 	if err != nil {
 		return err
 	}
@@ -517,8 +505,74 @@ func runTaskStart(client daemonClient, args []string) error {
 		return err
 	}
 	fmt.Printf("Started background task %s (%s).\n", metadata.ID, metadata.Name)
+	if metadata.Model == "" {
+		fmt.Println("Model: configured default")
+	} else {
+		fmt.Printf("Model: %s\n", metadata.Model)
+	}
+	fmt.Printf("Permissions: %s\n", metadata.PermissionMode)
+	fmt.Printf("Project resources: %s\n", map[bool]string{true: "trusted", false: "not trusted"}[metadata.Approved])
 	fmt.Printf("Attach: hobot task attach %s\n", metadata.ID)
 	return nil
+}
+
+type taskStartCLIOptions struct {
+	params           startTaskParams
+	usedApproveAlias bool
+}
+
+func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (taskStartCLIOptions, error) {
+	flags := flag.NewFlagSet("task start", flag.ContinueOnError)
+	flags.SetOutput(output)
+	name := flags.String("name", "", "task name")
+	cwd := flags.String("cwd", "", "working directory")
+	model := flags.String("model", "", "agent model in provider/model form")
+	permissions := flags.String("permissions", defaultTaskPermissionMode, "permission mode: review, ask, or developer")
+	trustProject := false
+	flags.BoolVar(&trustProject, "trust-project", false, "load trusted project resources")
+	flags.BoolVar(&trustProject, "approve", false, "compatibility alias for --trust-project")
+	if err := flags.Parse(args); err != nil {
+		return taskStartCLIOptions{}, err
+	}
+	usedApproveAlias := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "approve" {
+			usedApproveAlias = true
+		}
+	})
+	promptArgs := flags.Args()
+	if len(promptArgs) > 0 && promptArgs[0] == "--" {
+		promptArgs = promptArgs[1:]
+	}
+	if len(promptArgs) == 0 {
+		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--trust-project] -- PROMPT")
+	}
+	workingDirectory := *cwd
+	if workingDirectory == "" {
+		workingDirectory = defaultCwd
+	}
+	modelSelection := strings.TrimSpace(*model)
+	if modelSelection != "" {
+		modelSelection = normalizeModelSelection(modelSelection)
+		if modelSelection == "" {
+			return taskStartCLIOptions{}, fmt.Errorf("model must use provider/model format")
+		}
+	}
+	permissionMode, err := normalizePermissionMode(strings.TrimSpace(*permissions))
+	if err != nil {
+		return taskStartCLIOptions{}, err
+	}
+	prompt := strings.Join(promptArgs, " ")
+	if len(prompt) == 0 || len(prompt) > maxPromptBytes {
+		return taskStartCLIOptions{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	}
+	return taskStartCLIOptions{
+		params: startTaskParams{
+			Name: *name, Cwd: workingDirectory, Prompt: prompt, Approve: trustProject,
+			Model: modelSelection, PermissionMode: permissionMode,
+		},
+		usedApproveAlias: usedApproveAlias,
+	}, nil
 }
 
 func runTaskLogs(client daemonClient, command string, args []string) error {
@@ -552,7 +606,20 @@ func runTaskLogs(client daemonClient, command string, args []string) error {
 	if command == "logs" && !follow {
 		return replayEventPage(client, taskID, after, 200)
 	}
+	if command == "attach" {
+		interactive := isInteractiveTerminal(os.Stdin, os.Stdout)
+		if interactive {
+			fmt.Fprintln(os.Stderr, "Attached. Ctrl+C detaches; the background task keeps running.")
+		}
+		return client.subscribeWithIO(taskID, after, follow, true, os.Stdin, os.Stdout, interactive)
+	}
 	return client.subscribe(taskID, after, follow, command == "attach")
+}
+
+func isInteractiveTerminal(input, output *os.File) bool {
+	inputInfo, inputErr := input.Stat()
+	outputInfo, outputErr := output.Stat()
+	return inputErr == nil && outputErr == nil && inputInfo.Mode()&os.ModeCharDevice != 0 && outputInfo.Mode()&os.ModeCharDevice != 0
 }
 
 func replayEventPage(client daemonClient, taskID string, after uint64, limit int) error {
@@ -581,19 +648,68 @@ func runTaskRespond(client daemonClient, args []string) error {
 	if len(args) < 3 {
 		return fmt.Errorf("usage: hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE")
 	}
-	command := map[string]any{"type": "extension_ui_response", "id": args[1]}
 	value := strings.Join(args[2:], " ")
+	method, options, err := activeApprovalShape(client, args[0], args[1])
+	if err != nil {
+		return err
+	}
+	command, err := taskApprovalResponse(args[1], method, options, value)
+	if err != nil {
+		return err
+	}
+	return protocolCommand(client, args[0], mustJSON(command))
+}
+
+func taskApprovalResponse(requestID, method string, options []string, value string) (map[string]any, error) {
+	command := map[string]any{"type": "extension_ui_response", "id": requestID}
 	switch strings.ToLower(value) {
-	case "yes", "y":
-		command["confirmed"] = true
-	case "no", "n":
-		command["confirmed"] = false
 	case "cancel":
 		command["cancelled"] = true
+	case "yes", "y":
+		switch method {
+		case "confirm":
+			command["confirmed"] = true
+		case "select":
+			if len(options) == 0 {
+				return nil, fmt.Errorf("the select approval has no available options")
+			}
+			command["value"] = options[0]
+		default:
+			command["value"] = value
+		}
+	case "no", "n":
+		switch method {
+		case "confirm":
+			command["confirmed"] = false
+		case "select":
+			if len(options) == 0 {
+				return nil, fmt.Errorf("the select approval has no available options")
+			}
+			command["value"] = options[len(options)-1]
+		default:
+			command["value"] = value
+		}
 	default:
 		command["value"] = value
 	}
-	return protocolCommand(client, args[0], mustJSON(command))
+	return command, nil
+}
+
+func activeApprovalShape(client daemonClient, taskID, requestID string) (string, []string, error) {
+	result, err := client.call("task.approvals", taskIDParams{TaskID: taskID})
+	if err != nil {
+		return "", nil, err
+	}
+	var approvals []pendingApproval
+	if err := json.Unmarshal(result, &approvals); err != nil {
+		return "", nil, err
+	}
+	for _, approval := range approvals {
+		if approval.ID == requestID && approval.Active {
+			return approval.Method, append([]string(nil), approval.Options...), nil
+		}
+	}
+	return "", nil, fmt.Errorf("task is not waiting for approval %s", requestID)
 }
 
 func init() {

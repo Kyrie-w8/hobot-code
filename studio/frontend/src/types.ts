@@ -23,6 +23,7 @@ export type DaemonInfo = {
   activeTasks: number;
   maximumTasks: number;
   stateRoot: string;
+  configurationCurrent?: boolean;
 };
 
 export type CompatibilityIssue = {code: string; severity: 'warning' | 'error'; message: string; action?: string};

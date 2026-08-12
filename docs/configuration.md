@@ -17,6 +17,22 @@ Hobot Code 沿用 Pi 的配置机制，并使用独立的用户配置与状态�
 
 ## D-Robotics 模型
 
+首次安装后推荐运行安全配置向导：
+
+```bash
+hobot setup
+```
+
+交互模式会从当前终端读取 API token，并在输入 token 时关闭回显。它只接受内置 D-Robotics 模型和 HTTPS 网关，使用同目录私有临时文件原子更新 `hobot.env`，不会在输出中显示 token。用于自动化时从标准输入传入 token，避免把凭据放进命令行参数或 Shell 历史：
+
+```bash
+printf '%s\n' "$DROBOTICS_TOKEN" | hobot setup --token-stdin --model kimi-k3
+```
+
+可增加 `--check` 在保存后执行一次最小模型路由检查。若 `agentd` 已在运行，向导不会停止任务或静默重启服务，而会提示先执行 `hobot daemon restart`；重启后新任务才会使用更新后的配置。
+
+`hobot.env`、`agent/settings.json` 或 `agent/models.json` 在后台服务启动后发生变化时，模型查询、新任务和 Resume 会停止并直接给出重启命令，避免用户误以为新配置已生效。查看旧任务、审批和停止任务仍然可用。
+
 编辑 `~/.config/hobot-code/hobot.env`：
 
 ```text
@@ -245,7 +261,8 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 无界面任务可直接交给 `agentd`，无需安装 `tmux`：
 
 ```bash
-hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
+hobot task start [--name NAME] [--cwd DIR] [--model PROVIDER/MODEL] \
+  [--permissions review|ask|developer] [--trust-project] -- PROMPT
 hobot task list
 hobot task show TASK_ID
 hobot task logs TASK_ID [--after SEQUENCE] [--follow]

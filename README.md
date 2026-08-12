@@ -66,11 +66,11 @@ curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot
 
 板端需要先安装 `curl`。安装器只接受 Linux ARM64，并检查 device tree 中的 RDK 型号；它通过 HTTPS 下载版本化归档，严格核对 SHA256、归档根目录和文件类型，再调用事务安装器。普通用户会通过 `sudo` 安装程序，但配置、会话和状态仍属于发起安装的用户；root 直接执行时默认安装给 root。
 
-安装指定版本：
+`latest` 始终安装已经公开发布的稳定版本；`main` 分支可能包含尚未发布的下一版功能。安装指定的已发布版本：
 
 ```bash
 curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.24.0
+  | sh -s -- --version <version>
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -126,7 +126,21 @@ hobot diagnose
 
 ### 2. 配置模型
 
-以安装目标用户编辑 `~/.config/hobot-code/hobot.env`：
+首次安装后运行安全配置向导：
+
+```bash
+hobot setup
+```
+
+向导会让你选择内置模型和网关，并在读取 API token 时关闭终端回显。凭据只写入当前板卡用户的私有配置文件，不会出现在命令行历史或输出中。配置后可按提示执行一次最小模型连通性检查；若后台服务正在运行，向导会明确提示重启，不会中断正在执行的任务。
+
+自动化环境可从标准输入传入 token：
+
+```bash
+printf '%s\n' "$DROBOTICS_TOKEN" | hobot setup --token-stdin --model kimi-k3 --check
+```
+
+需要高级配置时，也可以安装目标用户身份手动编辑 `~/.config/hobot-code/hobot.env`：
 
 ```text
 ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc
@@ -207,9 +221,9 @@ hobot persistent stop main                 # 终止会话及受其终端托管�
 不需要保留完整 TUI 时，可把独立任务交给板端常驻服务：
 
 ```bash
-hobot task start --name build -- "检查项目、修复问题并运行测试"
+hobot task start --name build --model drobotics/kimi-k3 --permissions developer -- "检查项目、修复问题并运行测试"
 hobot task list
-hobot task attach <task-id>                 # 重放历史并持续查看输出
+hobot task attach <task-id>                 # 重放历史、持续查看输出并原地处理审批
 hobot task send <task-id> "继续处理下一项"  # 同一 Agent 多轮续接
 hobot task abort <task-id>                  # 中断当前一轮，保留 worker
 hobot task respond <task-id> <request-id> yes
@@ -277,7 +291,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.24.0
+hobot update --version <version>
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

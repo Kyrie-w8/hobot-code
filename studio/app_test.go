@@ -26,7 +26,7 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 		"support.bundle.v1", "deployments.v1", "tasks.fork", "workspaces.browse",
 	}
 	info := hobot.DaemonInfo{
-		Version: "0.24.0", Protocol: hobot.ProtocolVersion,
+		Version: "0.25.0", Protocol: hobot.ProtocolVersion,
 		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 3, Capabilities: allCapabilities},
 	}
 	snapshot := &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5"}
@@ -55,13 +55,21 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 	if err == nil || incompatible.Status != "upgrade-required" {
 		t.Fatalf("missing required capability was accepted: result=%+v err=%v", incompatible, err)
 	}
+
+	configurationCurrent := false
+	drifted := info
+	drifted.ConfigurationCurrent = &configurationCurrent
+	incompatible, err = assessConnectionCompatibility(drifted, snapshot, nil)
+	if err == nil || incompatible.Status != "upgrade-required" || len(incompatible.Issues) != 1 || incompatible.Issues[0].Code != "configuration-restart-required" {
+		t.Fatalf("configuration drift was accepted: result=%+v err=%v", incompatible, err)
+	}
 }
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
-	if currentStudioVersion() != "0.24.0" {
+	if currentStudioVersion() != "0.25.0" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
-	if !differentReleaseLine("0.24.0", "0.23.9") || differentReleaseLine("0.24.0", "0.24.1") {
+	if !differentReleaseLine("0.25.0", "0.24.9") || differentReleaseLine("0.25.0", "0.25.1") {
 		t.Fatal("release line comparison is incorrect")
 	}
 	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {

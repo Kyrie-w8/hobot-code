@@ -105,6 +105,250 @@ load_environment_file() {
   done < "$environment_file"
 }
 
+setup_usage() {
+  cat <<'EOF'
+Usage:
+  hobot setup [--model ID] [--base-url HTTPS_URL] [--check]
+  hobot setup --token-stdin [--model ID] [--base-url HTTPS_URL] [--check]
+
+Without --token-stdin, Hobot Code reads the API token privately from the
+controlling terminal. --check verifies the selected route after saving.
+EOF
+}
+
+validate_setup_model() {
+  case "$1" in
+    kimi-k3|qwen3.8-max|glm-5.2|deepseek-v4-flash|deepseek-v4-pro) ;;
+    *)
+      printf 'Unsupported D-Robotics model: %s\n' "$1" >&2
+      printf 'Choose kimi-k3, qwen3.8-max, glm-5.2, deepseek-v4-flash, or deepseek-v4-pro.\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+validate_setup_base_url() {
+  setup_url=$1
+  case "$setup_url" in
+    ''|*[[:space:]]*|*\'*|*\"*|*\\*|*\?*|*\#*)
+      printf 'The D-Robotics model gateway URL is invalid.\n' >&2
+      exit 2
+      ;;
+  esac
+  case "$setup_url" in
+    https://*) ;;
+    http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://localhost|http://localhost/*|http://localhost:*)
+      if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then
+        printf 'The D-Robotics model gateway must use HTTPS.\n' >&2
+        exit 2
+      fi
+      ;;
+    *)
+      printf 'The D-Robotics model gateway must use HTTPS.\n' >&2
+      exit 2
+      ;;
+  esac
+  setup_authority=${setup_url#*://}
+  setup_authority=${setup_authority%%/*}
+  case "$setup_authority" in
+    ''|*@*)
+      printf 'The D-Robotics model gateway URL must contain a host and no embedded credentials.\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
+validate_setup_token() {
+  case "$1" in
+    '')
+      printf 'The D-Robotics API token cannot be empty.\n' >&2
+      exit 2
+      ;;
+    *[!A-Za-z0-9._~+/=-]*)
+      printf 'The D-Robotics API token contains unsupported characters.\n' >&2
+      exit 2
+      ;;
+  esac
+  if [ "${#1}" -gt 8192 ]; then
+    printf 'The D-Robotics API token exceeds the 8192-byte limit.\n' >&2
+    exit 2
+  fi
+}
+
+handle_setup_command() {
+  shift
+  setup_token_stdin=0
+  setup_check=0
+  setup_model=${ANTHROPIC_MODEL:-kimi-k3}
+  setup_model=${setup_model#drobotics/}
+  case "$setup_model" in
+    kimi-k3|qwen3.8-max|glm-5.2|deepseek-v4-flash|deepseek-v4-pro) ;;
+    *) setup_model=kimi-k3 ;;
+  esac
+  setup_base_url=${ANTHROPIC_BASE_URL:-https://ai-api.d-robotics.cc}
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --token-stdin)
+        setup_token_stdin=1
+        shift
+        ;;
+      --model)
+        if [ "$#" -lt 2 ]; then
+          printf '%s\n' '--model requires a value.' >&2
+          exit 2
+        fi
+        setup_model=$2
+        shift 2
+        ;;
+      --base-url)
+        if [ "$#" -lt 2 ]; then
+          printf '%s\n' '--base-url requires a value.' >&2
+          exit 2
+        fi
+        setup_base_url=$2
+        shift 2
+        ;;
+      --check)
+        setup_check=1
+        shift
+        ;;
+      -h|--help)
+        setup_usage
+        exit 0
+        ;;
+      *)
+        printf 'Unknown setup option: %s\n' "$1" >&2
+        setup_usage >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  setup_state_dir=${HOBOT_CODE_STATE_DIR:-$hobot_state_home/hobot-code}
+  require_absolute_path HOBOT_CODE_STATE_DIR "$setup_state_dir"
+
+  if [ "$setup_token_stdin" -eq 1 ]; then
+    setup_token=
+    IFS= read -r setup_token || [ -n "$setup_token" ]
+  else
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+      printf 'Interactive setup requires a terminal. Pipe the token to hobot setup --token-stdin for automation.\n' >&2
+      exit 2
+    fi
+    printf 'Hobot Code model setup\n' >/dev/tty
+    printf 'Model [%s]: ' "$setup_model" >/dev/tty
+    setup_answer=
+    IFS= read -r setup_answer </dev/tty || exit 130
+    if [ -n "$setup_answer" ]; then setup_model=$setup_answer; fi
+    printf 'Gateway [%s]: ' "$setup_base_url" >/dev/tty
+    setup_answer=
+    IFS= read -r setup_answer </dev/tty || exit 130
+    if [ -n "$setup_answer" ]; then setup_base_url=$setup_answer; fi
+    validate_setup_model "$setup_model"
+    validate_setup_base_url "$setup_base_url"
+    printf 'API token: ' >/dev/tty
+    setup_echo_disabled=0
+    restore_setup_echo() {
+      if [ "$setup_echo_disabled" -eq 1 ]; then
+        stty echo </dev/tty 2>/dev/null || :
+        setup_echo_disabled=0
+        printf '\n' >/dev/tty
+      fi
+    }
+    trap 'restore_setup_echo; exit 130' HUP INT TERM
+    stty -echo </dev/tty
+    setup_echo_disabled=1
+    setup_token=
+    if ! IFS= read -r setup_token </dev/tty; then
+      restore_setup_echo
+      trap - HUP INT TERM
+      exit 130
+    fi
+    restore_setup_echo
+    trap - HUP INT TERM
+  fi
+
+  validate_setup_model "$setup_model"
+  validate_setup_base_url "$setup_base_url"
+  validate_setup_token "$setup_token"
+
+  setup_temp=$(mktemp "$hobot_config_root/.hobot.env.setup.XXXXXX")
+  cleanup_setup_temp() {
+    if [ -n "${setup_temp:-}" ]; then rm -f "$setup_temp"; fi
+  }
+  trap 'cleanup_setup_temp' EXIT
+  trap 'cleanup_setup_temp; exit 130' HUP INT TERM
+  if ! awk '
+    index($0, "ANTHROPIC_BASE_URL=") == 1 { next }
+    index($0, "ANTHROPIC_AUTH_TOKEN=") == 1 { next }
+    index($0, "ANTHROPIC_MODEL=") == 1 { next }
+    { print }
+  ' "$hobot_config_root/hobot.env" > "$setup_temp"; then
+    cleanup_setup_temp
+    trap - EXIT HUP INT TERM
+    printf 'Could not prepare the Hobot Code model configuration.\n' >&2
+    exit 1
+  fi
+  printf '\nANTHROPIC_BASE_URL=%s\nANTHROPIC_AUTH_TOKEN=%s\nANTHROPIC_MODEL=%s\n' \
+    "$setup_base_url" "$setup_token" "$setup_model" >> "$setup_temp"
+  chmod 0600 "$setup_temp"
+  mv -f "$setup_temp" "$hobot_config_root/hobot.env"
+  setup_temp=
+  trap - EXIT HUP INT TERM
+
+  printf 'Hobot Code model configuration saved.\n'
+  printf 'Model: drobotics/%s\n' "$setup_model"
+  printf 'Gateway: %s\n' "$setup_base_url"
+
+  setup_daemon_pid=
+  if [ -r "$setup_state_dir/agentd/agentd.pid" ]; then
+    setup_daemon_pid=$(sed -n '1p' "$setup_state_dir/agentd/agentd.pid" 2>/dev/null || :)
+  fi
+  case "$setup_daemon_pid" in
+    ''|*[!0-9]*) ;;
+    *)
+      if kill -0 "$setup_daemon_pid" 2>/dev/null; then
+        printf 'The background service is still using its previous configuration. Run: hobot daemon restart\n' >&2
+        if [ "$setup_check" -eq 1 ]; then
+          printf 'Restart the background service, then run: hobot model check drobotics/%s\n' "$setup_model" >&2
+          exit 0
+        fi
+      fi
+      ;;
+  esac
+  if [ "$setup_check" -eq 1 ]; then
+    exec "$0" model check "drobotics/$setup_model"
+  fi
+  printf 'Verify the route when ready: hobot model check drobotics/%s\n' "$setup_model"
+  printf 'Start Hobot Code: hobot\n'
+  exit 0
+}
+
+export_config_fingerprint() {
+  unset HOBOT_CODE_CONFIG_FINGERPRINT
+  config_fingerprint=
+  if command -v sha256sum >/dev/null 2>&1; then
+    environment_digest=$(sha256sum "$hobot_config_root/hobot.env" | awk 'NR == 1 { print $1 }')
+    settings_digest=$(sha256sum "$hobot_agent_dir/settings.json" | awk 'NR == 1 { print $1 }')
+    models_digest=$(sha256sum "$hobot_agent_dir/models.json" | awk 'NR == 1 { print $1 }')
+    config_fingerprint=$(printf '%s\n%s\n%s\n' "$environment_digest" "$settings_digest" "$models_digest" | sha256sum | awk 'NR == 1 { print $1 }')
+  elif command -v shasum >/dev/null 2>&1; then
+    environment_digest=$(shasum -a 256 "$hobot_config_root/hobot.env" | awk 'NR == 1 { print $1 }')
+    settings_digest=$(shasum -a 256 "$hobot_agent_dir/settings.json" | awk 'NR == 1 { print $1 }')
+    models_digest=$(shasum -a 256 "$hobot_agent_dir/models.json" | awk 'NR == 1 { print $1 }')
+    config_fingerprint=$(printf '%s\n%s\n%s\n' "$environment_digest" "$settings_digest" "$models_digest" | shasum -a 256 | awk 'NR == 1 { print $1 }')
+  fi
+  case "$config_fingerprint" in
+    *[!0-9a-f]*|'') ;;
+    *)
+      if [ "${#config_fingerprint}" -eq 64 ]; then
+        HOBOT_CODE_CONFIG_FINGERPRINT=$config_fingerprint
+        export HOBOT_CODE_CONFIG_FINGERPRINT
+      fi
+      ;;
+  esac
+}
+
 persistent_usage() {
   cat <<'EOF'
 Usage:
@@ -302,6 +546,9 @@ fi
 require_private_file "$hobot_config_root/hobot.env"
 
 load_environment_file "$hobot_config_root/hobot.env"
+if [ "${1:-}" = setup ]; then
+  handle_setup_command "$@"
+fi
 
 hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-$hobot_config_root/agent}
 hobot_state_dir=${HOBOT_CODE_STATE_DIR:-$hobot_state_home/hobot-code}
@@ -348,6 +595,8 @@ for hobot_config_name in settings.json models.json permissions.json memory.json 
   fi
   chmod 0600 "$hobot_agent_dir/$hobot_config_name"
 done
+
+export_config_fingerprint
 
 export HOBOT_CODING_AGENT_DIR="$hobot_agent_dir"
 export HOBOT_CODING_AGENT_SESSION_DIR="$hobot_session_dir"

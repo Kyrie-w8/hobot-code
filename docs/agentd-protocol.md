@@ -134,6 +134,8 @@ Hbmem 容量与当前分配优先来自 `/sys/kernel/debug/ion/heaps/all_heap_in
 - 每个 OS 用户默认最多保留 2 个后台 worker，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。创建、分支、Resume 或 Restart 需要空位时，会原子挂起最久未使用的 `idle` worker并保留 session；`running`、`waiting`、`starting` 和 `stopping` 任务绝不会被自动回收。所有槽位都在工作时才返回并发上限错误。
 - 默认最多保留 100 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。
 - worker 位于独立进程组；停止任务会先发送 `SIGTERM`，超时后发送 `SIGKILL`。
-- `--approve` 只传递 Pi 的项目资源信任选项，不会关闭 Hobot Code 的工具权限和硬安全边界。
+- `hobot task start --model PROVIDER/MODEL` 和 `--permissions review|ask|developer` 可在创建时固定任务模型与权限。`--trust-project` 只传递 Pi 的项目资源信任选项，不会关闭 Hobot Code 的工具权限和硬安全边界；旧 `--approve` 仅作为兼容别名保留。
+- 交互式终端中的 `hobot task attach` 可原地处理 confirm、select、input 和多行 editor 审批；`Ctrl+C` 只退出附着界面，板端 Agent 保持运行。非交互输出不会代替用户答复，而会打印可复制的 `hobot task respond` 命令。
+- 启动器为当前私有 `hobot.env`、`settings.json` 和 `models.json` 生成不显示在响应中的组合配置指纹。支持 `configuration.fingerprint.v1` 的客户端在模型相关操作前只获得“一致/已变化”结果；变化时必须显式执行 `hobot daemon restart`，任务查看、停止和审批仍然可用。
 - daemon 继承启动器已验证的模型环境，但不会记录或通过协议返回认证 token。
 - v1 只监听本机 socket，不开放 TCP。桌面端使用 SSH stdio bridge，权限仍由板端判定。

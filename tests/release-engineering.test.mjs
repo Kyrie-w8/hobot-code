@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -26,6 +26,26 @@ import { createManifest } from "../scripts/write-release-manifest.mjs";
 
 const execFileAsync = promisify(execFile);
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function execFileWithInput(file, args, input, options = {}) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = execFile(file, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        rejectPromise(error);
+        return;
+      }
+      resolvePromise({ stdout, stderr });
+    });
+    child.stdin.end(input);
+  });
+}
+
+function configurationFingerprint(contents) {
+  const digests = contents.map((content) => createHash("sha256").update(content).digest("hex"));
+  return createHash("sha256").update(`${digests.join("\n")}\n`).digest("hex");
+}
 
 function tarArchiveWithEntry(name, type = "0", linkName = "") {
   const header = Buffer.alloc(512);
@@ -286,10 +306,11 @@ async function launcherFixture(t) {
     await copyFile(new URL(`../packaging/pi/${name}`, import.meta.url), join(defaults, name));
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
-  await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf 'umask=%s\\nliteral=%s\\nargs=%s\\n' \"$(umask)\" \"${LITERAL_VALUE:-}\" \"$*\"\n");
+  await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf 'umask=%s\\nliteral=%s\\nfingerprint=%s\\nargs=%s\\n' \"$(umask)\" \"${LITERAL_VALUE:-}\" \"${HOBOT_CODE_CONFIG_FINGERPRINT:-}\" \"$*\"\n");
+  await writeFile(join(runtime, "agentd"), "#!/bin/sh\nfor arg in \"$@\"; do printf 'agentd=<%s>\\n' \"$arg\"; done\n");
   await writeFile(join(runtime, "release.sh"), "#!/bin/sh\nprintf 'release:%s\\n' \"$*\"\n");
   await writeFile(join(runtime, "uninstall.sh"), "#!/bin/sh\nprintf 'uninstall:%s\\n' \"$*\"\n");
-  await Promise.all(["hobot", "release.sh", "uninstall.sh"].map((name) => chmod(join(runtime, name), 0o755)));
+  await Promise.all(["hobot", "agentd", "release.sh", "uninstall.sh"].map((name) => chmod(join(runtime, name), 0o755)));
   const launcherSource = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
   const launcher = join(root, "hobot-launcher");
   await writeFile(launcher, launcherSource.replaceAll("/usr/local/lib/hobot-code", runtime));
@@ -398,7 +419,122 @@ test("launcher treats environment values literally and restores the caller umask
   });
   assert.match(stdout, /^umask=0022$/m);
   assert.match(stdout, /literal=\$\(printf unsafe/);
+  const agentRoot = join(configRoot, "agent");
+  const contents = await Promise.all(["hobot.env", "agent/settings.json", "agent/models.json"].map((name) => readFile(join(configRoot, name))));
+  assert.match(stdout, new RegExp(`^fingerprint=${configurationFingerprint(contents)}$`, "m"));
+  const originalFingerprint = stdout.match(/^fingerprint=([0-9a-f]{64})$/m)?.[1];
+  await writeFile(join(agentRoot, "models.json"), '{"providers":{"changed":{}}}\n');
+  const changed = await execFileAsync(fixture.launcher, [], { env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+  assert.notEqual(changed.stdout.match(/^fingerprint=([0-9a-f]{64})$/m)?.[1], originalFingerprint);
   await assert.rejects(() => access(marker));
+});
+
+test("launcher setup writes a private model configuration without exposing the token", async (t) => {
+  const fixture = await launcherFixture(t);
+  const config = join(fixture.home, ".config/hobot-code/hobot.env");
+  const token = "sk-private-setup-token";
+  const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  const configured = await execFileWithInput(fixture.launcher, [
+    "setup", "--token-stdin", "--model", "glm-5.2", "--base-url", "https://ai-api.d-robotics.cc",
+  ], `${token}\n`, { env: environment });
+  assert.doesNotMatch(configured.stdout, new RegExp(token));
+  assert.doesNotMatch(configured.stderr, new RegExp(token));
+  assert.match(configured.stdout, /Model: drobotics\/glm-5\.2/);
+  assert.match(configured.stdout, /Verify the route when ready/);
+
+  const saved = await readFile(config, "utf8");
+  assert.match(saved, /^ANTHROPIC_AUTH_TOKEN=sk-private-setup-token$/m);
+  assert.match(saved, /^ANTHROPIC_MODEL=glm-5\.2$/m);
+  assert.match(saved, /^ANTHROPIC_BASE_URL=https:\/\/ai-api\.d-robotics\.cc$/m);
+  assert.equal((saved.match(/^ANTHROPIC_AUTH_TOKEN=/gm) ?? []).length, 1);
+  assert.equal((saved.match(/^ANTHROPIC_MODEL=/gm) ?? []).length, 1);
+  assert.equal((saved.match(/^ANTHROPIC_BASE_URL=/gm) ?? []).length, 1);
+  assert.equal((await stat(config)).mode & 0o777, 0o600);
+
+  const launched = await execFileAsync(fixture.launcher, [], { env: environment });
+  const configRoot = join(fixture.home, ".config/hobot-code");
+  const fingerprint = configurationFingerprint(await Promise.all(["hobot.env", "agent/settings.json", "agent/models.json"].map((name) => readFile(join(configRoot, name)))));
+  assert.match(launched.stdout, new RegExp(`^fingerprint=${fingerprint}$`, "m"));
+});
+
+test("launcher setup normalizes legacy model defaults and bounds token input", async (t) => {
+  const fixture = await launcherFixture(t);
+  const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  const configRoot = join(fixture.home, ".config/hobot-code");
+  const config = join(configRoot, "hobot.env");
+  await mkdir(configRoot, { recursive: true });
+  await writeFile(config, "ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc\nANTHROPIC_AUTH_TOKEN=old-token\nANTHROPIC_MODEL=drobotics/glm-5.2\n");
+  await chmod(config, 0o600);
+  await execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "new-token\n", { env: environment });
+  assert.match(await readFile(config, "utf8"), /^ANTHROPIC_MODEL=glm-5\.2$/m);
+
+  await writeFile(config, "ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc\nANTHROPIC_AUTH_TOKEN=old-token\nANTHROPIC_MODEL=legacy-unknown\n");
+  await chmod(config, 0o600);
+  await execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "newer-token\n", { env: environment });
+  assert.match(await readFile(config, "utf8"), /^ANTHROPIC_MODEL=kimi-k3$/m);
+
+  const beforeOversized = await readFile(config, "utf8");
+  await assert.rejects(
+    () => execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], `${"x".repeat(8193)}\n`, { env: environment }),
+    /8192-byte limit/,
+  );
+  assert.equal(await readFile(config, "utf8"), beforeOversized);
+});
+
+test("launcher setup rejects unsafe values and follows no credential symlink", async (t) => {
+  const fixture = await launcherFixture(t);
+  const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  await assert.rejects(
+    () => execFileWithInput(fixture.launcher, ["setup", "--token-stdin", "--model", "other-model"], "token\n", { env: environment }),
+    /Unsupported D-Robotics model/,
+  );
+  await assert.rejects(
+    () => execFileWithInput(fixture.launcher, ["setup", "--token-stdin", "--base-url", "http://gateway.example"], "token\n", { env: environment }),
+    /must use HTTPS/,
+  );
+  await assert.rejects(
+    () => execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "\n", { env: environment }),
+    /token cannot be empty/,
+  );
+
+  const config = join(fixture.home, ".config/hobot-code/hobot.env");
+  const beforeRelativeState = await readFile(config, "utf8");
+  await writeFile(config, `${beforeRelativeState}HOBOT_CODE_STATE_DIR=relative-state\n`);
+  await chmod(config, 0o600);
+  await assert.rejects(
+    () => execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "token\n", { env: environment }),
+    /HOBOT_CODE_STATE_DIR must be an absolute path/,
+  );
+  assert.equal(await readFile(config, "utf8"), `${beforeRelativeState}HOBOT_CODE_STATE_DIR=relative-state\n`);
+  await writeFile(config, beforeRelativeState);
+  await chmod(config, 0o600);
+
+  const outside = join(fixture.root, "outside.env");
+  await writeFile(outside, "do-not-replace\n");
+  await rm(config);
+  await symlink(outside, config);
+  await assert.rejects(
+    () => execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "token\n", { env: environment }),
+    /symbolic link/,
+  );
+  assert.equal(await readFile(outside, "utf8"), "do-not-replace\n");
+});
+
+test("launcher setup does not restart a running daemon and can check with a test double", async (t) => {
+  const fixture = await launcherFixture(t);
+  const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  const pidRoot = join(fixture.home, ".local/state/hobot-code/agentd");
+  await mkdir(pidRoot, { recursive: true });
+  await writeFile(join(pidRoot, "agentd.pid"), `${process.pid}\n`);
+  const configured = await execFileWithInput(fixture.launcher, ["setup", "--token-stdin", "--check"], "first-token\n", { env: environment });
+  assert.match(configured.stderr, /Run: hobot daemon restart/);
+  assert.match(configured.stderr, /then run: hobot model check/);
+  assert.doesNotMatch(configured.stdout, /agentd=</);
+
+  await rm(join(pidRoot, "agentd.pid"));
+  const checked = await execFileWithInput(fixture.launcher, ["setup", "--token-stdin", "--model", "qwen3.8-max", "--check"], "second-token\n", { env: environment });
+  assert.equal(checked.stdout.trim().split("\n").slice(-3).join("\n"), "agentd=<model>\nagentd=<check>\nagentd=<drobotics/qwen3.8-max>");
+  assert.doesNotMatch(checked.stdout, /second-token/);
 });
 
 test("launcher rejects process-injection variables and managed symlinks", async (t) => {
@@ -517,6 +653,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /new_runtime\/agentd/);
   assert.match(installer, /package_dir\/docs\/\." "\$new_runtime\/docs/);
   assert.match(installer, /Installed component version mismatch/);
+  assert.match(installer, /Configure your model first: hobot setup/);
+  assert.match(installer, /ANTHROPIC_AUTH_TOKEN=/);
   assert.match(installer, /for process_path in \/proc\/\[0-9\]\*;/);
   assert.doesNotMatch(installer, /pgrep -f/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
@@ -539,6 +677,11 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(launcher, /umask "\$original_umask"/);
   assert.match(launcher, /release\.sh update/);
   assert.match(launcher, /uninstall\.sh/);
+  assert.match(launcher, /HOBOT_CODE_CONFIG_FINGERPRINT/);
+  assert.match(launcher, /hobot setup --token-stdin/);
+  assert.match(launcher, /stty -echo <\/dev\/tty/);
+  assert.match(launcher, /mktemp "\$hobot_config_root\/\.hobot\.env\.setup\.XXXXXX"/);
+  assert.match(launcher, /mv -f "\$setup_temp" "\$hobot_config_root\/hobot\.env"/);
   assert.match(releaseInstaller, /curl --proto '=https' --tlsv1\.2 -fsSL/);
   assert.doesNotMatch(releaseInstaller, /\bwget\b/);
   assert.match(releaseInstaller, /--max-filesize/);
@@ -554,6 +697,12 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(workflow, /MACOS_CERTIFICATE_BASE64/);
   assert.match(workflow, /APPLE_NOTARY_KEY_BASE64/);
   assert.match(workflow, /HOBOT_CODE_REQUIRE_SIGNED_RELEASE: "1"/);
+  assert.match(workflow, /--draft/);
+  assert.match(workflow, /gh release download "v\$version"/);
+  assert.match(workflow, /diff -u expected-assets\.txt actual-assets\.txt/);
+  assert.match(workflow, /verify_checksum "hobot-code-\$version-linux-arm64\.tar\.gz\.sha256"/);
+  assert.match(workflow, /verify_checksum "hobot-code-\$version-macos-arm64\.dmg\.sha256"/);
+  assert.match(workflow, /gh release edit "v\$version" --draft=false/);
   assert.match(studioPackager, /codesign --force --deep --options runtime --timestamp/);
   assert.match(studioPackager, /notarytool submit/);
   assert.match(studioPackager, /stapler validate/);

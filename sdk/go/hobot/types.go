@@ -50,16 +50,17 @@ type Capabilities struct {
 }
 
 type DaemonInfo struct {
-	Version         string       `json:"version"`
-	Protocol        int          `json:"protocol"`
-	PID             int          `json:"pid"`
-	StartedAt       time.Time    `json:"startedAt"`
-	ActiveTasks     int          `json:"activeTasks"`
-	MaximumTasks    int          `json:"maximumTasks"`
-	SocketPath      string       `json:"socketPath"`
-	StateRoot       string       `json:"stateRoot"`
-	BackgroundTasks bool         `json:"backgroundTasks"`
-	Capabilities    Capabilities `json:"capabilities"`
+	Version              string       `json:"version"`
+	Protocol             int          `json:"protocol"`
+	PID                  int          `json:"pid"`
+	StartedAt            time.Time    `json:"startedAt"`
+	ActiveTasks          int          `json:"activeTasks"`
+	MaximumTasks         int          `json:"maximumTasks"`
+	SocketPath           string       `json:"socketPath"`
+	StateRoot            string       `json:"stateRoot"`
+	BackgroundTasks      bool         `json:"backgroundTasks"`
+	ConfigurationCurrent *bool        `json:"configurationCurrent,omitempty"`
+	Capabilities         Capabilities `json:"capabilities"`
 }
 
 type ThermalZone struct {

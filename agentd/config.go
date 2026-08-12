@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -19,18 +21,19 @@ const (
 )
 
 type config struct {
-	StateRoot        string
-	AgentdRoot       string
-	TasksRoot        string
-	SupportRoot      string
-	SessionDir       string
-	SocketPath       string
-	PIDPath          string
-	LogPath          string
-	AgentBinary      string
-	MaxTasks         int
-	MaxRetainedTasks int
-	MaxEventSize     int64
+	StateRoot         string
+	AgentdRoot        string
+	TasksRoot         string
+	SupportRoot       string
+	SessionDir        string
+	SocketPath        string
+	PIDPath           string
+	LogPath           string
+	AgentBinary       string
+	ConfigFingerprint string
+	MaxTasks          int
+	MaxRetainedTasks  int
+	MaxEventSize      int64
 }
 
 func loadConfig() (config, error) {
@@ -85,21 +88,40 @@ func loadConfig() (config, error) {
 	maxTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_BACKGROUND_TASKS"), defaultMaxTasks, 1, maximumMaxTasks)
 	maxRetainedTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_RETAINED_TASKS"), defaultRetainedTasks, 10, maximumRetainedTasks)
 	maxEventMiB := boundedInteger(os.Getenv("HOBOT_CODE_MAX_EVENT_MIB"), defaultMaxEventMiB, 1, maximumMaxEventMiB)
+	configFingerprint, err := normalizeConfigFingerprint(os.Getenv("HOBOT_CODE_CONFIG_FINGERPRINT"))
+	if err != nil {
+		return config{}, err
+	}
 
 	return config{
-		StateRoot:        filepath.Clean(stateRoot),
-		AgentdRoot:       filepath.Clean(agentdRoot),
-		TasksRoot:        filepath.Join(agentdRoot, "tasks"),
-		SupportRoot:      filepath.Join(agentdRoot, "support"),
-		SessionDir:       filepath.Clean(sessionDir),
-		SocketPath:       filepath.Clean(socketPath),
-		PIDPath:          filepath.Join(agentdRoot, "agentd.pid"),
-		LogPath:          filepath.Join(agentdRoot, "agentd.log"),
-		AgentBinary:      filepath.Clean(agentBinary),
-		MaxTasks:         maxTasks,
-		MaxRetainedTasks: maxRetainedTasks,
-		MaxEventSize:     int64(maxEventMiB) * 1024 * 1024,
+		StateRoot:         filepath.Clean(stateRoot),
+		AgentdRoot:        filepath.Clean(agentdRoot),
+		TasksRoot:         filepath.Join(agentdRoot, "tasks"),
+		SupportRoot:       filepath.Join(agentdRoot, "support"),
+		SessionDir:        filepath.Clean(sessionDir),
+		SocketPath:        filepath.Clean(socketPath),
+		PIDPath:           filepath.Join(agentdRoot, "agentd.pid"),
+		LogPath:           filepath.Join(agentdRoot, "agentd.log"),
+		AgentBinary:       filepath.Clean(agentBinary),
+		ConfigFingerprint: configFingerprint,
+		MaxTasks:          maxTasks,
+		MaxRetainedTasks:  maxRetainedTasks,
+		MaxEventSize:      int64(maxEventMiB) * 1024 * 1024,
 	}, nil
+}
+
+func normalizeConfigFingerprint(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if len(value) != 64 {
+		return "", fmt.Errorf("HOBOT_CODE_CONFIG_FINGERPRINT must be a 64-character SHA-256 hex digest")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", fmt.Errorf("HOBOT_CODE_CONFIG_FINGERPRINT must be a 64-character SHA-256 hex digest")
+	}
+	return strings.ToLower(value), nil
 }
 
 func boundedInteger(value string, fallback, minimum, maximum int) int {

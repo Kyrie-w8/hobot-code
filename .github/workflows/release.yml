@@ -192,4 +192,39 @@ jobs:
             --verify-tag \
             --title "Hobot Code $version" \
             --generate-notes \
+            --draft \
             $prerelease
+
+      - name: Verify and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n '1p' VERSION)
+          verification="$RUNNER_TEMP/hobot-code-release-$version"
+          mkdir -p "$verification"
+          gh release download "v$version" --dir "$verification"
+          cd "$verification"
+          cat > expected-assets.txt <<EOF
+          hobot-code-$version-linux-arm64.tar.gz
+          hobot-code-$version-linux-arm64.tar.gz.sha256
+          hobot-code-$version-macos-arm64.dmg
+          hobot-code-$version-macos-arm64.dmg.sha256
+          hobot-code-version.txt
+          hobot-install.sh
+          EOF
+          gh release view "v$version" --json assets --jq '.assets[].name' | sort > actual-assets.txt
+          sort -o expected-assets.txt expected-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
+          verify_checksum() {
+            checksum_file=$1
+            artifact=$2
+            record=$(sed -n '1p' "$checksum_file")
+            expected=$(printf '%s\n' "$record" | awk '{print $1}')
+            target=$(printf '%s\n' "$record" | awk '{print $2}')
+            case "$target" in \** ) target=${target#\*} ;; esac
+            test "$target" = "$artifact"
+            test "$expected" = "$(sha256sum "$artifact" | awk '{print $1}')"
+          }
+          verify_checksum "hobot-code-$version-linux-arm64.tar.gz.sha256" "hobot-code-$version-linux-arm64.tar.gz"
+          verify_checksum "hobot-code-$version-macos-arm64.dmg.sha256" "hobot-code-$version-macos-arm64.dmg"
+          gh release edit "v$version" --draft=false

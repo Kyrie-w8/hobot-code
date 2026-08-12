@@ -25,16 +25,17 @@ type daemonServer struct {
 }
 
 type daemonInfo struct {
-	Version         string         `json:"version"`
-	Protocol        int            `json:"protocol"`
-	PID             int            `json:"pid"`
-	StartedAt       time.Time      `json:"startedAt"`
-	ActiveTasks     int            `json:"activeTasks"`
-	MaximumTasks    int            `json:"maximumTasks"`
-	SocketPath      string         `json:"socketPath"`
-	StateRoot       string         `json:"stateRoot"`
-	BackgroundTasks bool           `json:"backgroundTasks"`
-	Capabilities    capabilityInfo `json:"capabilities"`
+	Version              string         `json:"version"`
+	Protocol             int            `json:"protocol"`
+	PID                  int            `json:"pid"`
+	StartedAt            time.Time      `json:"startedAt"`
+	ActiveTasks          int            `json:"activeTasks"`
+	MaximumTasks         int            `json:"maximumTasks"`
+	SocketPath           string         `json:"socketPath"`
+	StateRoot            string         `json:"stateRoot"`
+	BackgroundTasks      bool           `json:"backgroundTasks"`
+	ConfigurationCurrent *bool          `json:"configurationCurrent,omitempty"`
+	Capabilities         capabilityInfo `json:"capabilities"`
 }
 
 func newDaemonServer(cfg config) (*daemonServer, error) {
@@ -47,14 +48,19 @@ func newDaemonServer(cfg config) (*daemonServer, error) {
 	}, nil
 }
 
-func (server *daemonServer) info() daemonInfo {
+func (server *daemonServer) info(clientFingerprint string) daemonInfo {
 	capabilities := server.capabilities()
-	return daemonInfo{
+	info := daemonInfo{
 		Version: version, Protocol: protocolVersion, PID: os.Getpid(), StartedAt: server.started,
 		ActiveTasks: server.manager.activeCount(), MaximumTasks: server.cfg.MaxTasks,
 		SocketPath: server.cfg.SocketPath, StateRoot: server.cfg.StateRoot, BackgroundTasks: true,
 		Capabilities: capabilities,
 	}
+	if clientFingerprint != "" {
+		current := clientFingerprint == server.cfg.ConfigFingerprint
+		info.ConfigurationCurrent = &current
+	}
+	return info
 }
 
 func (server *daemonServer) capabilities() capabilityInfo {
@@ -174,13 +180,17 @@ func (server *daemonServer) handleConnection(connection *net.UnixConn) {
 }
 
 func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
+	if daemonMethodNeedsCurrentConfiguration(req.Method) && server.cfg.ConfigFingerprint != "" && req.ConfigFingerprint != "" && req.ConfigFingerprint != server.cfg.ConfigFingerprint {
+		_ = writeJSON(connection, failure(req.ID, "configuration_changed", fmt.Errorf("Hobot Code configuration changed since agentd started; run `hobot daemon restart` before %s", req.Method)))
+		return
+	}
 	switch req.Method {
 	case "ping":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
 			return
 		}
-		_ = writeJSON(connection, success(req.ID, server.info()))
+		_ = writeJSON(connection, success(req.ID, server.info(req.ConfigFingerprint)))
 	case "capabilities":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))

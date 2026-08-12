@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.25.0
+
+- Add a private `hobot setup` flow for first-run D-Robotics model configuration, with hidden token input, atomic `0600` writes, non-interactive stdin support, and explicit daemon restart guidance.
+- Detect model configuration drift between the launcher and a running `agentd`, refusing model-dependent operations with a clear restart command instead of silently using stale credentials or routes.
+- Preserve bounded model failures as structured conversation events so Studio can show actionable inline recovery rather than dropping an empty failed response.
+- Support confirm, select, input, and editor approvals in Studio, and make `hobot task attach` handle approvals interactively without terminating the board-side task when the client disconnects.
+- Resolve `hobot task respond ... yes|no` against the active approval shape, mapping select approvals to their first or last option instead of sending an incompatible confirm response.
+- Add per-task model and permission options to `hobot task start`, clarify project trust as `--trust-project`, and extend model-health client deadlines beyond the server-side probe timeout.
+- Scope Studio requests to the selected board and task, recover live event streams with bounded backoff, and keep stale asynchronous results from replacing the user's current conversation.
+- Turn failed Studio responses into concise recovery cards with model checks and timeline-correct edit-and-retry actions, without exposing raw provider payloads.
+- Stage GitHub releases as drafts and verify the complete asset list and published SHA-256 files before making a release visible.
+
 ## 0.24.0
 
 - Add an explicit `hobot model check` and Studio model-health control that validates the real D-Robotics streaming route without creating a task, caches results for five minutes, and returns only sanitized failure categories and bounded latency metadata.

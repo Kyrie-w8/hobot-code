@@ -2,8 +2,22 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestNormalizeConfigFingerprint(t *testing.T) {
+	upper := strings.Repeat("AB", 32)
+	got, err := normalizeConfigFingerprint(upper)
+	if err != nil || got != strings.ToLower(upper) {
+		t.Fatalf("valid fingerprint was not normalized: got=%q err=%v", got, err)
+	}
+	for _, value := range []string{"short", strings.Repeat("z", 64)} {
+		if _, err := normalizeConfigFingerprint(value); err == nil {
+			t.Fatalf("invalid fingerprint was accepted: %q", value)
+		}
+	}
+}
 
 func TestConfigUsesBoundedStorageDefaultsAndOverrides(t *testing.T) {
 	home := t.TempDir()

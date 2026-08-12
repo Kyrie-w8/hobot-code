@@ -12,7 +12,7 @@ import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
-import {approvalPresentation} from './approval-model.js';
+import {approvalPresentation, approvalResponse} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
@@ -21,6 +21,7 @@ import {currentModelHealth as resolveCurrentModelHealth, modelHealthLabel} from 
 import {rdkWorkflows} from './rdk-workflows.js';
 import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 import {shouldToggleMaximise} from './titlebar-policy.js';
+import {isCurrentRequest, isCurrentTarget, watchRetryDelay, watchStatusLabel} from './async-policy.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
 import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent} from './types';
 import './App.css';
@@ -33,10 +34,10 @@ const statusLabel: Record<string, string> = {
   stopping: 'Stopping', stopped: 'Stopped', failed: 'Failed', interrupted: 'Interrupted',
 };
 
-const boardPresets: Array<Omit<Board, 'id'>> = [
-  {name: 'RDK S100', host: '10.112.10.98', user: 'root', port: 22},
-  {name: 'RDK S600', host: '10.112.10.106', user: 'root', port: 22},
-  {name: 'RDK X5', host: '10.112.10.100', user: 'root', port: 22},
+const boardPresets: Array<Pick<Board, 'name' | 'user' | 'port'>> = [
+  {name: 'RDK S100', user: 'root', port: 22},
+  {name: 'RDK S600', user: 'root', port: 22},
+  {name: 'RDK X5', user: 'root', port: 22},
 ];
 
 function App() {
@@ -84,6 +85,10 @@ function App() {
   const selectedTaskId = useRef('');
   const snapshotSampling = useRef(false);
   const modelHealthRequest = useRef(0);
+  const connectionRequest = useRef(0);
+  const connectionTarget = useRef('');
+  const watchRetryAttempt = useRef(0);
+  const watchRetryTimer = useRef<number | null>(null);
 
   const boardId = connection?.board.id ?? '';
 
@@ -103,11 +108,13 @@ function App() {
         if (targetBoard === activeBoardId.current && selectedTaskId.current === summary.id) setSelectedTask(detail);
       }
     } catch (reason) {
-      setError(String(reason));
+      if (targetBoard === activeBoardId.current) setError(String(reason));
     }
   }, [boardId]);
 
   const connect = useCallback(async (board: Board) => {
+    const request = ++connectionRequest.current;
+    connectionTarget.current = board.id;
     modelHealthRequest.current += 1;
     setCheckingModel(false);
     setModelHealth(null);
@@ -121,30 +128,52 @@ function App() {
         api.models(board.id).catch(() => []),
         api.tasks(board.id),
       ]);
+      const initialTask = page.tasks?.[0] ?? null;
+      const [initialDetail, nextSnapshot] = await Promise.all([
+        initialTask ? api.task(board.id, initialTask.id) : Promise.resolve(null),
+        next.snapshot
+          ? Promise.resolve(next.snapshot)
+          : next.capabilities?.capabilities.includes('system.snapshot')
+            ? api.systemSnapshot(board.id).catch(() => null)
+            : Promise.resolve(null),
+      ]);
+      if (!isCurrentRequest(request, connectionRequest.current)) {
+        if (board.id !== connectionTarget.current && board.id !== activeBoardId.current) {
+          await api.disconnectBoard(board.id).catch(() => undefined);
+        }
+        return;
+      }
       activeBoardId.current = board.id;
       if (previousBoard && previousBoard !== board.id) await api.disconnectBoard(previousBoard).catch(() => undefined);
       setConnection(next);
       setConnectionState('online');
       setModels(pageModels ?? []);
       setTasks(page.tasks ?? []);
-      const initialTask = page.tasks?.[0] ?? null;
       selectedTaskId.current = initialTask?.id ?? '';
-      setSelectedTask(initialTask);
-      if (initialTask) {
-        const detail = await api.task(board.id, initialTask.id);
-        if (activeBoardId.current === board.id && selectedTaskId.current === initialTask.id) setSelectedTask(detail);
-      }
-      setSnapshot(next.snapshot ?? (next.capabilities?.capabilities.includes('system.snapshot') ? await api.systemSnapshot(board.id).catch(() => null) : null));
+      setSelectedTask(initialDetail ?? initialTask);
+      setSnapshot(nextSnapshot);
       setEvents([]);
       setOptimisticPrompt(null);
       setError('');
       setShowBoard(false);
     } catch (reason) {
+      if (!isCurrentRequest(request, connectionRequest.current)) return;
       setConnectionState('offline');
       setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrentRequest(request, connectionRequest.current)) setBusy(false);
     }
+  }, []);
+
+  const scheduleWatchRetry = useCallback((targetBoard: string, targetTask: string, message: string) => {
+    if (targetBoard !== activeBoardId.current || targetTask !== selectedTaskId.current || watchRetryTimer.current !== null) return;
+    const attempt = ++watchRetryAttempt.current;
+    const delay = watchRetryDelay(attempt);
+    setWatchStatus({boardId: targetBoard, taskId: targetTask, state: 'failed', attempt, message});
+    watchRetryTimer.current = window.setTimeout(() => {
+      watchRetryTimer.current = null;
+      if (targetBoard === activeBoardId.current && targetTask === selectedTaskId.current) setWatchRevision((revision) => revision + 1);
+    }, delay);
   }, []);
 
   useEffect(() => {
@@ -181,19 +210,42 @@ function App() {
       if (['task.running', 'task.idle', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
     });
     const removeError = api.onWatchError((watchError) => {
-      if (watchError.boardId === activeBoardId.current && watchError.taskId === selectedTask?.id) setError(watchError.error);
+      if (watchError.boardId === activeBoardId.current && watchError.taskId === selectedTask?.id) {
+        scheduleWatchRetry(watchError.boardId, watchError.taskId, watchError.error);
+      }
     });
     const removeStatus = api.onWatchStatus((status) => {
       if (status.boardId !== activeBoardId.current || status.taskId !== selectedTask?.id) return;
-      setWatchStatus(status.state === 'connected' ? null : status);
+      if (status.state === 'connected') {
+        watchRetryAttempt.current = 0;
+        if (watchRetryTimer.current !== null) window.clearTimeout(watchRetryTimer.current);
+        watchRetryTimer.current = null;
+        setWatchStatus(null);
+      } else if (status.state === 'failed') {
+        scheduleWatchRetry(status.boardId, status.taskId, status.message ?? 'The live event stream stopped.');
+      } else {
+        setWatchStatus(status);
+      }
     });
     return () => { removeEvent(); removeError(); removeStatus(); };
-  }, [boardId, refreshTasks, selectedTask?.id]);
+  }, [boardId, refreshTasks, scheduleWatchRetry, selectedTask?.id]);
+
+  useEffect(() => {
+    watchRetryAttempt.current = 0;
+    if (watchRetryTimer.current !== null) window.clearTimeout(watchRetryTimer.current);
+    watchRetryTimer.current = null;
+    return () => {
+      if (watchRetryTimer.current !== null) window.clearTimeout(watchRetryTimer.current);
+      watchRetryTimer.current = null;
+    };
+  }, [boardId, selectedTask?.id]);
 
   useEffect(() => {
     followsOutput.current = true;
     setHasNewOutput(false);
-    setWatchStatus(null);
+    setWatchStatus(watchRetryAttempt.current > 0 && boardId && selectedTask
+      ? {boardId, taskId: selectedTask.id, state: 'reconnecting', attempt: watchRetryAttempt.current, message: 'Recovering live updates.'}
+      : null);
     if (!boardId || !selectedTask || selectedTask.id.startsWith('draft:')) {
       setEvents([]);
       setEventsLoading(false);
@@ -207,14 +259,16 @@ function App() {
       setEvents(page.events ?? []);
       const after = page.nextAfter ?? page.events[page.events.length - 1]?.sequence ?? 0;
       return api.watch(boardId, selectedTask.id, after);
-    }).catch((reason) => setError(String(reason))).finally(() => {
+    }).catch((reason) => {
+      if (active) scheduleWatchRetry(boardId, selectedTask.id, String(reason));
+    }).finally(() => {
       if (active) setEventsLoading(false);
     });
     return () => {
       active = false;
       void api.stopWatch(boardId, selectedTask.id);
     };
-  }, [boardId, selectedTask?.id, watchRevision]);
+  }, [boardId, scheduleWatchRetry, selectedTask?.id, watchRevision]);
 
   useEffect(() => {
     const nextTaskId = selectedTask?.id ?? '';
@@ -358,6 +412,7 @@ function App() {
     setBusy(true);
     setError('');
     const submittedAt = new Date().toISOString();
+    const sourceTaskId = selectedTask.id;
     const submittedImages = attachments;
     if (!draftSelected) setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
     setSelectedTask((current) => current?.id === selectedTask.id ? {...current, status: 'running', updatedAt: submittedAt} : current);
@@ -379,21 +434,23 @@ function App() {
       else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
       else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt, submittedImages);
       else await api.sendPrompt(boardId, selectedTask.id, prompt, submittedImages);
-      setEditingMessage(null);
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setEditingMessage(null);
       taskDrafts.current.delete(selectedTask.id);
       await refreshTasks();
-      if (nextTask) {
+      if (nextTask && isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) {
         selectedTaskId.current = nextTask.id;
         setOptimisticPrompt({taskId: nextTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
         setSelectedTask(nextTask);
         setWatchRevision((revision) => revision + 1);
       }
     } catch (reason) {
-      setComposer(prompt);
-      setAttachments(submittedImages);
-      setOptimisticPrompt(null);
-      setSelectedTask(selectedTask);
-      setError(String(reason));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) {
+        setComposer(prompt);
+        setAttachments(submittedImages);
+        setOptimisticPrompt(null);
+        setSelectedTask(selectedTask);
+        setError(String(reason));
+      }
     } finally {
       setBusy(false);
     }
@@ -401,13 +458,15 @@ function App() {
 
   async function stopTask() {
     if (!selectedTask || !boardId) return;
+    const sourceBoardId = boardId;
+    const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
       await api.stopTask(boardId, selectedTask.id);
       await refreshTasks();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -415,13 +474,15 @@ function App() {
 
   async function respond(approval: Approval, response: Record<string, unknown>) {
     if (!selectedTask || !boardId) return;
+    const sourceBoardId = boardId;
+    const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
       await api.respond(boardId, selectedTask.id, approval.id, response);
       await refreshTasks();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -435,6 +496,13 @@ function App() {
       composerRef.current?.focus();
       composerRef.current?.setSelectionRange(item.text.length, item.text.length);
     });
+  }
+
+  function retryFailedTurn(item: AssistantConversationItem) {
+    const index = conversation.findIndex((candidate) => candidate.key === item.key);
+    const prompt = conversation.slice(0, index).reverse().find((candidate): candidate is UserConversationItem => candidate.kind === 'user');
+    if (!prompt) return;
+    editMessage(prompt);
   }
 
   async function changeModel(value: string) {
@@ -454,14 +522,15 @@ function App() {
       setSelectedTask({...selectedTask, model: value});
       return;
     }
+    const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
       await api.setModel(boardId, selectedTask.id, provider, modelId);
-      setSelectedTask({...selectedTask, model: value});
-      setTasks((current) => current.map((task) => task.id === selectedTask.id ? {...task, model: value} : task));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask({...selectedTask, model: value});
+      if (activeBoardId.current === boardId) setTasks((current) => current.map((task) => task.id === selectedTask.id ? {...task, model: value} : task));
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -489,14 +558,15 @@ function App() {
       setSelectedTask({...selectedTask, permissionMode: mode as Task['permissionMode']});
       return;
     }
+    const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
       const task = await api.setPermissionMode(boardId, selectedTask.id, mode);
-      setSelectedTask(task);
-      setTasks((current) => current.map((item) => item.id === task.id ? task : item));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask(task);
+      if (activeBoardId.current === boardId) setTasks((current) => current.map((item) => item.id === task.id ? task : item));
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -513,15 +583,16 @@ function App() {
       setRenamingTask(false);
       return;
     }
+    const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
       const task = await api.renameTask(boardId, selectedTask.id, name);
-      setSelectedTask(task);
-      setTasks((current) => current.map((item) => item.id === task.id ? task : item));
-      setRenamingTask(false);
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask(task);
+      if (activeBoardId.current === boardId) setTasks((current) => current.map((item) => item.id === task.id ? task : item));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setRenamingTask(false);
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -558,17 +629,20 @@ function App() {
 
   async function createSideTask(prompt: string, name: string) {
     if (!selectedTask || !boardId) return;
+    const sourceBoardId = boardId;
+    const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
       const task = await api.forkTask(boardId, {taskId: selectedTask.id, prompt, name, kind: 'side', model: selectedModel});
       await refreshTasks();
+      if (!isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) return;
       selectedTaskId.current = task.id;
       setSelectedTask(task);
       setOptimisticPrompt({taskId: task.id, text: prompt, time: new Date().toISOString(), attachments: []});
       setShowSideTask(false);
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -576,17 +650,20 @@ function App() {
 
   async function startDeployment(request: StartDeploymentRequest) {
     if (!boardId) return;
+    const sourceBoardId = boardId;
+    const sourceTaskId = selectedTask?.id ?? '';
     setBusy(true);
     setError('');
     try {
       const task = await api.startDeployment(boardId, request);
       await refreshTasks();
+      if (!isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) return;
       selectedTaskId.current = task.id;
       setSelectedTask(task);
       setShowDeployment(false);
       setWatchRevision((revision) => revision + 1);
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -611,8 +688,10 @@ function App() {
       await refreshTasks(boardId);
       setWatchRevision((revision) => revision + 1);
     } catch (reason) {
-      setConnectionState('offline');
-      setError(String(reason));
+      if (activeBoardId.current === boardId) {
+        setConnectionState('offline');
+        setError(String(reason));
+      }
     } finally {
       setRefreshing(false);
     }
@@ -730,7 +809,7 @@ function App() {
       <main className="task-main">
         {selectedTask ? <>
           <div className="task-header">
-            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span>{watchStatus?.state === 'reconnecting' && <span className="stream-status" role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />Live updates reconnecting</span>}</div><span className="workspace-path">{selectedTask.cwd}</span></div>
+            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span>{watchStatus && <span className={`stream-status stream-${watchStatus.state}`} role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />{watchStatusLabel(watchStatus)}</span>}</div><span className="workspace-path">{selectedTask.cwd}</span></div>
             <div className="task-actions">
               {!draftSelected && <button className="secondary-button side-task-button" title={selectedTask.sessionFile ? 'Create an independent agent from this conversation' : 'Side Agent is available after the first response'} onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={15} />Side Agent</button>}
               {terminalStatuses.has(selectedTask.status) && <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>}
@@ -743,7 +822,7 @@ function App() {
               {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {if (workflow.id === 'deploy-model' && connection?.capabilities?.capabilities.includes('deployments.v1')) {setShowDeployment(true); return;} setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
-                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} />)}
+                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
               {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)}))}} />}
               {['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
             </div>
@@ -751,7 +830,7 @@ function App() {
 
           {hasNewOutput && <button className="jump-latest" onClick={scrollToLatest}><ArrowDown size={15} />New output</button>}
           <div className="composer-dock">
-            {activeApproval && <ApprovalBar approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
+            {activeApproval && <ApprovalBar key={activeApproval.id} approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
             <form className="composer" onSubmit={submitPrompt}>
               {editingMessage !== null && <div className="editing-banner"><FilePenLine size={14} /><span>Editing this message. Later messages will be replaced.</span><button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setComposer('');}}><X size={14} /></button></div>}
               {attachments.length > 0 && <div className="attachment-tray">{attachments.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}><img src={imageDataURL(image)} alt="" /><span>{image.name || `Image ${index + 1}`}</span><button type="button" title="Remove image" onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={13} /></button></div>)}</div>}
@@ -802,12 +881,13 @@ function UserMessage({item, onEdit}: {item: UserConversationItem; onEdit?: (item
   return <article className="user-message">{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
 }
 
-function AssistantTurn({item, running}: {item: AssistantConversationItem; running: boolean}) {
+function AssistantTurn({item, running, canCheckModel, checkingModel, onCheckModel, onRetry}: {item: AssistantConversationItem; running: boolean; canCheckModel: boolean; checkingModel: boolean; onCheckModel: () => void; onRetry: () => void}) {
   return <article className="assistant-turn">
     {item.thinking && <ThinkingBlock item={item} running={running} />}
     {item.tools.length > 0 && <ToolGroup tools={item.tools} />}
     {item.notices.map((notice, index) => <div key={`${notice.time}-${index}`} className={`turn-notice notice-${notice.type}`}><Activity size={13} /><span>{notice.label}</span></div>)}
     {item.text && <div className="assistant-content"><MarkdownContent value={item.text} /><div className="assistant-actions"><CopyButton value={item.text} /></div></div>}
+    {item.failure && <section className="turn-failure" role="alert"><div className="turn-failure-heading"><AlertTriangle size={16} /><strong>{item.failure.title}</strong></div><p>{item.failure.message}</p><div className="turn-failure-actions">{canCheckModel && <button className="secondary-button" type="button" onClick={onCheckModel} disabled={checkingModel}>{checkingModel ? <LoaderCircle size={14} className="spin" /> : <Activity size={14} />}Check model</button>}<button className="secondary-button" type="button" onClick={onRetry}><RefreshCw size={14} />Edit and retry</button></div></section>}
     {running && <div className="agent-progress"><LoaderCircle size={14} className="spin" /><span>Working</span></div>}
   </article>;
 }
@@ -915,14 +995,15 @@ function imageDataURL(image: ImageContent): string { return `data:${image.mimeTy
 
 function ApprovalBar({approval, busy, respond}: {approval: Approval; busy: boolean; respond: (response: Record<string, unknown>) => void}) {
   const view = approvalPresentation(approval);
-  return <section className="approval-bar" role="alert" aria-label={view.title}><div className="approval-heading"><div className="approval-icon"><ShieldCheck size={17} /></div><strong>{view.title}</strong></div><pre className="approval-detail">{view.detail}</pre>{view.remembersExactCall && <div className="approval-scope"><ShieldCheck size={13} />Remembering applies only to this exact tool call in this task.</div>}<div className="approval-actions">{approval.method === 'select' ? approval.options?.map((option) => <button key={option} className={option === 'Allow once' ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond({value: option})}>{option}</button>) : <><button className="secondary-button" disabled={busy} onClick={() => respond({confirmed: false})}>Deny</button><button className="primary-button" disabled={busy} onClick={() => respond({confirmed: true})}>Allow once</button></>}</div></section>;
+  const [value, setValue] = useState(approval.prefill ?? '');
+  const textRequest = approval.method === 'input' || approval.method === 'editor';
+  return <form className="approval-bar" role="alert" aria-label={view.title} onSubmit={(event) => {event.preventDefault(); if (textRequest) respond(approvalResponse(approval.method, 'submit', value));}}><div className="approval-heading"><div className="approval-icon"><ShieldCheck size={17} /></div><strong>{view.title}</strong></div><pre className="approval-detail">{view.detail}</pre>{view.remembersExactCall && <div className="approval-scope"><ShieldCheck size={13} />Remembering applies only to this exact tool call in this task.</div>}{approval.method === 'input' && <input className="approval-input" value={value} placeholder={approval.placeholder} autoFocus onChange={(event) => setValue(event.target.value)} disabled={busy} />}{approval.method === 'editor' && <textarea className="approval-input approval-editor" value={value} placeholder={approval.placeholder} rows={5} autoFocus onChange={(event) => setValue(event.target.value)} disabled={busy} />}<div className="approval-actions">{approval.method === 'select' && <>{approval.options?.map((option) => <button type="button" key={option} className={option === 'Allow once' ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'select', option))}>{option}</button>)}<button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'cancel'))}>Cancel</button></>}{approval.method === 'confirm' && <><button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'deny'))}>Deny</button><button type="button" className="primary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'confirm'))}>Allow once</button></>}{textRequest && <><button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'cancel'))}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Submit</button></>}</div></form>;
 }
 
 function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[]; busy: boolean; onClose: () => void; onConnect: (board: Board) => void; onSave: (board: Board) => Promise<void>}) {
   const [editing, setEditing] = useState(boards.length === 0);
-  const [form, setForm] = useState<Board>({id: '', name: 'RDK S100', host: '10.112.10.98', user: 'root', port: 22, identityFile: ''});
-  const availablePresets = boardPresets.filter((preset) => !boards.some((board) => board.host === preset.host));
-  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid">{availablePresets.length > 0 && <div className="board-presets">{availablePresets.map((preset) => <button type="button" key={preset.host} className={form.host === preset.host ? 'selected' : ''} onClick={() => setForm({id: '', ...preset, identityFile: form.identityFile})}><Server size={14} /><span>{preset.name}</span></button>)}</div>}<label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
+  const [form, setForm] = useState<Board>({id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''});
+  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid"><div className="board-presets">{boardPresets.map((preset) => <button type="button" key={preset.name} className={form.name === preset.name ? 'selected' : ''} onClick={() => setForm({...form, ...preset})}><Server size={14} /><span>{preset.name}</span></button>)}</div><label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} placeholder="Board IP or hostname" autoFocus required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
 }
 
 function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: boolean; onClose: () => void; onCreate: (prompt: string, name: string) => void}) {
@@ -1025,6 +1106,7 @@ function hardwareResourceLabel(value: string) { if (value === 'bpu') return 'BPU
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
+  if (/board configuration changed|configuration-restart-required/i.test(message)) return 'The board configuration changed. Run `hobot daemon restart` on the board, then reconnect.';
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';
   if (/requires a newer Hobot Code event schema/i.test(message)) return 'Update the board-side Hobot Code and reconnect.';
   if (/has no resumable Hobot Code session/i.test(message)) return 'This task has no saved session. Start a new session instead.';

@@ -82,6 +82,18 @@ func assessConnectionCompatibility(info hobot.DaemonInfo, snapshot *hobot.System
 		result.Issues = append(result.Issues, compatibilityIssue{Code: code, Severity: "error", Message: message, Action: "Update Hobot Code on the board, then reconnect."})
 		return result, fmt.Errorf("incompatible board service: %s", message)
 	}
+	if info.ConfigurationCurrent != nil && !*info.ConfigurationCurrent {
+		message := "The board model configuration changed after its background service started."
+		result.Status = "upgrade-required"
+		result.Summary = message
+		result.Issues = append(result.Issues, compatibilityIssue{
+			Code:     "configuration-restart-required",
+			Severity: "error",
+			Message:  message,
+			Action:   "Run `hobot daemon restart` on the board, then reconnect.",
+		})
+		return result, fmt.Errorf("board configuration changed; run `hobot daemon restart` on the board, then reconnect")
+	}
 	capabilities := info.Capabilities
 	if info.Protocol != hobot.ProtocolVersion || capabilities.ProtocolMin > hobot.ProtocolVersion || capabilities.ProtocolMax < hobot.ProtocolVersion {
 		return upgrade("protocol-incompatible", fmt.Sprintf("Studio protocol %d is outside the board range %d-%d", hobot.ProtocolVersion, capabilities.ProtocolMin, capabilities.ProtocolMax))
