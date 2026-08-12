@@ -318,7 +318,7 @@ function App() {
       return () => {cancelled = true; window.clearInterval(timer);};
     }
     return () => {cancelled = true;};
-  }, [boardId, selectedTask?.id, selectedTask?.status, selectedTask?.deployment, connection?.capabilities?.capabilities]);
+  }, [boardId, selectedTask?.id, selectedTask?.status, selectedTask?.deployment?.reportPath, connection?.capabilities?.capabilities]);
 
   async function submitPrompt(event: FormEvent) {
     event.preventDefault();

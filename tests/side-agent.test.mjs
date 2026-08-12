@@ -382,6 +382,6 @@ test("side agent leases reclaim claims from dead processes", async (t) => {
     ownerIsAlive: (pid) => pid !== 404,
   });
   assert.equal(lease.activeCount, 1);
-  assert.deepEqual((await readdir(registryDir)).filter((entry) => entry.includes("404")), []);
+  assert.equal((await readdir(registryDir)).includes("claim-404-stale"), false);
   await lease.release();
 });

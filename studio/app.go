@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	requestTimeout       = 20 * time.Second
-	deleteTimeout        = 45 * time.Second
-	maximumBoards        = 64
-	maximumBoardFileSize = 1024 * 1024
+	requestTimeout          = 20 * time.Second
+	deploymentStatusTimeout = 10 * time.Minute
+	deleteTimeout           = 45 * time.Second
+	maximumBoards           = 64
+	maximumBoardFileSize    = 1024 * 1024
 )
 
 var (
@@ -290,7 +291,7 @@ func (app *App) GetDeploymentStatus(boardID, taskID string) (hobot.DeploymentSta
 	if err != nil {
 		return hobot.DeploymentStatus{}, err
 	}
-	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	ctx, cancel := context.WithTimeout(app.ctx, deploymentStatusTimeout)
 	defer cancel()
 	return client.DeploymentStatus(ctx, taskID)
 }
