@@ -23,7 +23,7 @@ Usage:
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
   hobot deploy inspect [--cwd DIR]
-  hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer|review] ARTIFACT
+  hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] ARTIFACT
   hobot deploy status TASK_ID
   hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
   hobot task list [--all]
