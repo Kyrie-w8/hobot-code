@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.3
+
+- Preserve single tildes in Studio Markdown so ranges and approximate CLI values do not accidentally strike through intervening options, while retaining standard double-tilde strikethrough.
+
 ## 0.22.2
 
 - Bind the packaged agentd binary to the product version with an embedded release marker, reject stale binaries during packaging, and fail installation when the CLI, daemon, and archive versions differ.

@@ -1,7 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   Activity, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
@@ -14,6 +13,7 @@ import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses}
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation} from './approval-model.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
+import {markdownRemarkPlugins} from './markdown-config.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
 import type {Approval, Board, Connection, ImageContent, ModelOption, Task, TaskEvent} from './types';
 import './App.css';
@@ -660,7 +660,7 @@ function ToolRow({tool}: {tool: ToolActivity}) {
 }
 
 function MarkdownContent({value}: {value: string}) {
-  return <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} components={{
+  return <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} components={{
     a: ({node: _node, href, ...props}: any) => <a {...props} href={href} onClick={(event) => {
       event.preventDefault();
       if (href) void api.openExternalURL(href);

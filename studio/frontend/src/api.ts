@@ -34,7 +34,7 @@ const mockBackend: Backend = {
   ListBoards: async () => [mockBoard],
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
-  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.22.2', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'tasks.permissions', 'tasks.images', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 100}}),
+  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.22.3', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'tasks.permissions', 'tasks.images', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 100}}),
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
   GetTask: async (_board: string, taskId: string) => mockTasks.find((task) => task.id === taskId),
