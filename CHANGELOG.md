@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.23.2
+
+- Recover each task's next event sequence from its durable log after an agentd restart, preventing stale metadata from appending duplicate sequence numbers and breaking Studio reconnects.
+- Repair the continuous rollback suffix produced by affected older daemons without discarding conversation events, while continuing to reject malformed JSON, foreign task IDs, and genuine sequence gaps.
+
 ## 0.23.1
 
 - Rename visible accelerator metrics to the RDK terms BPU load, BPU frequency, and ION/Hbmem; keep BPU client, ION, CMA, and DMA-BUF measurements separate instead of presenting an invented AI-memory total.

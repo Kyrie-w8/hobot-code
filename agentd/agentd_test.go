@@ -194,6 +194,80 @@ func TestEventLogRejectsBrokenSequence(t *testing.T) {
 	}
 }
 
+func TestRecoveryUsesDurableEventSequenceAndRepairsRestartRollback(t *testing.T) {
+	cfg := testConfig(t)
+	id := "00112233445566778899aabb"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	metadata := taskMetadata{
+		ID: id, Name: "rollback", Cwd: cfg.StateRoot, Status: statusStopped,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), LastSequence: 2,
+	}
+	encodedMetadata, _ := json.Marshal(metadata)
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), encodedMetadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	events := []taskEvent{
+		{Protocol: protocolVersion, Kind: "event", TaskID: id, Sequence: 1, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"agent_start"}`)},
+		{Protocol: protocolVersion, Kind: "event", TaskID: id, Sequence: 2, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"message_update"}`)},
+		{Protocol: protocolVersion, Kind: "event", TaskID: id, Sequence: 3, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"agent_settled"}`)},
+		{Protocol: protocolVersion, Kind: "event", TaskID: id, Sequence: 3, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"hobot_user_prompt","message":"continued"}`)},
+		{Protocol: protocolVersion, Kind: "event", TaskID: id, Sequence: 4, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"agent_start"}`)},
+	}
+	var eventLog bytes.Buffer
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		eventLog.Write(encoded)
+		eventLog.WriteByte('\n')
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, eventLog.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := manager.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.snapshot().LastSequence; got != 5 {
+		t.Fatalf("recovered last sequence = %d, want 5", got)
+	}
+	replayed, err := readEvents(path, id, 0)
+	if err != nil || len(replayed) != 5 {
+		t.Fatalf("repaired event log: count=%d err=%v", len(replayed), err)
+	}
+	for index, event := range replayed {
+		if event.Sequence != uint64(index+1) {
+			t.Fatalf("event %d sequence = %d", index, event.Sequence)
+		}
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("repaired event log permissions: info=%v err=%v", info, err)
+	}
+}
+
+func TestRecoveryRejectsEventGap(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "events.jsonl")
+	event := taskEvent{
+		Protocol: protocolVersion, Kind: "event", TaskID: "00112233445566778899aabb",
+		Sequence: 2, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"agent_start"}`),
+	}
+	encoded, _ := json.Marshal(event)
+	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := recoverEventLog(path, event.TaskID, 1024*1024); err == nil {
+		t.Fatal("event gap was repaired instead of rejected")
+	}
+}
+
 func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix socket test")

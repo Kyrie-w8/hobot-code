@@ -222,13 +222,18 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			metadata:    metadata,
 			subscribers: make(map[uint64]chan taskEvent),
 		}
-		info, err := privateRegularFileInfo(current.events, cfg.MaxEventSize)
+		eventBytes, lastSequence, repaired, err := recoverEventLog(current.events, metadata.ID, cfg.MaxEventSize)
 		if err != nil {
 			continue
 		}
-		current.eventBytes = info.Size()
+		current.eventBytes = eventBytes
+		sequenceRecovered := !metadata.LogTruncated && metadata.LastSequence != lastSequence
+		if !metadata.LogTruncated {
+			metadata.LastSequence = lastSequence
+			current.metadata.LastSequence = lastSequence
+		}
 		manager.tasks[metadata.ID] = current
-		if metadata.Status == statusInterrupted {
+		if metadata.Status == statusInterrupted || repaired || sequenceRecovered {
 			_ = current.saveMetadata()
 		}
 	}
@@ -1664,6 +1669,118 @@ func (current *task) eventPage(after uint64, limit int) (eventPage, error) {
 func readEvents(path, taskID string, after uint64) ([]taskEvent, error) {
 	page, err := readEventPage(path, taskID, after, 0)
 	return page.Events, err
+}
+
+// recoverEventLog makes the append-only event log authoritative after a daemon
+// restart. Metadata is intentionally saved less often than streaming deltas, so
+// its lastSequence can lag the durable log. Older daemons could then append a
+// second, otherwise contiguous sequence epoch. Renumber only that recognizable
+// rollback suffix; gaps and malformed envelopes remain hard failures.
+func recoverEventLog(path, taskID string, maximumBytes int64) (int64, uint64, bool, error) {
+	info, err := privateRegularFileInfo(path, maximumBytes)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	defer file.Close()
+
+	events := make([]taskEvent, 0)
+	originalSequence := uint64(0)
+	fixedSequence := uint64(0)
+	rollback := false
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
+	for scanner.Scan() {
+		var event taskEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return 0, 0, false, fmt.Errorf("corrupt task event log: %w", err)
+		}
+		if event.Protocol != protocolVersion || event.Kind != "event" || event.TaskID != taskID || event.Sequence == 0 {
+			return 0, 0, false, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+		}
+		if !rollback {
+			switch {
+			case event.Sequence == fixedSequence+1:
+				originalSequence = event.Sequence
+			case event.Sequence <= fixedSequence:
+				rollback = true
+				originalSequence = event.Sequence
+				event.Sequence = fixedSequence + 1
+			default:
+				return 0, 0, false, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+			}
+		} else {
+			if event.Sequence != originalSequence+1 {
+				return 0, 0, false, fmt.Errorf("corrupt task event rollback suffix at sequence %d", event.Sequence)
+			}
+			originalSequence = event.Sequence
+			event.Sequence = fixedSequence + 1
+		}
+		fixedSequence = event.Sequence
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, 0, false, err
+	}
+	if !rollback {
+		return info.Size(), fixedSequence, false, nil
+	}
+	if err := file.Close(); err != nil {
+		return 0, 0, false, err
+	}
+
+	temporary, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".repair-")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		_ = os.Remove(temporary.Name())
+		return 0, 0, false, err
+	}
+	cleanup := func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporary.Name())
+	}
+	written := int64(0)
+	writer := bufio.NewWriter(temporary)
+	for _, event := range events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			cleanup()
+			return 0, 0, false, err
+		}
+		encoded = append(encoded, '\n')
+		count, err := writer.Write(encoded)
+		written += int64(count)
+		if err != nil || written > maximumBytes {
+			cleanup()
+			if err != nil {
+				return 0, 0, false, err
+			}
+			return 0, 0, false, fmt.Errorf("repaired event log exceeds %d bytes", maximumBytes)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		cleanup()
+		return 0, 0, false, err
+	}
+	if err := temporary.Sync(); err != nil {
+		cleanup()
+		return 0, 0, false, err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporary.Name())
+		return 0, 0, false, err
+	}
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		_ = os.Remove(temporary.Name())
+		return 0, 0, false, err
+	}
+	return written, fixedSequence, true, nil
 }
 
 func readEventPage(path, taskID string, after uint64, limit int) (eventPage, error) {
