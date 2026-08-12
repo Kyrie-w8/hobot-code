@@ -79,11 +79,11 @@ daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但�
 
 ## Provider 数据流
 
-D-Robotics 适配器将 Pi 消息、工具描述和 thinking 预算转换为 Anthropic Messages 请求。文本在序列化前修复不完整的 Unicode 代理项，响应体则受超时与字节上限约束。
+D-Robotics Provider 按模型协商协议：Kimi K3、Qwen 3.8 Max 和 GLM 5.2 由 Hobot Code 适配器转换为 Anthropic Messages；DeepSeek V4 Flash 和 Pro 使用同一网关的 OpenAI Chat Completions 路径，以获得实机验证过的自动前缀缓存和标准流式工具调用。文本在序列化前修复不完整的 Unicode 代理项，响应体受超时与字节上限约束。
 
-正常路径以 `stream: true` 请求，并逐条解析 SSE。只有在网关明确返回非 SSE 内容，或返回已知的不支持流式响应时，才读取有界的完整响应；因此两种路径对 Pi 暴露相同的增量事件语义，而不会无限缓冲响应体。
+两条路径都以 `stream: true` 请求并向 Pi 暴露相同的增量文本、thinking、工具调用、usage 和终止语义。Anthropic 路径只有在网关明确返回非 SSE 内容或已知的不支持流式响应时才读取有界完整响应；DeepSeek 路径复用 Pi 固定版本的 OpenAI-compatible 状态机。模型级路由变化不会改变板端权限、工具或会话边界。
 
-成功响应后，Provider 从 usage 记录未缓存输入、缓存读取和缓存写入 token。系统 Prompt 与有序工具定义只做 SHA-256 指纹，用于发现模型路由、Prompt 或工具契约在相邻请求间变化；请求内容本身不进入指标状态。进程内累计值覆盖完整会话，最近明细有界保留 32 条。该指纹是客户端稳定前缀诊断，不冒充上游私有缓存键。
+成功响应后，统一观测层从两种协议的标准化 usage 记录未缓存输入、缓存读取和缓存写入 token。系统 Prompt 与有序工具定义只做 SHA-256 指纹，用于发现模型路由、Prompt 或工具契约在相邻请求间变化；请求内容本身不进入指标状态。进程内累计值覆盖完整会话，最近明细有界保留 32 条。该指纹是客户端稳定前缀诊断，不冒充上游私有缓存键。
 
 ## 控制面顺序
 

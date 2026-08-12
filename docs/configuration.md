@@ -28,9 +28,9 @@ HOBOT_CODE_MODEL_CONTEXT_WINDOW=1000000
 HOBOT_CODE_MODEL_MAX_TOKENS=8192
 ```
 
-Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除其他内置模型。DeepSeek V4 在 thinking off 时会显式发送 `thinking.type=disabled`，避免上游“省略即默认开启”的语义产生额外推理。当前 D-Robotics DeepSeek V4 路由仅声明文本输入；不要向它附加图片。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
+Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除其他内置模型。DeepSeek V4 使用同一网关的 OpenAI Chat Completions 路径，因为实机对照证明该路径能够返回可用的 cache-read usage；thinking off 映射为 `chat_template_kwargs.enable_thinking=false`，实测不会产生 reasoning token。当前 D-Robotics DeepSeek V4 路由仅声明文本输入；不要向它附加图片。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
 
-D-Robotics Provider 优先发起 Anthropic SSE 请求并实时转发 thinking、文本、工具参数和 usage。端点明确不支持流式格式或返回普通 JSON 时，会回退到有字节上限的缓冲读取。流式端点若以 `end_turn` 返回空内容，会进行一次有界缓冲回退；缓冲响应仍为空时报告协议错误，不把空白回复作为成功会话持久化。
+Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Hobot Code 的 Anthropic SSE 适配器，实时转发 thinking、文本、工具参数和 usage；端点明确不支持流式格式或返回普通 JSON 时，才回退到有字节上限的缓冲读取。DeepSeek V4 Flash 和 Pro 使用 Pi 的 OpenAI-compatible 流式实现，保留工具调用、中断、usage 和多轮历史语义。两条路径都受统一的超时、会话和缓存观测约束。
 
 `hobot.env` 只按逐行 `KEY=VALUE` 数据解析；空行和以 `#` 开头的行会忽略，外层单引号或双引号会移除。变量替换、命令替换和其他 Shell 语法不会执行，危险的进程注入变量会被拒绝。决定配置文件自身位置的 `XDG_CONFIG_HOME`、`XDG_STATE_HOME` 和 `HOBOT_CODE_CONFIG_DIR` 也不能写在该文件中，必须在调用 `hobot` 前设置。
 

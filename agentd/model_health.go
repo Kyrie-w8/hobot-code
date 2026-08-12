@@ -162,7 +162,8 @@ func probeDroboticsModel(ctx context.Context, model modelOption) modelHealthResu
 	if baseURL == "" {
 		baseURL = defaultDroboticsBaseURL
 	}
-	endpoint, err := modelHealthEndpoint(baseURL)
+	deepSeekV4 := model.ID == "deepseek-v4-flash" || model.ID == "deepseek-v4-pro"
+	endpoint, err := modelHealthEndpoint(baseURL, deepSeekV4)
 	if err != nil {
 		result.Message = modelHealthMessage(result.Category)
 		return result
@@ -175,18 +176,18 @@ func probeDroboticsModel(ctx context.Context, model modelOption) modelHealthResu
 		"model": model.ID, "max_tokens": 16, "stream": true,
 		"messages": []map[string]string{{"role": "user", "content": "Reply with OK."}},
 	}
-	if strings.HasPrefix(model.ID, "deepseek-v4-") {
-		body["thinking"] = map[string]string{"type": "disabled"}
+	if deepSeekV4 {
+		body["chat_template_kwargs"] = map[string]bool{"enable_thinking": false}
 	}
 
 	streamed := performHealthAttempt(ctx, client, endpoint, token, body, time.Now())
 	result.Attempts = 1
 	if streamed.err == nil && streamed.status >= 200 && streamed.status < 300 {
 		if strings.Contains(streamed.contentType, "text/event-stream") {
-			if validHealthSSE(streamed.body) {
+			if validModelHealthSSE(streamed.body, deepSeekV4) {
 				return successfulModelHealth(result, "sse", streamed.firstByte, time.Since(started))
 			}
-		} else if validHealthJSON(streamed.body) {
+		} else if validModelHealthJSON(streamed.body, deepSeekV4) {
 			return successfulModelHealth(result, "json", streamed.firstByte, time.Since(started))
 		}
 	}
@@ -197,7 +198,7 @@ func probeDroboticsModel(ctx context.Context, model modelOption) modelHealthResu
 		body["stream"] = false
 		final = performHealthAttempt(ctx, client, endpoint, token, body, time.Now())
 		result.Attempts = 2
-		if final.err == nil && final.status >= 200 && final.status < 300 && validHealthJSON(final.body) {
+		if final.err == nil && final.status >= 200 && final.status < 300 && validModelHealthJSON(final.body, deepSeekV4) {
 			return successfulModelHealth(result, "json", final.firstByte, time.Since(started))
 		}
 	}
@@ -226,12 +227,24 @@ func shouldRetryBuffered(attempt healthAttempt) bool {
 	return strings.Contains(detail, "stream") || strings.Contains(detail, "event-stream")
 }
 
-func modelHealthEndpoint(baseURL string) (string, error) {
+func modelHealthEndpoint(baseURL string, openAICompatible bool) (string, error) {
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return "", fmt.Errorf("model gateway URL is invalid")
 	}
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/v1/messages"
+	suffix := "/v1/messages"
+	if openAICompatible {
+		suffix = "/v1/chat/completions"
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(basePath, "/v1") {
+		if openAICompatible {
+			suffix = "/chat/completions"
+		} else {
+			suffix = "/messages"
+		}
+	}
+	parsed.Path = basePath + suffix
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String(), nil
@@ -295,15 +308,64 @@ func healthSSEHasStop(body []byte) bool {
 			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				return true
+			}
 			var event struct {
 				Type string `json:"type"`
 			}
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) == nil && event.Type == "message_stop" {
+			if json.Unmarshal([]byte(data), &event) == nil && event.Type == "message_stop" {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func validModelHealthSSE(body []byte, openAICompatible bool) bool {
+	if openAICompatible {
+		return validOpenAIHealthSSE(body)
+	}
+	return validHealthSSE(body)
+}
+
+func validOpenAIHealthSSE(body []byte) bool {
+	normalized := strings.ReplaceAll(string(body), "\r\n", "\n")
+	seenContent := false
+	seenStop := false
+	for _, block := range strings.Split(normalized, "\n\n") {
+		for _, line := range strings.Split(block, "\n") {
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				seenStop = true
+				continue
+			}
+			var event struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+					FinishReason *string `json:"finish_reason"`
+				} `json:"choices"`
+			}
+			if json.Unmarshal([]byte(data), &event) != nil {
+				return false
+			}
+			for _, choice := range event.Choices {
+				if strings.TrimSpace(choice.Delta.Content) != "" {
+					seenContent = true
+				}
+				if choice.FinishReason != nil && *choice.FinishReason != "" {
+					seenStop = true
+				}
+			}
+		}
+	}
+	return seenContent && seenStop
 }
 
 func validHealthSSE(body []byte) bool {
@@ -401,6 +463,37 @@ func validHealthJSON(body []byte) bool {
 	}
 	switch response.StopReason {
 	case "end_turn", "stop_sequence", "max_tokens", "refusal":
+		return true
+	default:
+		return false
+	}
+}
+
+func validModelHealthJSON(body []byte, openAICompatible bool) bool {
+	if openAICompatible {
+		return validOpenAIHealthJSON(body)
+	}
+	return validHealthJSON(body)
+}
+
+func validOpenAIHealthJSON(body []byte) bool {
+	var response struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(body, &response) != nil || len(response.Choices) == 0 {
+		return false
+	}
+	choice := response.Choices[0]
+	if strings.TrimSpace(choice.Message.Content) == "" {
+		return false
+	}
+	switch choice.FinishReason {
+	case "stop", "length":
 		return true
 	default:
 		return false

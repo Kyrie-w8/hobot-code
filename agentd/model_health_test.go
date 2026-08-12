@@ -62,6 +62,31 @@ func TestProbeDroboticsModelValidatesStreamingAndBufferedResponses(t *testing.T)
 	}
 }
 
+func TestProbeDroboticsDeepSeekUsesOpenAIStreamingRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("DeepSeek health path = %s", request.URL.Path)
+		}
+		requestBody, _ := io.ReadAll(io.LimitReader(request.Body, 4096))
+		body := string(requestBody)
+		if !strings.Contains(body, `"chat_template_kwargs":{"enable_thinking":false}`) {
+			t.Fatalf("DeepSeek health payload did not disable thinking: %s", body)
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(response, "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(response, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(response, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
+
+	health := probeDroboticsModel(context.Background(), modelOption{Provider: "drobotics", ID: "deepseek-v4-flash"})
+	if health.Status != "available" || health.Transport != "sse" || health.Attempts != 1 {
+		t.Fatalf("DeepSeek streaming health = %+v", health)
+	}
+}
+
 func TestBufferedRetryOnlyHandlesStreamCompatibilityFailures(t *testing.T) {
 	if shouldRetryBuffered(healthAttempt{status: http.StatusBadRequest, body: []byte(`{"error":"unsupported model"}`)}) {
 		t.Fatal("model routing failure triggered a duplicate buffered request")
@@ -78,6 +103,24 @@ func TestHealthValidatorsRejectEmptySuccess(t *testing.T) {
 	}
 	if validHealthJSON([]byte(`{"content":[],"stop_reason":"end_turn"}`)) {
 		t.Fatal("empty JSON response was accepted")
+	}
+	emptyOpenAISSE := []byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	if validOpenAIHealthSSE(emptyOpenAISSE) {
+		t.Fatal("empty OpenAI SSE response was accepted")
+	}
+	if validOpenAIHealthJSON([]byte(`{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}`)) {
+		t.Fatal("empty OpenAI JSON response was accepted")
+	}
+}
+
+func TestModelHealthEndpointSelectsProtocolWithoutDuplicatingV1(t *testing.T) {
+	anthropic, err := modelHealthEndpoint("https://ai-api.d-robotics.cc/v1", false)
+	if err != nil || anthropic != "https://ai-api.d-robotics.cc/v1/messages" {
+		t.Fatalf("Anthropic endpoint = %q err=%v", anthropic, err)
+	}
+	openAI, err := modelHealthEndpoint("https://ai-api.d-robotics.cc/v1", true)
+	if err != nil || openAI != "https://ai-api.d-robotics.cc/v1/chat/completions" {
+		t.Fatalf("OpenAI endpoint = %q err=%v", openAI, err)
 	}
 }
 

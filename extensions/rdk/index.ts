@@ -37,7 +37,8 @@ import {
   writeNotificationConfig,
   writePolicy,
 } from "./control-plane.mjs";
-import { formatCacheMetrics, resetCacheMetrics } from "./cache-metrics.mjs";
+import { formatCacheMetrics, recordCacheObservation, resetCacheMetrics } from "./cache-metrics.mjs";
+import { createDroboticsModelConfig } from "./drobotics-models.mjs";
 import { DEFAULT_DROBOTICS_BASE_URL, streamDrobotics } from "./drobotics-provider.ts";
 import { GoalStore, type GoalRecord } from "./goal-store.ts";
 import { acquireHardwareResourceLease, hardwareResourcesForTool } from "./hardware-resource-lease.mjs";
@@ -1007,19 +1008,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
     apiKey: "$ANTHROPIC_AUTH_TOKEN",
     api: "drobotics-anthropic",
     streamSimple: streamDrobotics,
-    models: modelIds.map((id) => ({
-        id,
-        name: `${id} (D-Robotics)`,
-        reasoning: true,
-        thinkingLevelMap: {
-          xhigh: "xhigh",
-          max: "max",
-        },
-        input: id.startsWith("deepseek-v4-") ? ["text"] : ["text", "image"],
-        contextWindow,
-        maxTokens,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      })),
+    models: modelIds.map((id) => createDroboticsModelConfig(id, {
+      baseUrl,
+      contextWindow,
+      maxTokens,
+    })),
   });
 
   pi.registerTool({
@@ -1460,6 +1453,19 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
   pi.on("message_end", async (event, ctx) => {
     if (event.message.role !== "assistant") return undefined;
+    if (event.message.provider === "drobotics"
+      && event.message.api === "openai-completions"
+      && event.message.stopReason !== "error"
+      && event.message.stopReason !== "aborted") {
+      const activeTools = new Set(pi.getActiveTools());
+      const tools = pi.getAllTools().filter((tool) => activeTools.has(tool.name));
+      recordCacheObservation({
+        model: event.message.model,
+        usage: event.message.usage,
+        systemPrompt: ctx.getSystemPrompt(),
+        tools,
+      });
+    }
     if (event.message.stopReason === "error") agentHadFailure = true;
     const toolCalls = event.message.content.filter((block) => block.type === "toolCall");
     const hasMutation = toolCalls.some((block) => mutatingToolNames.has(block.name) || toolIsMcp(block.name));

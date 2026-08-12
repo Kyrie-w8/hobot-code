@@ -98,32 +98,63 @@ Provider / 模型：D-Robotics / `kimi-k3`
 
 两个热轮合计 101,376 / 101,926 input tokens 命中，命中率为 **99.46%**。这证明 D-Robotics/Kimi K3 网关与 Hobot Code Anthropic-compatible 请求链路能够在长且严格稳定的前缀下达到 99% 级别。它是诊断上限，不是日常开发承诺：默认工具契约、短会话新增内容、记忆召回、目标状态、质量门和压缩都会降低比例。
 
-## DeepSeek V4 Flash 对照
+## DeepSeek V4 Flash 协议对照与优化
 
-同日在 S100 上使用同一个 D-Robotics 端点测试 `deepseek-v4-flash`。开始测试前，先以最小非流式请求确认 `deepseek-v4-flash` 与 `deepseek-v4-pro` 都能返回成功的 Anthropic Messages 响应和缓存 usage 字段；随后通过临时完整 Hobot Code 扩展注册 Flash，保留默认 RDK Prompt 与工具契约，使用独立状态目录和 session 连续追加短回合。
+测量时间：2026-08-12 至 2026-08-13（Asia/Shanghai）
 
-前 11 个有效回合的 `input` 依次为 3,430、3,467、3,504、3,541、3,578、3,615、3,652、3,689、3,726、3,763、3,800，共 **39,765 input tokens**。所有回合均为 `cacheRead=0`、`cacheWrite=0`，默认产品路径实测命中率为 **0.00%**。第 12-15 回合网关返回 `end_turn`、空 content 和零 usage；这些回合是异常响应，不计入命中率分母。
+板卡：同一 RDK S100
 
-长稳定前缀对照关闭工具、Skills 与项目上下文并注入唯一约 52K token 固定前缀：
+Provider / 模型：D-Robotics / `deepseek-v4-flash`
 
-| 轮次 | 未缓存 input | cacheRead | cacheWrite | 结果 |
-|---:|---:|---:|---:|---|
-| 1 | 52,886 | 0 | 0 | 正常完成 |
-| 2 | 0 | 0 | 0 | 空 content、零 usage |
-| 3 | 0 | 0 | 0 | 空 content、零 usage |
+第一轮审计使用 D-Robotics Anthropic-compatible `/v1/messages`。默认产品上下文前 11 个有效回合合计 **39,765 input tokens**，全部为 `cacheRead=0`、`cacheWrite=0`；第 12-15 回合返回空 content 和零 usage。约 52K token 长稳定前缀只有首轮正常，两个重复回合仍为空。2026-08-13 增加的独立原始 API 对照也得到相同方向：8K 自动缓存、8K 显式 `cache_control` 和 32K 自动缓存各重复三轮，所有有效回合仍为 `cacheRead=0`。完全相同请求的 input/output token 还会变化，说明该兼容路由的缓存和 usage 行为不适合作为产品路径。
 
-为了排除 Hobot Code Prompt 拼装因素，又对 D-Robotics `/v1/messages` 发送完全相同的原始约 44K token 请求，并在请求间等待缓存持久化。首轮仍为 `cacheRead=0`，后续重复请求没有得到可用于证明缓存命中的稳定 usage；带官方推荐 `metadata.user_id` 的隔离对照进入异常慢路径。`cache_control` 不是可用优化，因为 DeepSeek 官方 Anthropic 兼容文档明确表示会忽略该字段。
+随后在相同模型、账号和网关上测试 OpenAI-compatible `/v1/chat/completions`。该路径同时通过 `prompt_tokens_details.cached_tokens` 与 `cache_read_input_tokens` 暴露缓存。8K 对照第二轮命中 6,400 / 6,471 tokens（98.90%），但第三轮回落为 0，短前缀稳定性不足。32K 第一组结果如下：
 
-结论：截至 2026-08-12，**不能证明 D-Robotics DeepSeek V4 Flash 路由启用了可用的自动前缀缓存**；更不能将 DeepSeek 官方端点或文章中的 99%+ 数字移植到地瓜端点。问题同时出现在原始 API 与完整 Hobot Code 路径，证据不支持继续通过调整客户端 Prompt 或工具顺序来“优化”它，应该由网关路由和 usage 兼容层修复。
+| 轮次 | prompt tokens | cached tokens | 命中率 | 耗时 | 结果 |
+|---:|---:|---:|---:|---:|---|
+| 1 | 25,803 | 0 | 0.00% | 1.28 s | 正常 |
+| 2 | 25,803 | 25,600 | 99.21% | 1.28 s | 正常 |
+| 3 | 25,803 | 25,600 | 99.21% | 1.13 s | 正常 |
 
-Hobot Code 已进行与缓存无冲突的客户端加固：
+在参数兼容对照已经预热同一全新 32K 前缀后，继续使用 `chat_template_kwargs.enable_thinking=false` 做五轮稳定性复验。其中 4/5 轮命中；命中轮均为 23,040 / 23,290 tokens，单轮 **98.93%**。第 4 轮完全相同的请求回落到 0 命中，并重新出现 24 个 reasoning tokens；这说明 D-Robotics 后端可能在不同路由实例间漂移，客户端不能保证每次命中。五轮详情：
 
-- 内置注册 DeepSeek V4 Flash 和 Pro，终端与 Studio 均可选择。
-- 按[官方 thinking 文档](https://api-docs.deepseek.com/guides/thinking_mode)，thinking off 时显式发送 `thinking.type=disabled`；省略该字段会默认启用 thinking。
-- DeepSeek V4 在 D-Robotics 路由上标记为文本输入，避免发送官方兼容接口不支持的图片。
-- 流式空成功响应只允许一次缓冲回退；仍为空则报告协议错误，不记录为缓存观察或正常 Agent 回复。
+| 轮次 | cached / prompt | 命中率 | 耗时 | reasoning tokens |
+|---:|---:|---:|---:|---:|
+| 1 | 23,040 / 23,290 | 98.93% | 1.01 s | 0 |
+| 2 | 23,040 / 23,290 | 98.93% | 7.09 s | 0 |
+| 3 | 23,040 / 23,290 | 98.93% | 5.88 s | 0 |
+| 4 | 0 / 23,290 | 0.00% | 10.95 s | 24 |
+| 5 | 23,040 / 23,290 | 98.93% | 0.93 s | 0 |
 
-产品可对外强调的已验证亮点是：**Hobot Code 具备网关实测的缓存可观测性和前缀稳定性诊断；D-Robotics/Kimi K3 默认热轮 94.58%，长稳定前缀 99.46%；对异常模型路由则诚实隔离并 fail closed。** DeepSeek V4 的模型可用性已经确认，但缓存效率暂不应作为卖点。
+## DeepSeek 完整产品路径
+
+基于上述证据，0.24.0 只把 DeepSeek V4 Flash 和 Pro 切换到 OpenAI-compatible 流式实现；Kimi K3、Qwen 3.8 Max 和 GLM 5.2 保持原 Anthropic SSE 路径。DeepSeek thinking off 映射到已验证的 `chat_template_kwargs.enable_thinking=false`，模型仍保持文本输入限制。
+
+先执行更接近日常开发的六轮测试：加载完整 RDK 扩展，保留 `read`、`grep`、`find`、`ls` 四个只读工具及其真实工具契约，不额外注入长文本，只连续追加短用户消息。六轮全部正常、`reasoning=0`，系统 Prompt 与工具契约指纹在 5 次转换中均保持稳定。
+
+| 轮次 | uncached input | cacheRead | 命中率 |
+|---:|---:|---:|---:|
+| 1 | 1,746 | 0 | 0.00% |
+| 2 | 739 | 1,024 | 58.08% |
+| 3 | 756 | 1,024 | 57.53% |
+| 4 | 261 | 1,536 | 85.48% |
+| 5 | 278 | 1,536 | 84.67% |
+| 6 | 39 | 1,792 | 97.87% |
+
+全部热轮合计 6,912 / 8,985 input tokens 命中，命中率为 **76.93%**；含首次冷轮的聚合命中率为 **64.41%**。短会话的前两轮仍有较多新增 Prompt 和历史，因此不能用长前缀的 99% 上限替代日常基线；随着会话增长，第六轮已达到 97.87%。
+
+发布前在 S100 上加载完整当前 RDK 扩展、完整 Hobot Code 系统 Prompt 和约 32K token 唯一稳定前缀，在同一 Pi RPC 进程连续提交两轮短消息。首轮冷请求为 24,820 uncached input；第二轮为 24,576 cache-read + 254 uncached input，热轮命中率为 **98.98%**。两个回复均正常完成且 `reasoning=0`。`/cache` 同时显示：
+
+```text
+Cache: 2 request(s) | model deepseek-v4-flash
+Hit rate: 49.5% aggregate | 99.0% latest
+Input: 49.6k total | 24.6k read | 0 write | 25.1k uncached
+Prefix stability: 0 route/contract change(s) across 1 transition(s)
+```
+
+此外，独立 Pi 流式回归验证了纯文本响应；工具回归让 DeepSeek 生成 `read` tool call、接收 Pi 的 tool result，再输出文件中的 `RDK_TOOL_OK`，两次模型调用均 `reasoning=0`。因此此次优化覆盖真实 Agent 所需的流式文本、工具调用、多轮历史、thinking-off 和 usage，不只是原始 HTTP 请求成功。
+
+产品可对外强调的已验证亮点是：**Hobot Code 具备网关实测的缓存可观测性和前缀稳定性诊断；D-Robotics/Kimi K3 默认热轮 94.58%、长稳定前缀 99.46%；DeepSeek V4 Flash 经协议优化后，完整 Hobot Code 热轮达到 98.98%。** DeepSeek 的五轮独立复验有 4 轮命中，仍必须把路由漂移披露为当前服务边界，不能把最佳单轮描述为 SLA。
 
 ## 复测规范
 
