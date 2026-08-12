@@ -22,6 +22,7 @@ type config struct {
 	StateRoot        string
 	AgentdRoot       string
 	TasksRoot        string
+	SupportRoot      string
 	SessionDir       string
 	SocketPath       string
 	PIDPath          string
@@ -89,6 +90,7 @@ func loadConfig() (config, error) {
 		StateRoot:        filepath.Clean(stateRoot),
 		AgentdRoot:       filepath.Clean(agentdRoot),
 		TasksRoot:        filepath.Join(agentdRoot, "tasks"),
+		SupportRoot:      filepath.Join(agentdRoot, "support"),
 		SessionDir:       filepath.Clean(sessionDir),
 		SocketPath:       filepath.Clean(socketPath),
 		PIDPath:          filepath.Join(agentdRoot, "agentd.pid"),
@@ -130,7 +132,7 @@ func ensurePrivateDir(path string) error {
 }
 
 func preparePaths(cfg config) error {
-	for _, path := range []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.SessionDir, filepath.Dir(cfg.SocketPath)} {
+	for _, path := range []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.SupportRoot, cfg.SessionDir, filepath.Dir(cfg.SocketPath)} {
 		if err := ensurePrivateDir(path); err != nil {
 			return err
 		}

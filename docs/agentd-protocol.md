@@ -47,6 +47,7 @@
 | `ping` | `{}` | 版本、PID、协议版本、任务数和路径 |
 | `capabilities` | `{}` | 协议范围、事件 schema、功能标识和资源上限 |
 | `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、逐核 BPU 负载与频率、Hbmem/DDR 和运行时工具的只读实时状态 |
+| `support.bundle` | `{includeContent?: boolean}` | 生成私有、脱敏的 schema-v1 支持文件；返回 ID、板端路径、大小、SHA-256、排除项，并可选择返回不超过 4 MiB 的内容 |
 | `deployment.inspect` | `{path}` | 有界扫描工作区内的 ONNX、PyTorch、TFLite、HBM 等模型产物，并按当前板型标注兼容性 |
 | `deployment.start` | `{cwd, artifactPath, goal?, profile?, name?, model?, permissionMode?}` | 创建绑定当前板型、RDK OS、产物和验收报告契约的持久 Agent 任务；已知工作负载可选择冻结验收档案 |
 | `deployment.status` | `{taskId}` | 返回部署阶段、绑定信息和经板端重新校验的结构化报告 |
@@ -95,12 +96,13 @@ agentd 停止或重启时的活动状态 -> interrupted
 ```text
 agentd.pid
 agentd.log
+support/hobot-code-support-<UTC>-<id>.json
 tasks/<task-id>/metadata.json
 tasks/<task-id>/events.jsonl
 tasks/<task-id>/worker.stderr.log
 ```
 
-目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整；worker stderr 最多保留 1 MiB。达到上限后仍持续排空进程管道，避免 worker 因反压卡死。
+目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整；worker stderr 最多保留 1 MiB。达到上限后仍持续排空进程管道，避免 worker 因反压卡死。支持文件最多 4 MiB、只保留最近 5 份；每次生成都使用原子私有写入。
 
 客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源 session 文件：它根据 session 树的 `parentId` 链物化私有分支文件。`side` 取最新已稳定叶节点并作为独立 Agent 展示；`edit` 要求指定 `sequence`，停止被替代的空闲 worker，继承该条 `user.message` 之前的可见历史，并把修改后的 Prompt 作为同一会话的新时间线。旧时间线仍以内部任务记录保留，但 Studio 会折叠它，不会将编辑操作展示成 Side Agent。
 
@@ -111,6 +113,8 @@ Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 
 ## 资源与安全边界
 
 `system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，并在存在时调用固定路径的官方 `hrt_ucp_monitor` 采集 DDR 带宽。该命令有 2.5 秒超时、256 KiB 输出上限和 5 秒缓存，失败时不影响其他快照字段。BPU 负载来自每个核心的 `ratio` 节点，频率来自对应 devfreq；`bpuTelemetry.status` 区分可用、未检测到设备、RDK OS 未暴露指标和读取失败，客户端不得用 CPU 指标代替。
+
+`support.bundle` 只组合固定的系统快照、守护进程上限、私有路径权限检查、固定 RDK 工具可用性和任务元数据统计，不读取事件、session、worker stderr、daemon 原始日志、环境变量或工作区。主机名、状态目录和设备绝对路径会被替换；任务标题、工作目录、session 标识、部署路径和原始错误不会进入结果，任务关联与错误仅使用每份文件独立随机密钥生成的截断 HMAC-SHA-256 指纹和错误类别，密钥不持久化。`includeContent` 只决定是否把同一份文件内容通过现有受 UID 保护的协议返回，不改变收集范围或权限判定。
 
 Hbmem 容量与当前分配优先来自 `/sys/kernel/debug/ion/heaps/all_heap_info`，`accelerator.source=ion-debugfs` 表示数值来自内核 heap 账本。服务仅把汇总表中仍有同名 `/proc/<pid>/status` 的记录归属到活跃应用，返回其 Hbmem 与 RSS；其余驱动、固件、已退出进程或无法安全归属的分配计入对应 pool 的 `systemBytes`。PID、heap、客户端与进程数均有上限，且进程名不匹配时拒绝归属，避免 PID 复用产生错误结果。S600 的某些 `carveout` 驱动会把设备地址窗口而非可用物理内存作为 heap 容量；此时服务保留精确分配量与进程归属，但不返回虚假的容量百分比。debugfs 不可读时才回退到 `hrt_ucp_monitor-estimate`，该来源的 pool 与进程信息只能视为近似值。各 Hbmem pool 是共享 DDR 中用途不同的保留区，不会相加成虚构“显存总量”；`carveout` 也可能由 BPU、编解码和系统组件共同使用。
 

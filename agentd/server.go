@@ -203,6 +203,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, collectSystemSnapshot(server.cfg)))
+	case "support.bundle":
+		var params supportBundleParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		bundle, err := server.createSupportBundle(params.IncludeContent)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "support_bundle_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, bundle))
 	case "deployment.inspect":
 		var params workspaceParams
 		if err := decodeParams(req.Params, &params); err != nil {

@@ -64,6 +64,8 @@ export type SystemSnapshot = {
   uptimeSeconds: number;
 };
 
+export type SupportBundle = {id: string; createdAt: string; path: string; sizeBytes: number; sha256: string; excluded: string[]; checks: {pass: number; warn: number; fail: number}};
+
 export type DeploymentArtifact = {path: string; relativePath: string; name: string; kind: string; sizeBytes: number; modifiedAt: string; compatibility: 'candidate' | 'unverified' | 'conversion-required' | 'mismatch'; reason: string};
 export type DeploymentInspection = {capturedAt: string; cwd: string; board: string; boardId: string; rdkOsVersion: string; artifacts: DeploymentArtifact[]; truncated: boolean};
 export type DeploymentAcceptance = {profile: string; dataset?: string; minimumAccuracySamples: number; metrics?: {name: string; unit: string; threshold: number; comparator: '<=' | '>='}[]; minimumWarmupIterations: number; minimumMeasuredIterations: number; maximumModelP95LatencyMs?: number; maximumEndToEndP95LatencyMs?: number; minimumThroughput: number; maximumTemperatureC: number; minimumMemoryAvailableBytes: number};

@@ -18,6 +18,7 @@ const (
 var protocolCapabilities = []string{
 	"events.normalized.v3",
 	"system.snapshot",
+	"support.bundle.v1",
 	"deployments.v1",
 	"approvals.list",
 	"tasks.lifecycle",

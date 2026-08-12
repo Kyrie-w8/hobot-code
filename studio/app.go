@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -272,6 +273,82 @@ func (app *App) GetSystemSnapshot(boardID string) (hobot.SystemSnapshot, error) 
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
 	return client.SystemSnapshot(ctx)
+}
+
+func (app *App) SaveSupportBundle(boardID string) (hobot.SupportBundle, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.SupportBundle{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	bundle, err := client.SupportBundle(ctx, true)
+	if err != nil {
+		return hobot.SupportBundle{}, err
+	}
+	if len(bundle.Content) == 0 || len(bundle.Content) > 4*1024*1024 {
+		return hobot.SupportBundle{}, fmt.Errorf("board returned an invalid support bundle size")
+	}
+	digest := sha256.Sum256(bundle.Content)
+	if !strings.EqualFold(hex.EncodeToString(digest[:]), bundle.SHA256) {
+		return hobot.SupportBundle{}, fmt.Errorf("support bundle integrity check failed")
+	}
+	filename := filepath.Base(bundle.Path)
+	if filename == "." || filename == string(filepath.Separator) || !strings.HasPrefix(filename, "hobot-code-support-") || !strings.HasSuffix(filename, ".json") {
+		return hobot.SupportBundle{}, fmt.Errorf("board returned an invalid support bundle name")
+	}
+	target, err := runtime.SaveFileDialog(app.ctx, runtime.SaveDialogOptions{
+		Title: "Save Hobot Code support bundle", DefaultFilename: filename,
+		CanCreateDirectories: true,
+	})
+	if err != nil {
+		return hobot.SupportBundle{}, err
+	}
+	if target == "" {
+		bundle.Content = nil
+		bundle.Path = ""
+		return bundle, nil
+	}
+	if err := writePrivateLocalFile(target, bundle.Content); err != nil {
+		return hobot.SupportBundle{}, err
+	}
+	bundle.Content = nil
+	bundle.Path = target
+	return bundle, nil
+}
+
+func writePrivateLocalFile(path string, content []byte) error {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("support bundle destination must be absolute")
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("support bundle destination cannot be a symbolic link")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".hobot-support.*")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 func (app *App) InspectDeployment(boardID, cwd string) (hobot.DeploymentInspection, error) {

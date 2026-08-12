@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.24.0
+
+- Add `hobot diagnose` and the `support.bundle.v1` control-plane capability for one-command, board-side diagnostics with bounded retention and private file permissions.
+- Produce a self-describing support document with RDK identity and telemetry, daemon limits, fixed utility availability, structured health checks, and pseudonymous task summaries.
+- Exclude conversations, prompts, tool inputs and outputs, environment variables, credentials, project files, raw logs, hostnames, local paths, and raw error messages from support documents by construction, with regression tests for representative secrets.
+- Let Hobot Studio generate, integrity-check, and save a support document through the existing SSH bridge without weakening board-side authorization or exposing a new network service.
+
 ## 0.23.7
 
 - Read Hbmem pool capacity and allocation from the kernel ION debugfs ledger, using the official board monitor only for DDR bandwidth or as an explicitly marked estimate when debugfs is unavailable.

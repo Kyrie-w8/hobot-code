@@ -44,6 +44,25 @@ func TestBoardStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWritePrivateLocalFileRejectsSymlinkAndUsesPrivatePermissions(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "support.json")
+	if err := writePrivateLocalFile(target, []byte("safe diagnostics\n")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("support file permissions: info=%v err=%v", info, err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateLocalFile(link, []byte("overwrite")); err == nil {
+		t.Fatal("support bundle writer accepted a symbolic link")
+	}
+}
+
 func TestBoardStoreRejectsUnsafeInput(t *testing.T) {
 	tests := []struct {
 		name    string

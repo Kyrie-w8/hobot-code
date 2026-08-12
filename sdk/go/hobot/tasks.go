@@ -28,6 +28,12 @@ func (client *Client) SystemSnapshot(ctx context.Context) (SystemSnapshot, error
 	return snapshot, err
 }
 
+func (client *Client) SupportBundle(ctx context.Context, includeContent bool) (SupportBundle, error) {
+	var bundle SupportBundle
+	err := client.Call(ctx, "support.bundle", map[string]bool{"includeContent": includeContent}, &bundle)
+	return bundle, err
+}
+
 func (client *Client) InspectDeployment(ctx context.Context, cwd string) (DeploymentInspection, error) {
 	var inspection DeploymentInspection
 	err := client.Call(ctx, "deployment.inspect", map[string]any{"path": cwd}, &inspection)

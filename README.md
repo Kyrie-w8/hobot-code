@@ -17,6 +17,7 @@ Hobot Code 不维护 Pi 的叉路 TUI。终端交互来自固定版本的 Pi，�
 - **并行协作**：`/btw` 在右侧窗格启动独立、多轮、临时的侧边 Agent。
 - **后台任务**：板端 `agentd` 托管无界面 Agent，支持 SSH 断开后继续运行、事件重放和多轮续接。
 - **Mac 桌面端**：统一查看板卡、主/后台任务、thinking、工具时间线和待审批操作。
+- **一键技术支持**：`hobot diagnose` 生成私有、脱敏、可校验的板端诊断文件，Studio 可通过现有 SSH 连接保存到 Mac。
 
 ## 支持平台
 
@@ -60,7 +61,7 @@ curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.23.1
+  | sh -s -- --version 0.24.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -80,7 +81,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
-桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.23.1 会明确区分旧板端、指标节点缺失和读取失败。旧板端仍可管理任务，Studio 会解释而不是误报 BPU 不可用。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
+桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.24.0 增加一键诊断与支持包下载。旧板端仍可管理任务，Studio 会按能力标识隐藏不支持的入口。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 
 消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。编辑历史用户消息会保留该消息之前的上下文，用修改后的内容替换原消息，并在同一主对话中隐藏后续旧时间线，不会创建可见的 Side Agent。左侧项目可以折叠，每个项目可创建多个对话；新对话会从首条指令生成可修改标题。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
@@ -101,6 +102,18 @@ hobot deploy status <task-id>
 ```
 
 `inspect` 只扫描候选，不运行模型；`start` 创建可断线续跑的持久任务；`status` 读取经过板端复核的验收状态。未声明目标的编译产物会显示为待验证，明确属于另一块板或 march 的产物会被拒绝。
+
+### 一键诊断与技术支持包
+
+遇到启动、连接、任务恢复、BPU 状态或资源异常时，在板端执行：
+
+```bash
+hobot diagnose
+```
+
+命令会启动或连接当前用户的 `agentd`，完成固定诊断，并在私有状态目录中生成 `0600` 的 `hobot-code-support-*.json`。文件包含板型和 RDK OS、负载、内存、磁盘、温度、BPU/Hbmem 状态、固定 RDK 工具是否可用、守护进程版本与资源上限、健康检查，以及脱敏后的任务状态统计；只保留最近 5 份。使用 `hobot diagnose --json` 可获得便于自动化处理的路径、大小和 SHA-256。
+
+支持文件不包含对话或 session 内容、系统或用户 Prompt、工具输入与输出、环境变量、凭据、项目文件、工作区内容或原始日志。主机名和本地路径会被替换，任务 ID 与错误原文只保留不可逆短指纹和错误类别。Mac 应用标题栏的下载按钮会通过现有 SSH Bridge 在板端生成文件、校验 SHA-256，再由系统保存对话框写入本机；不会开放新的网络端口。发送给技术支持前仍应查看文件中的 `manifest` 和内容，确认符合所在组织的数据政策。
 
 ### 2. 配置模型
 
@@ -243,7 +256,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.23.1
+hobot update --version 0.24.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

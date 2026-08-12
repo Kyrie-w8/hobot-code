@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Gauge, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Download, Gauge, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
@@ -60,6 +60,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showBoard, setShowBoard] = useState(false);
   const [showInspector, setShowInspector] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
@@ -619,6 +620,21 @@ function App() {
     timelineRef.current?.scrollTo({top: timelineRef.current.scrollHeight, behavior: 'smooth'});
   }
 
+  async function saveSupportBundle() {
+    if (!boardId || busy) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const bundle = await api.saveSupportBundle(boardId);
+      if (bundle.path) setNotice(`Support bundle saved · ${bundle.checks.pass} passed, ${bundle.checks.warn} warnings, ${bundle.checks.fail} failed · ${bundle.path}`);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className={`studio-shell ${showInspector ? '' : 'inspector-hidden'} ${isMacOS ? 'platform-macos' : ''}`}>
       <header className="titlebar" onDoubleClick={(event) => { if (shouldToggleMaximise(event.nativeEvent)) WindowToggleMaximise(); }}>
@@ -630,6 +646,7 @@ function App() {
         </button>
         <div className="titlebar-spacer" />
         {isMock() && <span className="preview-label">Preview</span>}
+        {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
       </header>
@@ -726,6 +743,7 @@ function App() {
       </aside>}
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
+      {notice && <div className="success-toast"><Check size={17} /><span>{notice}</span><button title="Dismiss" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {setBusy(true); setError(''); try {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
       {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}

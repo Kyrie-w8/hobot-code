@@ -22,6 +22,7 @@ Usage:
   hobot daemon start|status
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
+  hobot diagnose [--json]
   hobot deploy inspect [--cwd DIR]
   hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--profile PROFILE] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] ARTIFACT
   hobot deploy status TASK_ID
@@ -67,6 +68,8 @@ func run(args []string) error {
 		return runTaskCLI(cfg, args[1:])
 	case "deploy":
 		return runDeploymentCLI(cfg, args[1:])
+	case "diagnose":
+		return runDiagnoseCLI(cfg, args[1:])
 	case "bridge":
 		if len(args) != 2 || args[1] != "--stdio" {
 			return fmt.Errorf("usage: hobot bridge --stdio")
@@ -85,6 +88,39 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func runDiagnoseCLI(cfg config, args []string) error {
+	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	jsonOutput := flags.Bool("json", false, "print bundle metadata as JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("usage: hobot diagnose [--json]")
+	}
+	client := daemonClient{cfg: cfg}
+	if err := client.ensureStarted(); err != nil {
+		return err
+	}
+	result, err := client.call("support.bundle", supportBundleParams{})
+	if err != nil {
+		return err
+	}
+	var bundle supportBundleResult
+	if err := json.Unmarshal(result, &bundle); err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return printJSON(bundle)
+	}
+	fmt.Println("Hobot Code diagnostics completed.")
+	fmt.Printf("Health: %d passed, %d warnings, %d failed.\n", bundle.Checks.Pass, bundle.Checks.Warn, bundle.Checks.Fail)
+	fmt.Printf("Support bundle: %s\n", bundle.Path)
+	fmt.Printf("Size: %d bytes  SHA-256: %s\n", bundle.SizeBytes, bundle.SHA256)
+	fmt.Println("Privacy: no conversations, prompts, tool inputs, environment variables, credentials, or project files are included.")
+	return nil
 }
 
 func runDeploymentCLI(cfg config, args []string) error {

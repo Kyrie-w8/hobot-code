@@ -25,7 +25,7 @@ func testConfig(t *testing.T) config {
 	}
 	cfg := config{
 		StateRoot: root, AgentdRoot: filepath.Join(root, "agentd"),
-		TasksRoot: filepath.Join(root, "agentd", "tasks"), SessionDir: filepath.Join(root, "sessions"),
+		TasksRoot: filepath.Join(root, "agentd", "tasks"), SupportRoot: filepath.Join(root, "agentd", "support"), SessionDir: filepath.Join(root, "sessions"),
 		SocketPath: filepath.Join(socketRoot, "agentd.sock"), PIDPath: filepath.Join(root, "agentd", "agentd.pid"),
 		LogPath: filepath.Join(root, "agentd", "agentd.log"), AgentBinary: worker,
 		MaxTasks: 1, MaxRetainedTasks: 20, MaxEventSize: 1024 * 1024,

@@ -513,6 +513,10 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .error-toast span { overflow: hidden; text-overflow: ellipsis; }
 .error-toast button { display: grid; width: 24px; height: 24px; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
 .error-toast button:hover { background: rgba(255, 255, 255, 0.08); }
+.success-toast { position: fixed; z-index: 30; right: 16px; bottom: 16px; display: grid; grid-template-columns: 20px minmax(0, 1fr) 24px; width: min(520px, calc(100vw - 32px)); min-height: 46px; align-items: center; gap: 8px; padding: 9px 8px 9px 12px; border: 1px solid rgba(101, 191, 167, 0.42); border-radius: var(--radius); background: #17302a; color: #bfe8dc; box-shadow: 0 14px 42px rgba(0, 0, 0, 0.34); font-size: 11px; }
+.success-toast span { overflow: hidden; text-overflow: ellipsis; }
+.success-toast button { display: grid; width: 24px; height: 24px; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
+.success-toast button:hover { background: rgba(255, 255, 255, 0.08); }
 
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

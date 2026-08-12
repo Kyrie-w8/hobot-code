@@ -163,6 +163,23 @@ type SystemSnapshot struct {
 	UptimeSeconds uint64           `json:"uptimeSeconds"`
 }
 
+type SupportBundle struct {
+	ID        string              `json:"id"`
+	CreatedAt time.Time           `json:"createdAt"`
+	Path      string              `json:"path"`
+	SizeBytes int                 `json:"sizeBytes"`
+	SHA256    string              `json:"sha256"`
+	Content   []byte              `json:"content,omitempty"`
+	Excluded  []string            `json:"excluded"`
+	Checks    SupportCheckSummary `json:"checks"`
+}
+
+type SupportCheckSummary struct {
+	Pass int `json:"pass"`
+	Warn int `json:"warn"`
+	Fail int `json:"fail"`
+}
+
 type DeploymentArtifact struct {
 	Path          string    `json:"path"`
 	RelativePath  string    `json:"relativePath"`

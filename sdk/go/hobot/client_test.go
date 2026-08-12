@@ -25,6 +25,9 @@ while IFS= read -r line; do
     *'"method":"system.snapshot"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","board":"D-Robotics RDK S100","boardId":"s100","hostname":"rdk","rdkOsVersion":"4.0.2","kernel":"6.1.83","architecture":"arm64","cpuCores":8,"loadAverage":[0.5,0.4,0.3],"memory":{"totalBytes":8589934592,"availableBytes":4294967296},"disk":{"path":"/root","totalBytes":68719476736,"availableBytes":34359738368},"thermalZones":[{"name":"pvt_bpu","celsius":52.5}],"bpuDevices":["/dev/bpu","/dev/bpu_core0"],"bpuCores":[{"index":0,"name":"BPU 0","utilizationPercent":42,"currentFrequencyHz":1000000000,"maximumFrequencyHz":1500000000}],"bpuTelemetry":{"status":"available","source":"sysfs-ratio-devfreq"},"aiMemory":{"available":true,"bpuAllocationAvailable":true,"ionAvailable":true,"cmaAvailable":false,"dmaBufAvailable":true,"bpuAllocatedBytes":33554432,"ionAllocatedBytes":134217728,"dmaBufBytes":4194304,"dmaBufObjects":1},"rdkUtilities":{"hrt_model_exec":true},"uptimeSeconds":3600}}\n' "$id"
       ;;
+	*'"method":"support.bundle"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"112233445566","createdAt":"2026-08-12T00:00:00Z","path":"/private/support.json","sizeBytes":18,"sha256":"demo","content":"eyJzYWZlIjp0cnVlfQo=","excluded":["prompts"],"checks":{"pass":4,"warn":1,"fail":0}}}\n' "$id"
+	  ;;
     *'"method":"deployment.inspect"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","cwd":"/root/models","board":"D-Robotics RDK S100","boardId":"s100","rdkOsVersion":"4.0.5","artifacts":[{"path":"/root/models/detector_nashe.hbm","relativePath":"detector_nashe.hbm","name":"detector_nashe.hbm","kind":"rdk-hbm","sizeBytes":1024,"modifiedAt":"2026-08-12T00:00:00Z","compatibility":"candidate","reason":"march matches"}],"truncated":false}}\n' "$id"
       ;;
@@ -73,6 +76,10 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	snapshot, err := client.SystemSnapshot(ctx)
 	if err != nil || snapshot.BoardID != "s100" || len(snapshot.BPUDevices) != 2 || len(snapshot.BPUCores) != 1 || snapshot.BPUCores[0].UtilizationPercent != 42 || snapshot.BPUTelemetry.Status != "available" || snapshot.AIMemory.BPUAllocatedBytes != 33554432 || snapshot.Memory.AvailableBytes == 0 || len(snapshot.ThermalZones) != 1 || snapshot.ThermalZones[0].Celsius != 52.5 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	bundle, err := client.SupportBundle(ctx, true)
+	if err != nil || string(bundle.Content) != "{\"safe\":true}\n" || bundle.Path != "/private/support.json" || bundle.Checks.Pass != 4 {
+		t.Fatalf("support bundle=%+v err=%v", bundle, err)
 	}
 	inspection, err := client.InspectDeployment(ctx, "/root/models")
 	if err != nil || inspection.BoardID != "s100" || len(inspection.Artifacts) != 1 || inspection.Artifacts[0].Compatibility != "candidate" {
