@@ -512,9 +512,9 @@ test("D-Robotics provider fallback state machine", async (t) => {
     assert.equal(events.at(-1).message.responseId, "buffered-after-stream-error");
   });
 
-  await t.test("DeepSeek thinking off is explicit and an empty success retries once then fails", async () => {
+  await t.test("empty streaming and buffered responses fail instead of completing silently", async () => {
     const empty = {
-      id: "deepseek-empty",
+      id: "empty-buffered-response",
       type: "message",
       role: "assistant",
       content: [],
@@ -524,7 +524,7 @@ test("D-Robotics provider fallback state machine", async (t) => {
     const requests = [];
     const fetch = fakeFetchSequence([
       sseResponse([
-        emptyMessageStart("deepseek-empty-stream", 42),
+        emptyMessageStart("empty-streaming-response", 42),
         { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } },
         { type: "message_stop" },
       ]),
@@ -532,16 +532,12 @@ test("D-Robotics provider fallback state machine", async (t) => {
     ], requests);
 
     const events = await collectProviderEvents(streamDrobotics(
-      providerModel("deepseek-v4-flash"),
+      providerModel(),
       providerContext(),
       providerOptions(fetch),
     ));
 
     assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
-    assert.deepEqual(requests.map((request) => request.body.thinking), [
-      { type: "disabled" },
-      { type: "disabled" },
-    ]);
     assert.equal(events.at(-1).type, "error");
     assert.match(events.at(-1).error.errorMessage, /empty successful response/);
   });

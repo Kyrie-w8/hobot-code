@@ -447,7 +447,6 @@ export function streamDrobotics(
       }
       const maxTokens = Math.min(requestedMaxTokens, model.maxTokens);
       const budget = thinkingBudget(extendedOptions.reasoning, maxTokens, extendedOptions.thinkingBudgets);
-      const deepSeekV4 = /^deepseek-v4-(flash|pro)$/.test(model.id);
       const temperature = extendedOptions.temperature;
       if (temperature !== undefined && (!Number.isFinite(temperature) || temperature < 0 || temperature > 1)) {
         throw new Error("Model gateway temperature must be between 0 and 1");
@@ -463,9 +462,7 @@ export function streamDrobotics(
           allowEmptyThinkingSignature: model.compat?.allowEmptySignature === true,
         }),
         tools: convertedTools,
-        ...(budget
-          ? { thinking: { type: "enabled", budget_tokens: budget } }
-          : deepSeekV4 ? { thinking: { type: "disabled" } } : {}),
+        ...(budget ? { thinking: { type: "enabled", budget_tokens: budget } } : {}),
         ...(temperature === undefined ? {} : { temperature }),
       };
 

@@ -2,22 +2,31 @@
 
 [![CI](https://github.com/bryant-w/hobot-code/actions/workflows/ci.yml/badge.svg)](https://github.com/bryant-w/hobot-code/actions/workflows/ci.yml)
 
-面向地瓜机器人 RDK 的开发 Agent。Hobot Code 在板端提供基于 [Pi](https://github.com/earendil-works/pi) 的原生 TUI 和常驻任务服务，在 Mac 上提供同名桌面应用；两个入口共享同一套模型、工具、审批、Skills、会话和 RDK 专业知识。
-
-Hobot Code 不维护 Pi 的叉路 TUI。终端交互来自固定版本的 Pi，桌面端通过 SSH Bridge 操作板端常驻任务；权限判定、工具执行和模型凭据始终留在 RDK 上。
+面向地瓜机器人 RDK 的开发 Agent。Hobot Code 在板端提供原生 TUI 和常驻任务服务，在 Mac 上提供同名桌面应用；两个入口共享模型、工具、审批、Skills、会话和 RDK 专业知识。权限判定、工具执行和模型凭据始终留在 RDK 上。
 
 ## 核心能力
 
-- **原生终端体验**：流式 thinking、工具调用、会话恢复、分支、压缩和快捷键。
-- **RDK 实机上下文**：按需读取型号、RDK OS、温度、内存、BPU 设备和工具状态。
-- **版本化板卡知识**：按 X5 3.x、S100 4.x、S600 5.x 路由 27 个专业主题，并在每篇资料中保留官方来源与核对日期。
-- **开放模型接入**：内置 D-Robotics Kimi K3、Qwen 3.8 Max、GLM 5.2、DeepSeek V4 Flash 和 DeepSeek V4 Pro 网关适配，也兼容 Pi 的 Provider、`models.json` 和 `/login`。
-- **可组合扩展**：继续使用 Pi packages、extensions、MCP、Skills、Prompt templates 和 themes。
-- **工程保障**：工具权限、质量门、Hook、资源受限 LSP、持久记忆和持久目标。
-- **并行协作**：`/btw` 在右侧窗格启动独立、多轮、临时的侧边 Agent。
-- **后台任务**：板端 `agentd` 托管无界面 Agent，支持 SSH 断开后继续运行、事件重放和多轮续接。
-- **Mac 桌面端**：统一查看板卡、主/后台任务、thinking、工具时间线和待审批操作。
-- **一键技术支持**：`hobot diagnose` 生成私有、脱敏、可校验的板端诊断文件，Studio 可通过现有 SSH 连接保存到 Mac。
+- **RDK 开发专家**：识别 X5、S100、S600 与 RDK OS，按需读取 BPU、温度、内存、存储和工具链状态，并从 27 个带官方来源的专业主题中检索板型匹配的知识。
+- **模型部署闭环**：发现 ONNX、HBM 等模型产物，生成板型方案并启动可断线续跑的部署任务；验收报告统一记录精度、延迟、资源、环境和产物 SHA-256。
+- **双端一致体验**：板端 TUI 与 Mac Studio 连接同一 `agentd`、会话和权限控制面，支持流式 thinking、工具时间线、审批、图片输入和断线重连。
+- **持久与并行任务**：`hobot persistent` 保留完整终端，后台任务在 SSH 断开后继续运行；Side Agent 继承稳定上下文并独立多轮工作，不污染主对话。
+- **开放模型与扩展**：内置 D-Robotics Kimi K3、Qwen 3.8 Max、GLM 5.2、DeepSeek V4 Flash 和 Pro，同时兼容 Pi Provider、MCP、packages、extensions、Skills、Prompt templates 和 themes。
+- **缓存效率可观测**：直接读取网关 usage，展示命中率、冷热输入和前缀稳定性；S100 实机验证中，GLM 5.2 与 Kimi K3 的稳定长前缀均达到 **99%+** 热轮命中率。
+- **工程上下文与质量门**：项目初始化、持久记忆、持久目标、Hook 和资源受限 LSP 共同保留开发约定；完成状态与工作区指纹和验证命令绑定。
+- **板端安全边界**：权限策略、项目信任、受保护路径、危险 Shell 检测和硬件资源租约均在板端执行，桌面客户端无法绕过。
+- **诊断与可支持性**：`hobot diagnose` 生成私有、脱敏、带校验值的支持包，Studio 可通过既有 SSH 连接保存到 Mac。
+
+### 实机验证
+
+以下结果读取 D-Robotics 网关返回的真实缓存 usage，不使用字符数或本地 token 估算。日常基线保留完整 RDK 扩展与稳定的真实工具契约；稳定前缀结果用于衡量模型链路上限。
+
+| 模型 | 日常多轮热请求 | 稳定长前缀热请求 |
+|---|---:|---:|
+| Kimi K3 | **94.58%** | **99.46%** |
+| GLM 5.2 | **91.98%** | **99.76%** |
+| DeepSeek V4 Flash | **76.93%** | **98.98%** |
+
+数据来自 RDK S100 实机连续多轮请求。命中率受会话长度、工具变化、上下文压缩和网关路由影响，不是服务等级承诺；测量口径与适用边界见[缓存效率](docs/cache-efficiency.md)。
 
 ## 支持平台
 
@@ -136,7 +145,7 @@ hobot model check drobotics/kimi-k3
 
 该命令发送无工具的最小文本请求，不创建 Agent 任务或会话；只返回可用状态、脱敏错误类别、首包和总耗时。同一模型结果缓存 5 分钟，使用 `--force` 强制重测。Studio 在模型菜单旁提供相同的 **Check** 控件，但连接板卡时不会自动调用模型或产生费用。健康通过只证明此刻的最小文本链路可用，不代表图像、长上下文、工具调用和生产配额均已验证。
 
-安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。D-Robotics Provider 优先请求 Anthropic SSE 流；若端点明确不支持流式格式或返回普通 JSON，则回退到有大小上限的缓冲响应。
+安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Anthropic-compatible 路径；DeepSeek V4 Flash 和 Pro 使用 OpenAI-compatible 路径。两种路径都保留统一的 usage、工具调用、超时和安全语义。
 
 ### 3. 启动
 
@@ -176,7 +185,7 @@ hobot persistent
 
 `Escape` 中断当前模型或工具，`Ctrl+D` 在编辑区为空时退出，`Ctrl+T` 显示或隐藏 thinking。其余快捷键以 `/hotkeys` 为准。
 
-缓存命中率按网关实际 usage 计算，不用字符数或本地估算替代。D-Robotics 端点实测中，Kimi K3 默认产品路径热轮为 **94.58%**，约 50K token 严格稳定前缀达到 **99.46%**；DeepSeek V4 Flash 经 0.24.0 选择的 OpenAI 兼容路径，在完整 Hobot Code 两轮复测中获得 **98.98%** 热轮命中率。独立五轮复验有 4 轮命中，说明路由仍存在缓存漂移，以上数字是可复现实测而不是每轮保证。完整方法、逐轮数据和失败对照见[缓存效率审计](docs/cache-efficiency.md)。
+`/cache` 直接展示当前进程的网关缓存 usage、最近一轮与累计命中率，以及模型、系统 Prompt 和工具契约是否保持稳定。实机基线与测量方法见[缓存效率](docs/cache-efficiency.md)。
 
 全屏模式中可用鼠标主键拖选对话文本，松开后会通过终端剪贴板协议复制到本地电脑；执行 `/copy` 可复制最近一条 Agent 回复。`hobot persistent` 会转发该协议。若本地终端禁用了远程剪贴板写入，可使用 `Shift` 加鼠标拖选走终端自身的复制路径，或在终端设置中允许 OSC 52。
 
@@ -305,7 +314,7 @@ make release
 | [模型能力契约](docs/model-capabilities.md) | 模型默认选择、推理与图像输入能力协商 |
 | [兼容矩阵](docs/compatibility.md) | Studio、agentd、板型与 RDK OS 的支持边界 |
 | [用户目录布局](docs/user-directory-layout.md) | 配置、状态、迁移与安装目标用户 |
-| [设计调研](docs/prime-agent-crush-review.md) | Prime Agent 与 Crush 的可借鉴设计 |
+| [缓存效率](docs/cache-efficiency.md) | 网关 usage、实机基线与适用边界 |
 | [发布流程](docs/releasing.md) | 版本、GitHub Release、来源证明与实机检查 |
 | [安全说明](SECURITY.md) | 权限边界、密钥、第三方代码与漏洞报告 |
 | [贡献指南](CONTRIBUTING.md) | 本地验证、变更要求与提交检查表 |

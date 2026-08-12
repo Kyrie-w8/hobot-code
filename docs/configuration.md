@@ -28,7 +28,7 @@ HOBOT_CODE_MODEL_CONTEXT_WINDOW=1000000
 HOBOT_CODE_MODEL_MAX_TOKENS=8192
 ```
 
-Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除其他内置模型。DeepSeek V4 使用同一网关的 OpenAI Chat Completions 路径，因为实机对照证明该路径能够返回可用的 cache-read usage；thinking off 映射为 `chat_template_kwargs.enable_thinking=false`，实测不会产生 reasoning token。当前 D-Robotics DeepSeek V4 路由仅声明文本输入；不要向它附加图片。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
+Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除其他内置模型。DeepSeek V4 使用同一网关的 OpenAI Chat Completions 路径；thinking off 映射为 `chat_template_kwargs.enable_thinking=false`。当前 D-Robotics DeepSeek V4 路由仅声明文本输入；不要向它附加图片。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
 
 Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Hobot Code 的 Anthropic SSE 适配器，实时转发 thinking、文本、工具参数和 usage；端点明确不支持流式格式或返回普通 JSON 时，才回退到有字节上限的缓冲读取。DeepSeek V4 Flash 和 Pro 使用 Pi 的 OpenAI-compatible 流式实现，保留工具调用、中断、usage 和多轮历史语义。两条路径都受统一的超时、会话和缓存观测约束。
 
@@ -89,7 +89,7 @@ hobot update --extensions
 cacheRead / (input + cacheRead + cacheWrite)
 ```
 
-输出还包含系统 Prompt 与有序工具契约的 SHA-256 指纹，用来判断相邻请求是否更换模型或改变稳定前缀。这里只保存哈希，不记录 Prompt、工具说明、会话正文或凭据。部分兼容网关可能不返回缓存字段，此时 `0%` 只表示 Hobot Code 没有收到可计量的 cache-read token，不能据此证明上游未使用缓存。完整实测与优化边界见[缓存效率审计](cache-efficiency.md)。
+输出还包含系统 Prompt 与有序工具契约的 SHA-256 指纹，用来判断相邻请求是否更换模型或改变稳定前缀。这里只保存哈希，不记录 Prompt、工具说明、会话正文或凭据。部分兼容网关可能不返回缓存字段，此时 `0%` 只表示 Hobot Code 没有收到可计量的 cache-read token，不能据此证明上游未使用缓存。实机基线与适用边界见[缓存效率](cache-efficiency.md)。
 
 ## 路径与开发覆盖
 
