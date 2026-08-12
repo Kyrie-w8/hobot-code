@@ -515,6 +515,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /could not prune old Hobot Code backup/);
   assert.match(installer, /package_dir\/agentd/);
   assert.match(installer, /new_runtime\/agentd/);
+  assert.match(installer, /package_dir\/docs\/\." "\$new_runtime\/docs/);
   assert.match(installer, /Installed component version mismatch/);
   assert.match(installer, /for process_path in \/proc\/\[0-9\]\*;/);
   assert.doesNotMatch(installer, /pgrep -f/);
