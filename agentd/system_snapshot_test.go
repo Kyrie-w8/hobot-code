@@ -76,6 +76,55 @@ func TestParseIONHeapsKeepsCapacityAllocationAndOrphansSeparate(t *testing.T) {
 	}
 }
 
+func TestSanitizeIONHeapCapacitiesRejectsImpossibleDriverValues(t *testing.T) {
+	heaps := []aiMemoryHeapSnapshot{
+		{Name: "ion_uncache", CapacityBytes: 2 * 1024 * 1024 * 1024, AllocatedBytes: 64 * 1024 * 1024},
+		{Name: "carveout", CapacityBytes: 48 * 1024 * 1024 * 1024},
+	}
+	got := sanitizeIONHeapCapacities(heaps, 12*1024*1024*1024)
+	if got[0].CapacityBytes == 0 || got[1].CapacityBytes != 0 {
+		t.Fatalf("unexpected sanitized heaps: %+v", got)
+	}
+}
+
+func TestReadBPUCoresReportsStatusAndFindsSystemDevfreq(t *testing.T) {
+	root := t.TempDir()
+	platformRoot := filepath.Join(root, "platform")
+	systemRoot := filepath.Join(root, "system", "bpu")
+	devfreqRoot := filepath.Join(root, "devfreq")
+	if err := os.MkdirAll(systemRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(systemRoot, "ratio"), []byte("37\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	frequencyRoot := filepath.Join(devfreqRoot, "28108000.bpu")
+	if err := os.MkdirAll(frequencyRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"cur_freq": "1000000000\n", "min_freq": "500000000\n", "max_freq": "1500000000\n"} {
+		if err := os.WriteFile(filepath.Join(frequencyRoot, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cores, status := readBPUCoresAt([]string{"/dev/bpu"}, platformRoot, systemRoot, devfreqRoot)
+	if status.Status != "available" || len(cores) != 1 || cores[0].UtilizationPercent != 37 || cores[0].CurrentFrequencyHz != 1_000_000_000 {
+		t.Fatalf("unexpected BPU telemetry: cores=%+v status=%+v", cores, status)
+	}
+}
+
+func TestReadBPUCoresDistinguishesMissingDeviceAndMetrics(t *testing.T) {
+	root := t.TempDir()
+	_, status := readBPUCoresAt(nil, filepath.Join(root, "platform"), filepath.Join(root, "system"), filepath.Join(root, "devfreq"))
+	if status.Status != "device-not-detected" {
+		t.Fatalf("missing device status = %+v", status)
+	}
+	_, status = readBPUCoresAt([]string{"/dev/bpu"}, filepath.Join(root, "platform"), filepath.Join(root, "system"), filepath.Join(root, "devfreq"))
+	if status.Status != "metrics-not-exposed" {
+		t.Fatalf("missing metrics status = %+v", status)
+	}
+}
+
 func TestParseBPUAndDMABufMemorySummaries(t *testing.T) {
 	bpu := []byte("        carveout:           200000 : 1\n          total            300000\n")
 	if got := parseBPUIONClientTotal(bpu); got != 3*1024*1024 {

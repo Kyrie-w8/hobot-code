@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -72,8 +73,12 @@ type deploymentReport struct {
 	ArtifactSHA256 string `json:"artifactSha256,omitempty"`
 	Summary        string `json:"summary"`
 	Correctness    struct {
-		Passed bool   `json:"passed"`
-		Method string `json:"method,omitempty"`
+		Passed            bool               `json:"passed"`
+		Method            string             `json:"method,omitempty"`
+		Dataset           string             `json:"dataset,omitempty"`
+		SampleCount       int                `json:"sampleCount,omitempty"`
+		ReferenceArtifact string             `json:"referenceArtifact,omitempty"`
+		Metrics           []deploymentMetric `json:"metrics,omitempty"`
 	} `json:"correctness"`
 	Performance struct {
 		WarmupIterations int     `json:"warmupIterations,omitempty"`
@@ -81,7 +86,40 @@ type deploymentReport struct {
 		P50LatencyMS     float64 `json:"p50LatencyMs,omitempty"`
 		P95LatencyMS     float64 `json:"p95LatencyMs,omitempty"`
 		Throughput       float64 `json:"throughput,omitempty"`
+		EndToEndP50MS    float64 `json:"endToEndP50Ms,omitempty"`
+		EndToEndP95MS    float64 `json:"endToEndP95Ms,omitempty"`
 	} `json:"performance"`
+	Resources deploymentResources `json:"resources,omitempty"`
+}
+
+type deploymentMetric struct {
+	Name       string  `json:"name"`
+	Unit       string  `json:"unit"`
+	Value      float64 `json:"value"`
+	Threshold  float64 `json:"threshold"`
+	Comparator string  `json:"comparator"`
+	Passed     bool    `json:"passed"`
+}
+
+type deploymentResourceSample struct {
+	CapturedAt                 time.Time `json:"capturedAt"`
+	SystemMemoryUsedBytes      uint64    `json:"systemMemoryUsedBytes,omitempty"`
+	SystemMemoryAvailableBytes uint64    `json:"systemMemoryAvailableBytes,omitempty"`
+	IONAllocatedBytes          uint64    `json:"ionAllocatedBytes,omitempty"`
+	BPUUtilizationPercent      float64   `json:"bpuUtilizationPercent,omitempty"`
+	CPULoadPercent             float64   `json:"cpuLoadPercent,omitempty"`
+	MaxTemperatureC            float64   `json:"maxTemperatureC,omitempty"`
+}
+
+type deploymentResources struct {
+	SampleCount int                      `json:"sampleCount,omitempty"`
+	Baseline    deploymentResourceSample `json:"baseline,omitempty"`
+	Peak        deploymentResourceSample `json:"peak,omitempty"`
+	Final       deploymentResourceSample `json:"final,omitempty"`
+	Limits      struct {
+		MaxTemperatureC               float64 `json:"maxTemperatureC,omitempty"`
+		MinSystemMemoryAvailableBytes uint64  `json:"minSystemMemoryAvailableBytes,omitempty"`
+	} `json:"limits,omitempty"`
 }
 
 type deploymentStatus struct {
@@ -289,12 +327,14 @@ func deploymentPrompt(record deploymentRecord) string {
 Required workflow:
 1. Inspect the workspace, model inputs, preprocessing, expected outputs, and available D-Robotics toolchain. Do not assume filename compatibility proves deployability.
 2. If this is a source model, build a board-specific conversion/quantization plan before running mutations. If this is compiled, verify its target and runtime compatibility.
-3. Run a small correctness check before benchmarking. Record exact commands, artifact paths, input shape/layout/dtype, preprocessing, and output interpretation.
-4. For performance, separate warmup from measured iterations and record p50/p95 latency, throughput, temperatures, and relevant BPU/AI-memory evidence.
-5. Write the final machine-readable report atomically to %s. The JSON schema is:
-{"schema":1,"outcome":"passed|partial|failed","boardId":%q,"artifactPath":"absolute final artifact path","artifactSha256":"64 lowercase hex when passed","summary":"concise result","correctness":{"passed":true|false,"method":"what was checked"},"performance":{"warmupIterations":0,"iterations":0,"p50LatencyMs":0,"p95LatencyMs":0,"throughput":0}}
+	3. Run a small correctness check before benchmarking. Record exact commands, artifact paths, input shape/layout/dtype, preprocessing, and output interpretation.
+	4. For performance, separate warmup from measured iterations and record model-only and end-to-end p50/p95 latency plus throughput.
+	5. Compare quantized output against the floating-point reference on a named dataset. Report numerical metrics with explicit units, thresholds and comparators; a visual spot check alone is insufficient.
+	6. Sample resources before, during and after inference. Record the peak BPU utilization, temperature, system memory and ION/Hbmem allocation observed during the measured run.
+	7. Write the final machine-readable report atomically to %s. The JSON schema is:
+	{"schema":2,"outcome":"passed|partial|failed","boardId":%q,"artifactPath":"absolute final artifact path","artifactSha256":"64 lowercase hex when passed","summary":"concise result","correctness":{"passed":true,"method":"quantized versus floating-point comparison","dataset":"dataset name and split","sampleCount":1,"referenceArtifact":"absolute reference model path","metrics":[{"name":"epe_delta","unit":"px","value":0,"threshold":0.1,"comparator":"<=","passed":true}]},"performance":{"warmupIterations":5,"iterations":20,"p50LatencyMs":0,"p95LatencyMs":0,"throughput":0,"endToEndP50Ms":0,"endToEndP95Ms":0},"resources":{"sampleCount":3,"baseline":{"capturedAt":"RFC3339","systemMemoryAvailableBytes":0},"peak":{"capturedAt":"RFC3339","systemMemoryUsedBytes":0,"systemMemoryAvailableBytes":0,"ionAllocatedBytes":0,"bpuUtilizationPercent":0,"cpuLoadPercent":0,"maxTemperatureC":0},"final":{"capturedAt":"RFC3339","systemMemoryAvailableBytes":0},"limits":{"maxTemperatureC":85,"minSystemMemoryAvailableBytes":268435456}}}
 
-Only use outcome "passed" when the final artifact exists, its SHA-256 is recorded, boardId matches, correctness passed, and measured iterations are greater than zero. Otherwise use "partial" or "failed" and explain the blocker.`,
+	Only use outcome "passed" when the final artifact exists, its SHA-256 is recorded, boardId matches, every accuracy threshold passed, at least 20 measured iterations include model and end-to-end latency distributions, and resource limits passed. Otherwise use "partial" or "failed" and explain the blocker.`,
 		boundData, record.ReportPath, record.BoardID)
 }
 
@@ -323,7 +363,7 @@ func (manager *taskManager) startDeployment(params deploymentStartParams, snapsh
 		return taskMetadata{}, err
 	}
 	record := &deploymentRecord{
-		Schema: 1, Cwd: cwd, Board: snapshot.Board, BoardID: snapshot.BoardID, RDKOS: snapshot.RDKOSVersion,
+		Schema: 2, Cwd: cwd, Board: snapshot.Board, BoardID: snapshot.BoardID, RDKOS: snapshot.RDKOSVersion,
 		Goal: goal, Artifact: artifact, ReportPath: reportPath, CreatedAt: time.Now().UTC(),
 	}
 	return manager.start(startTaskParams{
@@ -374,7 +414,7 @@ func (manager *taskManager) deploymentStatus(taskID string) (deploymentStatus, e
 }
 
 func validateDeploymentReport(report deploymentReport, record deploymentRecord) string {
-	if report.Schema != 1 || (report.Outcome != "passed" && report.Outcome != "partial" && report.Outcome != "failed") {
+	if (report.Schema != 1 && report.Schema != 2) || report.Schema != record.Schema || (report.Outcome != "passed" && report.Outcome != "partial" && report.Outcome != "failed") {
 		return "deployment report schema or outcome is invalid"
 	}
 	if report.BoardID != record.BoardID {
@@ -390,6 +430,11 @@ func validateDeploymentReport(report deploymentReport, record deploymentRecord) 
 		if !report.Correctness.Passed || report.Performance.Iterations <= 0 || report.Performance.P50LatencyMS <= 0 || report.Performance.P95LatencyMS <= 0 {
 			return "passed deployment report requires correctness and measured latency evidence"
 		}
+		if report.Schema >= 2 {
+			if issue := validateDeploymentEvidence(report); issue != "" {
+				return issue
+			}
+		}
 		info, err := os.Lstat(report.ArtifactPath)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return "passed deployment artifact is missing, non-regular, or a symbolic link"
@@ -403,6 +448,37 @@ func validateDeploymentReport(report deploymentReport, record deploymentRecord) 
 		if hashErr != nil || actual != report.ArtifactSHA256 {
 			return "passed deployment artifact SHA-256 does not match the report"
 		}
+	}
+	return ""
+}
+
+func validateDeploymentEvidence(report deploymentReport) string {
+	correctness := report.Correctness
+	if strings.TrimSpace(correctness.Method) == "" || strings.TrimSpace(correctness.Dataset) == "" || correctness.SampleCount <= 0 || strings.TrimSpace(correctness.ReferenceArtifact) == "" || len(correctness.Metrics) == 0 {
+		return "passed deployment report requires a named dataset, floating-point reference, samples, and numerical accuracy metrics"
+	}
+	for _, metric := range correctness.Metrics {
+		if strings.TrimSpace(metric.Name) == "" || strings.TrimSpace(metric.Unit) == "" || math.IsNaN(metric.Value) || math.IsInf(metric.Value, 0) || math.IsNaN(metric.Threshold) || math.IsInf(metric.Threshold, 0) {
+			return "deployment accuracy metric is incomplete or non-finite"
+		}
+		meetsThreshold := metric.Comparator == "<=" && metric.Value <= metric.Threshold || metric.Comparator == ">=" && metric.Value >= metric.Threshold
+		if !meetsThreshold || !metric.Passed {
+			return fmt.Sprintf("deployment accuracy metric %s did not meet its threshold", metric.Name)
+		}
+	}
+	performance := report.Performance
+	if performance.WarmupIterations <= 0 || performance.Iterations < 20 || performance.P95LatencyMS < performance.P50LatencyMS || performance.Throughput <= 0 || performance.EndToEndP50MS <= 0 || performance.EndToEndP95MS < performance.EndToEndP50MS {
+		return "passed deployment report requires warmup, at least 20 measurements, throughput, and ordered model/end-to-end p50/p95 latency"
+	}
+	resources := report.Resources
+	if resources.SampleCount < 3 || resources.Baseline.CapturedAt.IsZero() || resources.Peak.CapturedAt.IsZero() || resources.Final.CapturedAt.IsZero() || resources.Peak.SystemMemoryUsedBytes == 0 || resources.Peak.SystemMemoryAvailableBytes == 0 || resources.Peak.BPUUtilizationPercent <= 0 || resources.Peak.MaxTemperatureC <= 0 {
+		return "passed deployment report requires baseline, peak, and final BPU, temperature, and memory resource evidence"
+	}
+	if resources.Limits.MaxTemperatureC <= 0 || resources.Limits.MinSystemMemoryAvailableBytes == 0 {
+		return "passed deployment report requires explicit temperature and available-memory limits"
+	}
+	if resources.Peak.MaxTemperatureC > resources.Limits.MaxTemperatureC || resources.Peak.SystemMemoryAvailableBytes < resources.Limits.MinSystemMemoryAvailableBytes {
+		return "deployment resource evidence exceeded a declared limit"
 	}
 	return ""
 }

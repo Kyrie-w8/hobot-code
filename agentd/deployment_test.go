@@ -156,7 +156,7 @@ func TestDeploymentReportRejectsOutsideArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest, _ := sha256RegularFile(outside)
-	record := deploymentRecord{Cwd: workspace, BoardID: "s100", ReportPath: filepath.Join(workspace, ".hobot-deployment-report.json")}
+	record := deploymentRecord{Schema: 1, Cwd: workspace, BoardID: "s100", ReportPath: filepath.Join(workspace, ".hobot-deployment-report.json")}
 	report := deploymentReport{Schema: 1, Outcome: "passed", BoardID: "s100", ArtifactPath: outside, ArtifactSHA256: digest, Summary: "outside"}
 	report.Correctness.Passed = true
 	report.Performance.Iterations = 1
@@ -164,6 +164,48 @@ func TestDeploymentReportRejectsOutsideArtifact(t *testing.T) {
 	report.Performance.P95LatencyMS = 1
 	if issue := validateDeploymentReport(report, record); !strings.Contains(issue, "outside") {
 		t.Fatalf("outside artifact issue=%q", issue)
+	}
+}
+
+func TestDeploymentReportV2RequiresAccuracyPerformanceAndResources(t *testing.T) {
+	workspace := t.TempDir()
+	artifact := filepath.Join(workspace, "rt_igev_bayese.bin")
+	if err := os.WriteFile(artifact, []byte("compiled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest, _ := sha256RegularFile(artifact)
+	record := deploymentRecord{Schema: 2, Cwd: workspace, BoardID: "x5"}
+	report := deploymentReport{Schema: 2, Outcome: "passed", BoardID: "x5", ArtifactPath: artifact, ArtifactSHA256: digest, Summary: "validated"}
+	report.Correctness.Passed = true
+	report.Correctness.Method = "quantized versus ONNX"
+	report.Correctness.Dataset = "Scene Flow validation subset"
+	report.Correctness.SampleCount = 20
+	report.Correctness.ReferenceArtifact = filepath.Join(workspace, "rt_igev.onnx")
+	report.Correctness.Metrics = []deploymentMetric{{Name: "epe_delta", Unit: "px", Value: 0.04, Threshold: 0.1, Comparator: "<=", Passed: true}}
+	report.Performance.WarmupIterations = 5
+	report.Performance.Iterations = 20
+	report.Performance.P50LatencyMS = 28
+	report.Performance.P95LatencyMS = 31
+	report.Performance.EndToEndP50MS = 33
+	report.Performance.EndToEndP95MS = 37
+	report.Performance.Throughput = 30
+	now := time.Now().UTC()
+	report.Resources.SampleCount = 3
+	report.Resources.Baseline.CapturedAt = now
+	report.Resources.Peak.CapturedAt = now.Add(time.Second)
+	report.Resources.Final.CapturedAt = now.Add(2 * time.Second)
+	report.Resources.Peak.SystemMemoryUsedBytes = 1 << 30
+	report.Resources.Peak.SystemMemoryAvailableBytes = 2 << 30
+	report.Resources.Peak.BPUUtilizationPercent = 80
+	report.Resources.Peak.MaxTemperatureC = 67
+	report.Resources.Limits.MaxTemperatureC = 85
+	report.Resources.Limits.MinSystemMemoryAvailableBytes = 256 << 20
+	if issue := validateDeploymentReport(report, record); issue != "" {
+		t.Fatalf("complete v2 report rejected: %s", issue)
+	}
+	report.Correctness.Metrics[0].Value = 0.2
+	if issue := validateDeploymentReport(report, record); !strings.Contains(issue, "epe_delta") {
+		t.Fatalf("failed accuracy threshold accepted: %q", issue)
 	}
 }
 

@@ -46,7 +46,7 @@
 |---|---|---|
 | `ping` | `{}` | 版本、PID、协议版本、任务数和路径 |
 | `capabilities` | `{}` | 协议范围、事件 schema、功能标识和资源上限 |
-| `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、逐核 BPU 利用率与频率、AI 内存和运行时工具的只读实时状态 |
+| `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、逐核 BPU 负载与频率、ION/Hbmem 和运行时工具的只读实时状态 |
 | `deployment.inspect` | `{path}` | 有界扫描工作区内的 ONNX、PyTorch、TFLite、HBM 等模型产物，并按当前板型标注兼容性 |
 | `deployment.start` | `{cwd, artifactPath, goal?, name?, model?, permissionMode?}` | 创建绑定当前板型、RDK OS、产物和验收报告契约的持久 Agent 任务 |
 | `deployment.status` | `{taskId}` | 返回部署阶段、绑定信息和经板端重新校验的结构化报告 |
@@ -110,9 +110,11 @@ Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 
 
 ## 资源与安全边界
 
-`system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，不执行外部监控命令。BPU 利用率来自每个核心的 `ratio` 节点，频率来自对应 devfreq；不可用时字段保持为空，客户端不得用 CPU 指标代替。AI 内存明确区分 BPU client allocation、ION 活跃分配、ION orphaned、CMA 和 dma-buf，不把不同或可能重叠的 heap 容量相加为“显存”。每个调试文件最多读取 2 MiB，heap 最多返回 32 项，BPU 核心最多返回 16 项。
+`system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，不执行外部监控命令。BPU 负载来自每个核心的 `ratio` 节点，频率来自对应 devfreq；`bpuTelemetry.status` 区分可用、未检测到设备、RDK OS 未暴露指标和读取失败，客户端不得用 CPU 指标代替。为兼容 0.23.0，ION/Hbmem 仍使用 `aiMemory` JSON 字段，但它不是“AI 显存”：其中明确区分 BPU client allocation、ION 活跃分配、ION orphaned、CMA 和 DMA-BUF，不把不同或可能重叠的指标相加。大于实机物理内存的异常 heap 容量不会上报。每个调试文件最多读取 2 MiB，heap 最多返回 32 项，BPU 核心最多返回 16 项。
 
-`deployment.inspect` 不执行模型或工具，只在所选工作区内检查最多 4096 个目录项、返回最多 256 个候选、进入最多 4 层目录，不进入隐藏目录、不跟随符号链接。文件扩展名、板型名和 march 标识只能作为候选提示，不能证明兼容性。当前保守路由识别 X5/Bayes、S100/Nash-E/Nash-M、S600/Nash-P；没有明确标识的编译产物保持“待验证”，不会伪装为匹配。`deployment.start` 会把当前实机板型与 RDK OS 冻结到任务元数据；Agent 写出的报告仅是候选结果，`deployment.status` 会重新检查 schema、板型、绝对产物路径、工作区边界、普通文件、SHA-256、正确性和性能证据。报告或产物不满足契约时不得显示为通过。部署任务必须使用 `ask` 或 `developer` 权限，以便在审批后写入验收报告；`review` 会在启动前被拒绝。
+界面术语遵循地瓜官方资料中的 BPU `ratio`/负载、BPU 运行频率和 ION/Hbmem：X 系列将 ION 描述为供 BPU 与图像、视频模块使用的物理内存；S100/S600 的 Hbmem 基于 ION，并区分 `cma_reserved`、`carveout`、`cma`、`ion_uncache` 等 heap。来源：[hrut_somstatus](https://developer.d-robotics.cc/rdk_x_doc/en/Appendix/rdk-command-manual/cmd_hrut_somstatus)、[S100/S600 CPU-BPU-DDR 测试](https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/linux_development/hardware_unit_test/bpu_cpu_ddr_stress)、[X 系列 ION 配置](https://developer.d-robotics.cc/rdk_x_doc/System_configuration/srpi-config)、[S100/S600 Hbmem](https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/linux_development/driver_development_super/driver_hbmem/s100_hbmem_hardware)。
+
+`deployment.inspect` 不执行模型或工具，只在所选工作区内检查最多 4096 个目录项、返回最多 256 个候选、进入最多 4 层目录，不进入隐藏目录、不跟随符号链接。文件扩展名、板型名和 march 标识只能作为候选提示，不能证明兼容性。当前保守路由识别 X5/Bayes、S100/Nash-E/Nash-M、S600/Nash-P；没有明确标识的编译产物保持“待验证”，不会伪装为匹配。`deployment.start` 会把当前实机板型与 RDK OS 冻结到任务元数据；Agent 写出的报告仅是候选结果，`deployment.status` 会重新检查 schema、板型、绝对产物路径、工作区边界、普通文件和 SHA-256。新建任务使用报告 schema v2，只有具名数据集上的数值精度指标全部满足阈值、至少 20 次模型和端到端延迟测量，以及基线/峰值/结束三阶段的 BPU、温度、系统内存和 ION/Hbmem 证据均满足显式资源限制时，才允许显示为通过。历史 schema v1 任务仍可读取，但不能伪装成 v2 完整验收。部署任务必须使用 `ask` 或 `developer` 权限，以便在审批后写入验收报告；`review` 会在启动前被拒绝。
 
 - 每个 OS 用户默认最多保留 2 个后台 worker，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。创建、分支、Resume 或 Restart 需要空位时，会原子挂起最久未使用的 `idle` worker并保留 session；`running`、`waiting`、`starting` 和 `stopping` 任务绝不会被自动回收。所有槽位都在工作时才返回并发上限错误。
 - 默认最多保留 100 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。

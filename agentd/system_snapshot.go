@@ -44,6 +44,11 @@ type bpuCoreSnapshot struct {
 	MaximumFrequencyHz uint64  `json:"maximumFrequencyHz,omitempty"`
 }
 
+type bpuTelemetrySnapshot struct {
+	Status string `json:"status"`
+	Source string `json:"source,omitempty"`
+}
+
 type aiMemoryHeapSnapshot struct {
 	Name           string `json:"name"`
 	CapacityBytes  uint64 `json:"capacityBytes,omitempty"`
@@ -82,6 +87,7 @@ type systemSnapshot struct {
 	ThermalZones  []thermalZoneSnapshot `json:"thermalZones"`
 	BPUDevices    []string              `json:"bpuDevices"`
 	BPUCores      []bpuCoreSnapshot     `json:"bpuCores"`
+	BPUTelemetry  bpuTelemetrySnapshot  `json:"bpuTelemetry"`
 	AIMemory      aiMemorySnapshot      `json:"aiMemory"`
 	RDKUtilities  map[string]bool       `json:"rdkUtilities"`
 	UptimeSeconds uint64                `json:"uptimeSeconds"`
@@ -94,6 +100,8 @@ func collectSystemSnapshot(cfg config) systemSnapshot {
 	}
 	host, _ := os.Hostname()
 	memory := readMemorySnapshot()
+	bpuDevices := listBPUDevices()
+	bpuCores, bpuTelemetry := readBPUCores(bpuDevices)
 	return systemSnapshot{
 		CapturedAt:    time.Now().UTC(),
 		Board:         board,
@@ -107,8 +115,9 @@ func collectSystemSnapshot(cfg config) systemSnapshot {
 		Memory:        memory,
 		Disk:          readDiskSnapshot(cfg.StateRoot),
 		ThermalZones:  readThermalZones(),
-		BPUDevices:    listBPUDevices(),
-		BPUCores:      readBPUCores(),
+		BPUDevices:    bpuDevices,
+		BPUCores:      bpuCores,
+		BPUTelemetry:  bpuTelemetry,
 		AIMemory:      readAIMemorySnapshot(memory),
 		RDKUtilities:  detectRDKUtilities(),
 		UptimeSeconds: readUptimeSeconds(),
@@ -268,30 +277,38 @@ var (
 	dmaBufTotalPattern = regexp.MustCompile(`^Total\s+(\d+)\s+objects?,\s+(\d+)\s+bytes$`)
 )
 
-func readBPUCores() []bpuCoreSnapshot {
-	paths, _ := filepath.Glob("/sys/devices/platform/soc/*.bpu/ratio")
+func readBPUCores(devices []string) ([]bpuCoreSnapshot, bpuTelemetrySnapshot) {
+	return readBPUCoresAt(devices, "/sys/devices/platform/soc", "/sys/devices/system/bpu", "/sys/class/devfreq")
+}
+
+func readBPUCoresAt(devices []string, platformRoot, systemRoot, devfreqRoot string) ([]bpuCoreSnapshot, bpuTelemetrySnapshot) {
+	paths, _ := filepath.Glob(filepath.Join(platformRoot, "*.bpu", "ratio"))
 	sort.Strings(paths)
 	if len(paths) == 0 {
-		if _, err := os.Stat("/sys/devices/system/bpu/ratio"); err == nil {
-			paths = []string{"/sys/devices/system/bpu/ratio"}
+		if _, err := os.Stat(filepath.Join(systemRoot, "ratio")); err == nil {
+			paths = []string{filepath.Join(systemRoot, "ratio")}
 		}
 	}
+	if len(paths) == 0 {
+		if len(devices) == 0 {
+			return []bpuCoreSnapshot{}, bpuTelemetrySnapshot{Status: "device-not-detected"}
+		}
+		return []bpuCoreSnapshot{}, bpuTelemetrySnapshot{Status: "metrics-not-exposed"}
+	}
 	cores := make([]bpuCoreSnapshot, 0, len(paths))
+	readFailed := false
 	for _, ratioPath := range paths {
 		if len(cores) == 16 {
 			break
 		}
 		ratio, err := strconv.ParseFloat(firstTextFile(ratioPath), 64)
 		if err != nil || ratio < 0 || ratio > 100 {
+			readFailed = true
 			continue
 		}
 		root := filepath.Dir(ratioPath)
-		devfreqRoots, _ := filepath.Glob(filepath.Join(root, "devfreq", "*"))
-		frequencyRoot := ""
-		if len(devfreqRoots) > 0 {
-			frequencyRoot = devfreqRoots[0]
-		}
 		index := len(cores)
+		frequencyRoot := findBPUFrequencyRoot(root, index, systemRoot, devfreqRoot)
 		cores = append(cores, bpuCoreSnapshot{
 			Index: index, Name: fmt.Sprintf("BPU %d", index), UtilizationPercent: ratio,
 			CurrentFrequencyHz: readUintFile(filepath.Join(frequencyRoot, "cur_freq")),
@@ -299,7 +316,33 @@ func readBPUCores() []bpuCoreSnapshot {
 			MaximumFrequencyHz: readUintFile(filepath.Join(frequencyRoot, "max_freq")),
 		})
 	}
-	return cores
+	if len(cores) == 0 {
+		status := "metrics-not-exposed"
+		if readFailed {
+			status = "read-failed"
+		}
+		return cores, bpuTelemetrySnapshot{Status: status, Source: "sysfs"}
+	}
+	return cores, bpuTelemetrySnapshot{Status: "available", Source: "sysfs-ratio-devfreq"}
+}
+
+func findBPUFrequencyRoot(deviceRoot string, index int, systemRoot, devfreqRoot string) string {
+	for _, pattern := range []string{
+		filepath.Join(deviceRoot, "devfreq", "*"),
+		filepath.Join(systemRoot, fmt.Sprintf("bpu%d", index), "devfreq", "*"),
+	} {
+		roots, _ := filepath.Glob(pattern)
+		sort.Strings(roots)
+		if len(roots) > 0 {
+			return roots[0]
+		}
+	}
+	roots, _ := filepath.Glob(filepath.Join(devfreqRoot, "*.bpu"))
+	sort.Strings(roots)
+	if index >= 0 && index < len(roots) {
+		return roots[index]
+	}
+	return ""
 }
 
 func readUintFile(path string) uint64 {
@@ -313,7 +356,7 @@ func readUintFile(path string) uint64 {
 func readAIMemorySnapshot(memory memorySnapshot) aiMemorySnapshot {
 	result := aiMemorySnapshot{CMATotalBytes: memory.CMATotalBytes, CMAFreeBytes: memory.CMAFreeBytes}
 	if content, err := readBoundedFile("/sys/kernel/debug/ion/heaps/all_heap_info", maximumTelemetryFileBytes); err == nil {
-		result.Heaps = parseIONHeaps(content)
+		result.Heaps = sanitizeIONHeapCapacities(parseIONHeaps(content), memory.TotalBytes)
 		result.Available, result.IONAvailable = true, true
 		for _, heap := range result.Heaps {
 			result.IONAllocatedBytes += heap.AllocatedBytes
@@ -332,6 +375,16 @@ func readAIMemorySnapshot(memory memorySnapshot) aiMemorySnapshot {
 		result.Available, result.CMAAvailable = true, true
 	}
 	return result
+}
+
+func sanitizeIONHeapCapacities(heaps []aiMemoryHeapSnapshot, physicalMemory uint64) []aiMemoryHeapSnapshot {
+	for index := range heaps {
+		capacity := heaps[index].CapacityBytes
+		if physicalMemory > 0 && capacity > physicalMemory {
+			heaps[index].CapacityBytes = 0
+		}
+	}
+	return heaps
 }
 
 func readBoundedFile(path string, maximum int64) ([]byte, error) {

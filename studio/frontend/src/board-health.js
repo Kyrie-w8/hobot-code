@@ -89,27 +89,41 @@ export function bpuUtilization(snapshot) {
   return {available: true, average: values.reduce((sum, value) => sum + value, 0) / values.length, peak, peakCore: values.indexOf(peak)};
 }
 
+export function bpuUnavailableReason(snapshot) {
+  switch (snapshot.bpuTelemetry?.status) {
+    case 'device-not-detected': return 'No BPU device was detected by the board service.';
+    case 'metrics-not-exposed': return 'This RDK OS does not expose readable BPU load metrics.';
+    case 'read-failed': return 'BPU metric nodes are present but could not be read.';
+    default:
+      return snapshot.bpuDevices.length
+        ? 'This board service is too old to report BPU load. Upgrade Hobot Code on the board.'
+        : 'BPU load is not reported by this board service.';
+  }
+}
+
 export function bpuTemperature(snapshot) {
   const values = snapshot.thermalZones.filter((zone) => /bpu/i.test(zone.name)).map((zone) => zone.celsius);
   const value = Math.max(-Infinity, ...values);
-  return Number.isFinite(value) ? `${value.toFixed(1)} C` : 'Unavailable';
+  return Number.isFinite(value) ? `${value.toFixed(1)} C` : 'Not exposed';
 }
 
 export function bpuFrequency(snapshot) {
   const cores = snapshot.bpuCores ?? [];
+  if (!cores.length) return 'Not reported';
   const current = Math.max(0, ...cores.map((core) => core.currentFrequencyHz ?? 0));
   const maximum = Math.max(0, ...cores.map((core) => core.maximumFrequencyHz ?? 0));
-  if (!current) return 'Unavailable';
+  if (!current) return 'Not exposed';
   return maximum ? `${formatFrequency(current)} / ${formatFrequency(maximum)}` : formatFrequency(current);
 }
 
-export function aiMemoryLabel(snapshot) {
+export function ionMemoryLabel(snapshot) {
   const memory = snapshot.aiMemory;
-  if (!memory?.available) return 'Unavailable';
-  if (memory.bpuAllocationAvailable) return `${formatBytes(memory.bpuAllocatedBytes ?? 0)} BPU`;
-  if (memory.ionAvailable) return `${formatBytes(memory.ionAllocatedBytes ?? 0)} ION`;
+  if (!memory) return 'Not reported';
+  if (!memory.available) return 'Not exposed';
+  if (memory.ionAvailable) return `${formatBytes(memory.ionAllocatedBytes ?? 0)} allocated`;
+  if (memory.bpuAllocationAvailable) return `${formatBytes(memory.bpuAllocatedBytes ?? 0)} BPU client`;
   if (memory.cmaAvailable) return `${formatBytes(memory.cmaFreeBytes ?? 0)} CMA free`;
-  if (memory.dmaBufAvailable) return `${formatBytes(memory.dmaBufBytes ?? 0)} shared`;
+  if (memory.dmaBufAvailable) return `${formatBytes(memory.dmaBufBytes ?? 0)} DMA-BUF`;
   return 'Available';
 }
 

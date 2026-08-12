@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {aiMemoryLabel, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUtilization, capacityPair, durationLabel, loadLabel, maximumTemperature, temperatureTone} from './board-health.js';
+import {boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, ionMemoryLabel, loadLabel, maximumTemperature, temperatureTone} from './board-health.js';
 
 function snapshot(overrides = {}) {
   return {
@@ -27,7 +27,7 @@ test('healthy RDK reports no readiness issues', () => {
   assert.deepEqual(bpuUtilization(snapshot()), {available: true, average: 42, peak: 42, peakCore: 0});
   assert.equal(bpuTemperature(snapshot({thermalZones: [{name: 'pvt_bpu', celsius: 52.5}]})), '52.5 C');
   assert.equal(bpuFrequency(snapshot()), '1 GHz / 1.5 GHz');
-  assert.equal(aiMemoryLabel(snapshot()), '32 MiB BPU');
+  assert.equal(ionMemoryLabel(snapshot()), '128 MiB allocated');
   assert.equal(loadLabel(snapshot()), '2.50 / 6');
 });
 
@@ -55,6 +55,14 @@ test('multi-core BPU summaries and unavailable metrics stay honest', () => {
     {index: 1, name: 'BPU 1', utilizationPercent: 75},
   ], thermalZones: [{name: 'cpu', celsius: 60}], aiMemory: {available: false}});
   assert.deepEqual(bpuUtilization(multi), {available: true, average: 45, peak: 75, peakCore: 1});
-  assert.equal(bpuTemperature(multi), 'Unavailable');
-  assert.equal(aiMemoryLabel(multi), 'Unavailable');
+  assert.equal(bpuTemperature(multi), 'Not exposed');
+  assert.equal(ionMemoryLabel(multi), 'Not exposed');
+  assert.equal(bpuFrequency(snapshot({bpuCores: undefined})), 'Not reported');
+  assert.equal(ionMemoryLabel(snapshot({aiMemory: undefined})), 'Not reported');
+});
+
+test('BPU fallback states explain version and hardware differences', () => {
+  assert.match(bpuUnavailableReason(snapshot({bpuCores: undefined, bpuTelemetry: undefined})), /too old/);
+  assert.match(bpuUnavailableReason(snapshot({bpuCores: [], bpuTelemetry: {status: 'metrics-not-exposed'}})), /RDK OS/);
+  assert.match(bpuUnavailableReason(snapshot({bpuDevices: [], bpuCores: [], bpuTelemetry: {status: 'device-not-detected'}})), /No BPU device/);
 });

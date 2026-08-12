@@ -81,6 +81,11 @@ type BPUCoreInfo struct {
 	MaximumFrequencyHz uint64  `json:"maximumFrequencyHz,omitempty"`
 }
 
+type BPUTelemetryInfo struct {
+	Status string `json:"status"`
+	Source string `json:"source,omitempty"`
+}
+
 type AIMemoryHeapInfo struct {
 	Name           string `json:"name"`
 	CapacityBytes  uint64 `json:"capacityBytes,omitempty"`
@@ -111,23 +116,24 @@ type DiskInfo struct {
 }
 
 type SystemSnapshot struct {
-	CapturedAt    time.Time       `json:"capturedAt"`
-	Board         string          `json:"board"`
-	BoardID       string          `json:"boardId"`
-	Hostname      string          `json:"hostname"`
-	RDKOSVersion  string          `json:"rdkOsVersion"`
-	Kernel        string          `json:"kernel"`
-	Architecture  string          `json:"architecture"`
-	CPUCores      int             `json:"cpuCores"`
-	LoadAverage   []float64       `json:"loadAverage"`
-	Memory        MemoryInfo      `json:"memory"`
-	Disk          DiskInfo        `json:"disk"`
-	ThermalZones  []ThermalZone   `json:"thermalZones"`
-	BPUDevices    []string        `json:"bpuDevices"`
-	BPUCores      []BPUCoreInfo   `json:"bpuCores"`
-	AIMemory      AIMemoryInfo    `json:"aiMemory"`
-	RDKUtilities  map[string]bool `json:"rdkUtilities"`
-	UptimeSeconds uint64          `json:"uptimeSeconds"`
+	CapturedAt    time.Time        `json:"capturedAt"`
+	Board         string           `json:"board"`
+	BoardID       string           `json:"boardId"`
+	Hostname      string           `json:"hostname"`
+	RDKOSVersion  string           `json:"rdkOsVersion"`
+	Kernel        string           `json:"kernel"`
+	Architecture  string           `json:"architecture"`
+	CPUCores      int              `json:"cpuCores"`
+	LoadAverage   []float64        `json:"loadAverage"`
+	Memory        MemoryInfo       `json:"memory"`
+	Disk          DiskInfo         `json:"disk"`
+	ThermalZones  []ThermalZone    `json:"thermalZones"`
+	BPUDevices    []string         `json:"bpuDevices"`
+	BPUCores      []BPUCoreInfo    `json:"bpuCores"`
+	BPUTelemetry  BPUTelemetryInfo `json:"bpuTelemetry"`
+	AIMemory      AIMemoryInfo     `json:"aiMemory"`
+	RDKUtilities  map[string]bool  `json:"rdkUtilities"`
+	UptimeSeconds uint64           `json:"uptimeSeconds"`
 }
 
 type DeploymentArtifact struct {
@@ -171,8 +177,12 @@ type DeploymentReport struct {
 	ArtifactSHA256 string `json:"artifactSha256,omitempty"`
 	Summary        string `json:"summary"`
 	Correctness    struct {
-		Passed bool   `json:"passed"`
-		Method string `json:"method,omitempty"`
+		Passed            bool               `json:"passed"`
+		Method            string             `json:"method,omitempty"`
+		Dataset           string             `json:"dataset,omitempty"`
+		SampleCount       int                `json:"sampleCount,omitempty"`
+		ReferenceArtifact string             `json:"referenceArtifact,omitempty"`
+		Metrics           []DeploymentMetric `json:"metrics,omitempty"`
 	} `json:"correctness"`
 	Performance struct {
 		WarmupIterations int     `json:"warmupIterations,omitempty"`
@@ -180,7 +190,40 @@ type DeploymentReport struct {
 		P50LatencyMS     float64 `json:"p50LatencyMs,omitempty"`
 		P95LatencyMS     float64 `json:"p95LatencyMs,omitempty"`
 		Throughput       float64 `json:"throughput,omitempty"`
+		EndToEndP50MS    float64 `json:"endToEndP50Ms,omitempty"`
+		EndToEndP95MS    float64 `json:"endToEndP95Ms,omitempty"`
 	} `json:"performance"`
+	Resources DeploymentResources `json:"resources,omitempty"`
+}
+
+type DeploymentMetric struct {
+	Name       string  `json:"name"`
+	Unit       string  `json:"unit"`
+	Value      float64 `json:"value"`
+	Threshold  float64 `json:"threshold"`
+	Comparator string  `json:"comparator"`
+	Passed     bool    `json:"passed"`
+}
+
+type DeploymentResourceSample struct {
+	CapturedAt                 time.Time `json:"capturedAt"`
+	SystemMemoryUsedBytes      uint64    `json:"systemMemoryUsedBytes,omitempty"`
+	SystemMemoryAvailableBytes uint64    `json:"systemMemoryAvailableBytes,omitempty"`
+	IONAllocatedBytes          uint64    `json:"ionAllocatedBytes,omitempty"`
+	BPUUtilizationPercent      float64   `json:"bpuUtilizationPercent,omitempty"`
+	CPULoadPercent             float64   `json:"cpuLoadPercent,omitempty"`
+	MaxTemperatureC            float64   `json:"maxTemperatureC,omitempty"`
+}
+
+type DeploymentResources struct {
+	SampleCount int                      `json:"sampleCount,omitempty"`
+	Baseline    DeploymentResourceSample `json:"baseline,omitempty"`
+	Peak        DeploymentResourceSample `json:"peak,omitempty"`
+	Final       DeploymentResourceSample `json:"final,omitempty"`
+	Limits      struct {
+		MaxTemperatureC               float64 `json:"maxTemperatureC,omitempty"`
+		MinSystemMemoryAvailableBytes uint64  `json:"minSystemMemoryAvailableBytes,omitempty"`
+	} `json:"limits,omitempty"`
 }
 
 type DeploymentStatus struct {

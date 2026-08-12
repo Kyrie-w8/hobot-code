@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.23.1
+
+- Rename visible accelerator metrics to the RDK terms BPU load, BPU frequency, and ION/Hbmem; keep BPU client, ION, CMA, and DMA-BUF measurements separate instead of presenting an invented AI-memory total.
+- Explain whether BPU telemetry is unavailable because the board service is old, no BPU device exists, the RDK OS exposes no metric node, or a node could not be read.
+- Add system-level BPU devfreq fallback discovery and suppress impossible ION heap capacities larger than physical memory without discarding valid allocation data.
+- Strengthen verified deployments with schema-v2 numerical accuracy thresholds, model and end-to-end latency distributions, resource samples and explicit thermal/memory limits; add a reproducible RT-IGEV acceptance profile for RDK X5.
+
 ## 0.23.0
 
 - Add professional accelerator monitoring with per-core BPU utilization and frequency, BPU-specific temperature, bounded ION/CMA/dma-buf memory telemetry, orphaned-buffer warnings, and honest per-board fallback states.
