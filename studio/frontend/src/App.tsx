@@ -3,9 +3,9 @@ import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  Activity, ArrowDown, ArrowLeft, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
+  Activity, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
-  FolderOpen, GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
+  GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
   MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
@@ -15,12 +15,13 @@ import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation
 import {approvalPresentation} from './approval-model.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, ImageContent, ModelOption, Task, TaskEvent, WorkspaceListing} from './types';
+import type {Approval, Board, Connection, ImageContent, ModelOption, Task, TaskEvent} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
 const statusLabel: Record<string, string> = {
+  draft: 'Draft',
   starting: 'Starting', idle: 'Ready', running: 'Working', waiting: 'Approval needed',
   stopping: 'Stopping', stopped: 'Stopped', failed: 'Failed', interrupted: 'Interrupted',
 };
@@ -49,8 +50,6 @@ function App() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [error, setError] = useState('');
   const [showBoard, setShowBoard] = useState(false);
-  const [showNewTask, setShowNewTask] = useState(false);
-  const [newTaskProject, setNewTaskProject] = useState('');
   const [showInspector, setShowInspector] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState('');
@@ -75,6 +74,7 @@ function App() {
       const page = await api.tasks(targetBoard);
       if (targetBoard !== activeBoardId.current) return;
       setTasks(page.tasks ?? []);
+      if (selectedTask?.id.startsWith('draft:')) return;
       const summary = page.tasks?.find((task) => task.id === selectedTask?.id) ?? page.tasks?.[0] ?? null;
       setSelectedTask(summary);
       if (summary) {
@@ -157,8 +157,9 @@ function App() {
   useEffect(() => {
     followsOutput.current = true;
     setHasNewOutput(false);
-    if (!boardId || !selectedTask) {
+    if (!boardId || !selectedTask || selectedTask.id.startsWith('draft:')) {
       setEvents([]);
+      setEventsLoading(false);
       return;
     }
     let active = true;
@@ -233,18 +234,20 @@ function App() {
 
   const visibleTasks = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return query ? tasks.filter((task) => `${task.name} ${task.cwd} ${task.status}`.toLowerCase().includes(query)) : tasks;
-  }, [search, tasks]);
+    const available = selectedTask?.id.startsWith('draft:') ? [selectedTask, ...tasks] : tasks;
+    return query ? available.filter((task) => `${task.name} ${task.cwd} ${task.status}`.toLowerCase().includes(query)) : available;
+  }, [search, selectedTask, tasks]);
   const conversation = useMemo(() => buildConversation(events), [events]);
   const projects = useMemo(() => groupTasksByProject(visibleTasks), [visibleTasks]);
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
-  const composerBlocked = busy || (selectedTask ? composerIsBlocked(selectedTask.status) : true);
+  const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
+  const composerBlocked = busy || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const selectedModel = selectedTask?.model ?? '';
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
-  const canChangeModel = Boolean(selectedTask && (selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
+  const canChangeModel = Boolean(selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const canChangePermissions = canChangeModel;
   const canStopTask = Boolean(selectedTask && ['starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
   const latestConversationItem = conversation[conversation.length - 1];
@@ -260,14 +263,23 @@ function App() {
     setError('');
     const submittedAt = new Date().toISOString();
     const submittedImages = attachments;
-    setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
+    if (!draftSelected) setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
     setSelectedTask((current) => current?.id === selectedTask.id ? {...current, status: 'running', updatedAt: submittedAt} : current);
     setComposer('');
     setAttachments([]);
     followsOutput.current = true;
     try {
       let nextTask: Task | undefined;
-      if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, images: submittedImages, kind: 'edit', model: selectedModel});
+      if (draftSelected) nextTask = await api.startTask(boardId, {
+        name: selectedTask.name === 'New task' ? '' : selectedTask.name,
+        cwd: selectedTask.cwd,
+        prompt,
+        images: submittedImages,
+        approve: false,
+        model: selectedModel || undefined,
+        permissionMode: selectedPermissionMode,
+      });
+      else if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, images: submittedImages, kind: 'edit', model: selectedModel});
       else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
       else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt, submittedImages);
       else await api.sendPrompt(boardId, selectedTask.id, prompt, submittedImages);
@@ -329,10 +341,14 @@ function App() {
   }
 
   async function changeModel(value: string) {
-    if (!selectedTask || !boardId || (selectedTask.status !== 'idle' && !terminalStatuses.has(selectedTask.status))) return;
+    if (!selectedTask || !boardId || (!draftSelected && selectedTask.status !== 'idle' && !terminalStatuses.has(selectedTask.status))) return;
     const [provider, ...rest] = value.split('/');
     const modelId = rest.join('/');
     if (!provider || !modelId) return;
+    if (draftSelected) {
+      setSelectedTask({...selectedTask, model: value});
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -348,6 +364,10 @@ function App() {
 
   async function changePermissionMode(mode: string) {
     if (!selectedTask || !boardId || !canChangePermissions) return;
+    if (draftSelected) {
+      setSelectedTask({...selectedTask, permissionMode: mode as Task['permissionMode']});
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -367,6 +387,11 @@ function App() {
       setRenamingTask(false);
       return;
     }
+    if (draftSelected) {
+      setSelectedTask({...selectedTask, name, updatedAt: new Date().toISOString()});
+      setRenamingTask(false);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -382,8 +407,30 @@ function App() {
   }
 
   function openNewTask(cwd = '') {
-    setNewTaskProject(cwd);
-    setShowNewTask(true);
+    const now = new Date().toISOString();
+    setRenamingTask(false);
+    setOpenMenu('');
+    setEvents([]);
+    setOptimisticPrompt(null);
+    setSelectedTask({
+      id: `draft:${Date.now()}`,
+      name: 'New task',
+      cwd: cwd || selectedTask?.cwd || '/root',
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+      lastSequence: 0,
+      model: models[0] ? `${models[0].provider}/${models[0].id}` : '',
+      permissionMode: 'ask',
+    });
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  function beginRename(task: Task) {
+    selectTask(task);
+    setRenameValue(task.name);
+    setRenamingTask(true);
+    setOpenMenu('');
   }
 
   async function createSideTask(prompt: string, name: string) {
@@ -435,6 +482,9 @@ function App() {
 
   function selectTask(task: Task) {
     setRenamingTask(false);
+    if (selectedTask?.id.startsWith('draft:') && selectedTask.id !== task.id) {
+      taskDrafts.current.delete(selectedTask.id);
+    }
     if (selectedTask?.id === task.id) setWatchRevision((revision) => revision + 1);
     else setSelectedTask(task);
   }
@@ -478,7 +528,7 @@ function App() {
               <button className="project-toggle" onClick={() => toggleProject(project.path)} title={collapsedProjects.has(project.path) ? 'Expand project' : 'Collapse project'}><ChevronRight className="project-chevron" size={13} /><Folder size={14} /><span>{project.name}</span><small>{project.tasks.length}</small></button>
               <button className="row-more project-add" title={`New conversation in ${project.name}`} onClick={() => openNewTask(project.path)}><Plus size={14} /></button>
               <button className="row-more" title="Project actions" onClick={() => setOpenMenu((current) => current === `project:${project.path}` ? '' : `project:${project.path}`)}><MoreHorizontal size={15} /></button>
-              {openMenu === `project:${project.path}` && <div className="row-menu"><button onClick={() => setDeleteTarget({kind: 'project', label: project.name, taskIds: project.tasks.map((task) => task.id)})}><Trash2 size={14} />Remove project</button></div>}
+              {openMenu === `project:${project.path}` && <div className="row-menu"><button className="destructive" onClick={() => setDeleteTarget({kind: 'project', label: project.name, taskIds: project.tasks.map((task) => task.id)})}><Trash2 size={14} />Remove project</button></div>}
             </div>
             {!collapsedProjects.has(project.path) && <div className="project-conversations">{arrangeTasks(project.tasks).map(({task, depth}) => <div key={task.id} className={`task-row-shell ${depth ? 'branch-task' : ''}`} style={{'--task-depth': depth} as any}>
               <button className={`task-row ${selectedTask?.id === task.id ? 'selected' : ''}`} onClick={() => {selectTask(task); setOpenMenu('');}}>
@@ -487,7 +537,7 @@ function App() {
                 <span className="task-row-time">{relativeTime(task.updatedAt)}</span>
               </button>
               <button className="row-more task-more" title="Conversation actions" onClick={() => setOpenMenu((current) => current === `task:${task.id}` ? '' : `task:${task.id}`)}><MoreHorizontal size={15} /></button>
-              {openMenu === `task:${task.id}` && <div className="row-menu task-menu"><button onClick={() => setDeleteTarget({kind: 'conversation', label: task.name, taskIds: [task.id]})}><Trash2 size={14} />Delete conversation</button></div>}
+              {openMenu === `task:${task.id}` && <div className="row-menu task-menu"><button onClick={() => beginRename(task)}><FilePenLine size={14} />Rename conversation</button>{!task.id.startsWith('draft:') && <button className="destructive" onClick={() => setDeleteTarget({kind: 'conversation', label: task.name, taskIds: [task.id]})}><Trash2 size={14} />Delete conversation</button>}</div>}
             </div>)}</div>}
           </section>)}
           {visibleTasks.length === 0 && <div className="empty-state"><ListTodo size={21} /><span>No tasks</span></div>}
@@ -500,9 +550,9 @@ function App() {
       <main className="task-main">
         {selectedTask ? <>
           <div className="task-header">
-            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => {setRenameValue(selectedTask.name); setRenamingTask(true);}}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span></div><span className="workspace-path">{selectedTask.cwd}</span></div>
+            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span></div><span className="workspace-path">{selectedTask.cwd}</span></div>
             <div className="task-actions">
-              <button className="secondary-button side-task-button" title={selectedTask.sessionFile ? 'Create an independent agent from this conversation' : 'Side Agent is available after the first response'} onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={15} />Side Agent</button>
+              {!draftSelected && <button className="secondary-button side-task-button" title={selectedTask.sessionFile ? 'Create an independent agent from this conversation' : 'Side Agent is available after the first response'} onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={15} />Side Agent</button>}
               {terminalStatuses.has(selectedTask.status) && <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>}
             </div>
           </div>
@@ -510,7 +560,7 @@ function App() {
           <div className="conversation" ref={timelineRef} onScroll={onTimelineScroll} aria-label="Conversation">
             <div className="conversation-inner">
               {eventsLoading && events.length === 0 && <div className="loading-conversation"><LoaderCircle size={18} className="spin" /><span>Loading conversation</span></div>}
-              {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>Start a conversation</strong><span>Ask Hobot Code to inspect, build, debug, or deploy on this board.</span></div>}
+              {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><span>Ask Hobot Code to inspect, build, debug, or deploy on this board.</span></div>}
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} />)}
@@ -543,7 +593,7 @@ function App() {
                 <ImagePickerButton disabled={composerBlocked || attachments.length >= 4} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
-                <span className="composer-state">{editingMessage !== null ? 'Creates a branch' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
+                <span className="composer-state">{draftSelected ? 'Starts when sent' : editingMessage !== null ? 'Creates a branch' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
             </form>
@@ -559,7 +609,6 @@ function App() {
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {setBusy(true); setError(''); try {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
-      {showNewTask && connection && <NewTaskDialog boardId={connection.board.id} initialCwd={newTaskProject} busy={busy} onClose={() => setShowNewTask(false)} onCreate={async (request) => {setBusy(true); setError(''); try {const task = await api.startTask(connection.board.id, request); await refreshTasks(); setSelectedTask(task); setShowNewTask(false);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
       {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
     </div>
@@ -693,27 +742,6 @@ function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[
   return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid">{availablePresets.length > 0 && <div className="board-presets">{availablePresets.map((preset) => <button type="button" key={preset.host} className={form.host === preset.host ? 'selected' : ''} onClick={() => setForm({id: '', ...preset, identityFile: form.identityFile})}><Server size={14} /><span>{preset.name}</span></button>)}</div>}<label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
 }
 
-function NewTaskDialog({boardId, initialCwd, busy, onClose, onCreate}: {boardId: string; initialCwd: string; busy: boolean; onClose: () => void; onCreate: (request: {name: string; cwd: string; prompt: string; images?: ImageContent[]; approve: boolean; model?: string; permissionMode?: string}) => void}) {
-  const [request, setRequest] = useState<{name: string; cwd: string; prompt: string; images: ImageContent[]; approve: boolean; permissionMode: string}>({name: '', cwd: initialCwd, prompt: '', images: [], approve: false, permissionMode: 'ask'});
-  const [listing, setListing] = useState<WorkspaceListing | null>(null);
-  const [folderMode, setFolderMode] = useState(false);
-  const [newFolder, setNewFolder] = useState('');
-  const [dialogError, setDialogError] = useState('');
-  const activeBoard = useRef<string>(boardId);
-  const browse = useCallback(async (path = '') => {
-    setDialogError('');
-    try {
-      const next = await api.browseWorkspace(activeBoard.current || boardId, path);
-      setListing(next);
-      if (!request.cwd) setRequest((current) => ({...current, cwd: next.home}));
-    } catch (reason) {
-      setDialogError(friendlyError(String(reason)));
-    }
-  }, [request.cwd]);
-  useEffect(() => { void browse(initialCwd); }, []);
-  return <div className="modal-backdrop"><form className="modal task-modal" onSubmit={(event) => {event.preventDefault(); if (request.cwd) onCreate(request);}}><div className="modal-header"><div><span className="modal-eyebrow">New conversation</span><h2>{initialCwd ? `New task in ${basename(initialCwd)}` : 'Start a task'}</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="form-grid"><label><span>Title</span><input value={request.name} maxLength={64} onChange={(event) => setRequest({...request, name: event.target.value})} placeholder="Automatically generated from your instruction" /></label><div className="workspace-chooser"><span>Project</span><button type="button" className="workspace-selection" onClick={() => setFolderMode(true)}><FolderOpen size={16} /><span><strong>{request.cwd === listing?.home ? 'No project folder' : basename(request.cwd) || 'Choose a folder'}</strong><small>{request.cwd || 'Select an existing or new folder'}</small></span><ChevronRight size={15} /></button></div><label><span>Instruction</span><textarea rows={5} value={request.prompt} onChange={(event) => setRequest({...request, prompt: event.target.value})} required autoFocus /></label>{request.images.length > 0 && <div className="attachment-tray modal-attachments">{request.images.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}><img src={imageDataURL(image)} alt="" /><span>{image.name}</span><button type="button" title="Remove image" onClick={() => setRequest({...request, images: request.images.filter((_, itemIndex) => itemIndex !== index)})}><X size={13} /></button></div>)}</div>}<div className="new-task-tools"><ImagePickerButton disabled={busy || request.images.length >= 4} onPick={(images) => {try {setRequest({...request, images: appendImages(request.images, images)});} catch (reason) {setDialogError(friendlyError(String(reason)));}}} onError={(message) => setDialogError(friendlyError(message))} /><span>Images</span></div><label><span>Approval mode</span><select value={request.permissionMode} onChange={(event) => setRequest({...request, permissionMode: event.target.value})}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select></label><label className="checkbox-row"><input type="checkbox" checked={request.approve} onChange={(event) => setRequest({...request, approve: event.target.checked})} /><span>Trust project resources</span></label>{dialogError && <div className="inline-error">{dialogError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !request.prompt.trim() || !request.cwd}><Plus size={15} />Create task</button></div></div>{folderMode && listing && <div className="folder-panel"><div className="folder-panel-header"><button type="button" className="icon-button compact" title="Back" onClick={() => setFolderMode(false)}><ArrowLeft size={16} /></button><div><strong>Choose project folder</strong><small>{listing.path}</small></div></div><button type="button" className="folder-choice special" onClick={() => {setRequest({...request, cwd: listing.home}); setFolderMode(false);}}><MessageSquare size={16} /><span><strong>No project folder</strong><small>Use {listing.home} as a neutral workspace</small></span></button>{listing.parent && <button type="button" className="folder-choice" onClick={() => void browse(listing.parent)}><ArrowLeft size={15} /><span><strong>Parent folder</strong><small>{listing.parent}</small></span></button>}<div className="folder-list">{listing.directories.map((entry) => <button type="button" className="folder-choice" key={entry.path} onDoubleClick={() => {setRequest({...request, cwd: entry.path}); setFolderMode(false);}} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong><small>{entry.path}</small></span><ChevronRight size={14} /></button>)}</div><div className="new-folder-row"><input value={newFolder} onChange={(event) => setNewFolder(event.target.value)} placeholder="New folder name" /><button type="button" className="secondary-button" disabled={!newFolder.trim()} onClick={() => void api.createWorkspace(activeBoard.current || boardId, listing.path, newFolder.trim()).then((next) => {setListing(next); setRequest({...request, cwd: next.path}); setNewFolder(''); setFolderMode(false);}).catch((reason) => setDialogError(friendlyError(String(reason))))}>Create</button></div><div className="folder-panel-actions"><button type="button" className="primary-button" onClick={() => {setRequest({...request, cwd: listing.path}); setFolderMode(false);}}>Choose this folder</button></div></div>}</form></div>;
-}
-
 function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: boolean; onClose: () => void; onCreate: (prompt: string, name: string) => void}) {
   const [prompt, setPrompt] = useState('');
   const [name, setName] = useState('');
@@ -731,7 +759,6 @@ function CopyButton({value}: {value: string}) { const [copied, setCopied] = useS
 function Metric({icon, label, value}: {icon: ReactNode; label: string; value: string}) { return <div className="metric"><span>{icon}{label}</span><strong>{value}</strong></div>; }
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
-function basename(path: string) { return path.split('/').filter(Boolean).at(-1) ?? path; }
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';
