@@ -109,6 +109,30 @@ type AIMemoryInfo struct {
 	Heaps                  []AIMemoryHeapInfo `json:"heaps,omitempty"`
 }
 
+type AcceleratorMemoryPoolInfo struct {
+	Name       string `json:"name"`
+	TotalBytes uint64 `json:"totalBytes"`
+	UsedBytes  uint64 `json:"usedBytes"`
+	FreeBytes  uint64 `json:"freeBytes"`
+}
+
+type AcceleratorProcessInfo struct {
+	PID        int    `json:"pid"`
+	Name       string `json:"name"`
+	RSSBytes   uint64 `json:"rssBytes"`
+	HbmemBytes uint64 `json:"hbmemBytes"`
+}
+
+type AcceleratorInfo struct {
+	Available     bool                        `json:"available"`
+	Source        string                      `json:"source,omitempty"`
+	CapturedAt    time.Time                   `json:"capturedAt,omitempty"`
+	DDRReadMiBPS  float64                     `json:"ddrReadMiBps,omitempty"`
+	DDRWriteMiBPS float64                     `json:"ddrWriteMiBps,omitempty"`
+	HbmemPools    []AcceleratorMemoryPoolInfo `json:"hbmemPools,omitempty"`
+	Processes     []AcceleratorProcessInfo    `json:"processes,omitempty"`
+}
+
 type DiskInfo struct {
 	Path           string `json:"path"`
 	TotalBytes     uint64 `json:"totalBytes"`
@@ -132,6 +156,7 @@ type SystemSnapshot struct {
 	BPUCores      []BPUCoreInfo    `json:"bpuCores"`
 	BPUTelemetry  BPUTelemetryInfo `json:"bpuTelemetry"`
 	AIMemory      AIMemoryInfo     `json:"aiMemory"`
+	Accelerator   AcceleratorInfo  `json:"accelerator"`
 	RDKUtilities  map[string]bool  `json:"rdkUtilities"`
 	UptimeSeconds uint64           `json:"uptimeSeconds"`
 }

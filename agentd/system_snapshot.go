@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -72,6 +74,30 @@ type aiMemorySnapshot struct {
 	Heaps                  []aiMemoryHeapSnapshot `json:"heaps,omitempty"`
 }
 
+type acceleratorMemoryPoolSnapshot struct {
+	Name       string `json:"name"`
+	TotalBytes uint64 `json:"totalBytes"`
+	UsedBytes  uint64 `json:"usedBytes"`
+	FreeBytes  uint64 `json:"freeBytes"`
+}
+
+type acceleratorProcessSnapshot struct {
+	PID        int    `json:"pid"`
+	Name       string `json:"name"`
+	RSSBytes   uint64 `json:"rssBytes"`
+	HbmemBytes uint64 `json:"hbmemBytes"`
+}
+
+type acceleratorSnapshot struct {
+	Available     bool                            `json:"available"`
+	Source        string                          `json:"source,omitempty"`
+	CapturedAt    time.Time                       `json:"capturedAt,omitempty"`
+	DDRReadMiBPS  float64                         `json:"ddrReadMiBps,omitempty"`
+	DDRWriteMiBPS float64                         `json:"ddrWriteMiBps,omitempty"`
+	HbmemPools    []acceleratorMemoryPoolSnapshot `json:"hbmemPools,omitempty"`
+	Processes     []acceleratorProcessSnapshot    `json:"processes,omitempty"`
+}
+
 type systemSnapshot struct {
 	CapturedAt    time.Time             `json:"capturedAt"`
 	Board         string                `json:"board"`
@@ -89,6 +115,7 @@ type systemSnapshot struct {
 	BPUCores      []bpuCoreSnapshot     `json:"bpuCores"`
 	BPUTelemetry  bpuTelemetrySnapshot  `json:"bpuTelemetry"`
 	AIMemory      aiMemorySnapshot      `json:"aiMemory"`
+	Accelerator   acceleratorSnapshot   `json:"accelerator"`
 	RDKUtilities  map[string]bool       `json:"rdkUtilities"`
 	UptimeSeconds uint64                `json:"uptimeSeconds"`
 }
@@ -119,6 +146,7 @@ func collectSystemSnapshot(cfg config) systemSnapshot {
 		BPUCores:      bpuCores,
 		BPUTelemetry:  bpuTelemetry,
 		AIMemory:      readAIMemorySnapshot(memory),
+		Accelerator:   readAcceleratorSnapshot(),
 		RDKUtilities:  detectRDKUtilities(),
 		UptimeSeconds: readUptimeSeconds(),
 	}
@@ -269,13 +297,152 @@ func listBPUDevices() []string {
 }
 
 const maximumTelemetryFileBytes = 2 * 1024 * 1024
+const maximumMonitorOutputBytes = 256 * 1024
+
+var acceleratorMonitorCache struct {
+	sync.Mutex
+	captured time.Time
+	value    acceleratorSnapshot
+}
 
 var (
 	ionHeapPattern     = regexp.MustCompile(`^\s*([^\s]+)\s+heap total size\s+(\d+)\s*$`)
 	ionTotalPattern    = regexp.MustCompile(`^\s*total\s+(\d+)\s*$`)
 	ionOrphanedPattern = regexp.MustCompile(`^\s*total orphaned\s+(\d+)\s*$`)
 	dmaBufTotalPattern = regexp.MustCompile(`^Total\s+(\d+)\s+objects?,\s+(\d+)\s+bytes$`)
+	monitorIOPattern   = regexp.MustCompile(`^\|\s*(Read|Write)\s+([0-9.]+)\s*\|?$`)
+	monitorPoolPattern = regexp.MustCompile(`^\|\s*([^|\s]+)\s+([0-9.]+[KMG]?)\s+([0-9.]+[KMG]?)\s+([0-9.]+[KMG]?)\s*\|?$`)
+	monitorProcPattern = regexp.MustCompile(`^\|\s*(\d+)\s+(\S+)\s+([0-9.]+[KMG]?)\s+([0-9.]+[KMG]?)\s*\|?$`)
 )
+
+func readAcceleratorSnapshot() acceleratorSnapshot {
+	acceleratorMonitorCache.Lock()
+	defer acceleratorMonitorCache.Unlock()
+	if !acceleratorMonitorCache.captured.IsZero() && time.Since(acceleratorMonitorCache.captured) < 5*time.Second {
+		return acceleratorMonitorCache.value
+	}
+	value, err := sampleAcceleratorMonitor()
+	acceleratorMonitorCache.captured = time.Now()
+	if err == nil {
+		acceleratorMonitorCache.value = value
+	} else {
+		acceleratorMonitorCache.value = acceleratorSnapshot{}
+	}
+	return acceleratorMonitorCache.value
+}
+
+func sampleAcceleratorMonitor() (acceleratorSnapshot, error) {
+	const path = "/usr/hobot/bin/hrt_ucp_monitor"
+	if _, err := os.Stat(path); err != nil {
+		return acceleratorSnapshot{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	command := exec.CommandContext(ctx, path, "-b", "-n", "1", "-d", "100", "-e", "bpu")
+	output := &boundedMonitorOutput{maximum: maximumMonitorOutputBytes}
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return acceleratorSnapshot{}, ctx.Err()
+		}
+		return acceleratorSnapshot{}, err
+	}
+	if output.exceeded {
+		return acceleratorSnapshot{}, fmt.Errorf("accelerator monitor output is too large")
+	}
+	value := parseAcceleratorMonitor(output.buffer.Bytes())
+	if !value.Available {
+		return acceleratorSnapshot{}, fmt.Errorf("accelerator monitor output is incomplete")
+	}
+	return value, nil
+}
+
+type boundedMonitorOutput struct {
+	buffer   bytes.Buffer
+	maximum  int
+	exceeded bool
+}
+
+func (output *boundedMonitorOutput) Write(content []byte) (int, error) {
+	original := len(content)
+	remaining := output.maximum - output.buffer.Len()
+	if remaining <= 0 {
+		output.exceeded = true
+		return original, nil
+	}
+	if len(content) > remaining {
+		content = content[:remaining]
+		output.exceeded = true
+	}
+	_, _ = output.buffer.Write(content)
+	return original, nil
+}
+
+func parseAcceleratorMonitor(content []byte) acceleratorSnapshot {
+	result := acceleratorSnapshot{Source: "hrt_ucp_monitor", CapturedAt: time.Now().UTC()}
+	section := ""
+	for _, raw := range bytes.Split(content, []byte{'\n'}) {
+		line := strings.TrimSpace(string(raw))
+		switch {
+		case strings.Contains(line, "DDR Bandwidth"):
+			section = "ddr"
+		case strings.Contains(line, "ION Info"):
+			section = "ion"
+		case strings.Contains(line, "Process Mem Info"):
+			section = "process"
+		case section == "ddr":
+			if match := monitorIOPattern.FindStringSubmatch(line); match != nil {
+				value, _ := strconv.ParseFloat(match[2], 64)
+				if match[1] == "Read" {
+					result.DDRReadMiBPS = value
+				} else {
+					result.DDRWriteMiBPS = value
+				}
+			}
+		case section == "ion":
+			if match := monitorPoolPattern.FindStringSubmatch(line); match != nil && match[1] != "total" {
+				total, totalOK := parseMonitorBytes(match[2])
+				used, usedOK := parseMonitorBytes(match[3])
+				free, freeOK := parseMonitorBytes(match[4])
+				if totalOK && usedOK && freeOK && total > 0 && len(result.HbmemPools) < 16 {
+					result.HbmemPools = append(result.HbmemPools, acceleratorMemoryPoolSnapshot{Name: match[1], TotalBytes: total, UsedBytes: used, FreeBytes: free})
+				}
+			}
+		case section == "process":
+			if match := monitorProcPattern.FindStringSubmatch(line); match != nil && len(result.Processes) < 32 {
+				pid, _ := strconv.Atoi(match[1])
+				rss, rssOK := parseMonitorBytes(match[3])
+				hbmem, hbmemOK := parseMonitorBytes(match[4])
+				if pid > 0 && rssOK && hbmemOK {
+					result.Processes = append(result.Processes, acceleratorProcessSnapshot{PID: pid, Name: match[2], RSSBytes: rss, HbmemBytes: hbmem})
+				}
+			}
+		}
+	}
+	result.Available = len(result.HbmemPools) > 0
+	return result
+}
+
+func parseMonitorBytes(raw string) (uint64, bool) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	multiplier := float64(1)
+	if len(value) > 0 {
+		switch value[len(value)-1] {
+		case 'K':
+			multiplier, value = 1024, value[:len(value)-1]
+		case 'M':
+			multiplier, value = 1024*1024, value[:len(value)-1]
+		case 'G':
+			multiplier, value = 1024*1024*1024, value[:len(value)-1]
+		}
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil || number < 0 || number*multiplier > float64(^uint64(0)) {
+		return 0, false
+	}
+	return uint64(number * multiplier), true
+}
 
 func readBPUCores(devices []string) ([]bpuCoreSnapshot, bpuTelemetrySnapshot) {
 	return readBPUCoresAt(devices, "/sys/devices/platform/soc", "/sys/devices/system/bpu", "/sys/class/devfreq")

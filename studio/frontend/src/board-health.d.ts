@@ -9,6 +9,7 @@ export function boardHealth(snapshot: SystemSnapshot | null): {tone: HealthTone;
 export function capacityPair(available: number, total: number): string;
 export function systemResourceMetrics(snapshot: SystemSnapshot): ResourceMetric[];
 export function acceleratorMemoryMetrics(snapshot: SystemSnapshot): AcceleratorMemoryMetric[];
+export function activeDDRBandwidth(snapshot: SystemSnapshot): {read: number; write: number} | null;
 export function durationLabel(seconds: number): string;
 export function bpuCoreLabel(snapshot: SystemSnapshot): string;
 export function bpuUtilization(snapshot: SystemSnapshot): {available: boolean; average: number; peak: number; peakCore: number};

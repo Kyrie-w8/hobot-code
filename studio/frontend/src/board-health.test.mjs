@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {acceleratorMemoryMetrics, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, systemResourceMetrics} from './board-health.js';
+import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, systemResourceMetrics} from './board-health.js';
 
 function snapshot(overrides = {}) {
   return {
@@ -54,9 +54,20 @@ test('resource metrics use comparable capacity percentages', () => {
   assert.equal(metrics[3].tone, 'healthy');
 });
 
-test('accelerator memory omits unavailable counters and preserves overlap', () => {
+test('accelerator memory uses official Hbmem pools when available', () => {
+  const official = acceleratorMemoryMetrics(snapshot({accelerator: {available: true, ddrReadMiBps: 320, ddrWriteMiBps: 120, hbmemPools: [
+    {name: 'cma_reserved', totalBytes: 1024 ** 3, usedBytes: 256 * 1024 ** 2, freeBytes: 768 * 1024 ** 2},
+    {name: 'carveout', totalBytes: 512 * 1024 ** 2, usedBytes: 64 * 1024 ** 2, freeBytes: 448 * 1024 ** 2},
+  ]}}));
+  assert.deepEqual(official.map(({label, percent}) => [label, percent]), [['CMA reserved', 25], ['BPU carveout', 12.5]]);
+  assert.deepEqual(activeDDRBandwidth(snapshot({accelerator: {available: true, ddrReadMiBps: 320, ddrWriteMiBps: 120}})), {read: 320, write: 120});
+  assert.equal(activeDDRBandwidth(snapshot({bpuCores: [{index: 0, utilizationPercent: 0}], accelerator: {available: true, ddrReadMiBps: 320}})), null);
+  assert.equal(activeDDRBandwidth(snapshot({accelerator: {available: true, ddrReadMiBps: 0, ddrWriteMiBps: 0}})), null);
+});
+
+test('accelerator memory falls back without inventing a capacity', () => {
   const metrics = acceleratorMemoryMetrics(snapshot());
-  assert.deepEqual(metrics.map((metric) => metric.key), ['ion', 'bpu', 'dma']);
+  assert.deepEqual(metrics.map((metric) => metric.key), ['ion']);
   const cma = acceleratorMemoryMetrics(snapshot({aiMemory: {available: true, ionAvailable: false, bpuAllocationAvailable: false, cmaAvailable: true, cmaFreeBytes: 256 * 1024 ** 2, cmaTotalBytes: 1024 ** 3, dmaBufAvailable: false}}));
   assert.deepEqual(cma, [{key: 'cma', label: 'CMA available', value: '256 MiB / 1 GiB', percent: 25, available: true}]);
 });

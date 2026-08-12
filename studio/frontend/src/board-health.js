@@ -80,21 +80,33 @@ export function systemResourceMetrics(snapshot) {
 }
 
 export function acceleratorMemoryMetrics(snapshot) {
+	const accelerator = snapshot.accelerator;
+	if (accelerator?.available && accelerator.hbmemPools?.length) {
+		return accelerator.hbmemPools.filter((pool) => pool.totalBytes > 0).map((pool) => ({
+			key: `hbmem-${pool.name}`, label: hbmemPoolLabel(pool.name),
+			value: `${formatBytes(pool.usedBytes)} / ${formatBytes(pool.totalBytes)} used`,
+			percent: clampPercent(pool.usedBytes / pool.totalBytes * 100), available: true,
+		}));
+	}
   const memory = snapshot.aiMemory;
   if (!memory?.available) return [];
   const metrics = [];
-  if (memory.ionAvailable) metrics.push({key: 'ion', label: 'ION buffers', value: formatBytes(memory.ionAllocatedBytes ?? 0)});
-  if (memory.bpuAllocationAvailable) metrics.push({key: 'bpu', label: 'BPU clients', value: formatBytes(memory.bpuAllocatedBytes ?? 0)});
+  if (memory.ionAvailable) metrics.push({key: 'ion', label: 'Hbmem allocated', value: formatBytes(memory.ionAllocatedBytes ?? 0)});
   if (memory.cmaAvailable && memory.cmaTotalBytes > 0) {
     metrics.push({
       key: 'cma', label: 'CMA available', value: capacityPair(memory.cmaFreeBytes ?? 0, memory.cmaTotalBytes),
       percent: clampPercent((memory.cmaFreeBytes ?? 0) / memory.cmaTotalBytes * 100), available: true,
     });
   }
-  if (memory.dmaBufAvailable) {
-    metrics.push({key: 'dma', label: 'DMA-BUF shared', value: `${formatBytes(memory.dmaBufBytes ?? 0)} · ${memory.dmaBufObjects ?? 0} objects`});
-  }
   return metrics;
+}
+
+export function activeDDRBandwidth(snapshot) {
+	const accelerator = snapshot.accelerator;
+	const utilization = bpuUtilization(snapshot);
+	if (!accelerator?.available || !utilization.available || utilization.average < 1) return null;
+	const bandwidth = {read: accelerator.ddrReadMiBps ?? 0, write: accelerator.ddrWriteMiBps ?? 0};
+	return bandwidth.read > 0 || bandwidth.write > 0 ? bandwidth : null;
 }
 
 export function durationLabel(seconds) {
@@ -161,6 +173,10 @@ function usedPercent(available, total) {
 
 function maximumTemperatureValue(snapshot) {
   return Math.max(-Infinity, ...snapshot.thermalZones.map((zone) => zone.celsius));
+}
+
+function hbmemPoolLabel(name) {
+	return name === 'cma_reserved' ? 'CMA reserved' : name === 'ion_cma' ? 'ION CMA' : name === 'carveout' ? 'BPU carveout' : name.replaceAll('_', ' ');
 }
 
 export function formatBytes(value) {

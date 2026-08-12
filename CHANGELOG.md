@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.6
+
+- Sample the official RDK accelerator monitor through a bounded, cached collector to expose DDR bandwidth, named Hbmem pools, and any process attribution supplied by the board runtime.
+- Present Hbmem pools as used-capacity bars, show DDR bandwidth only while BPU work is active, and list BPU processes only when the RDK runtime reports trustworthy records.
+- Keep older board services compatible with a conservative allocation-only fallback instead of inventing a shared accelerator-memory total.
+
 ## 0.23.5
 
 - Refocus the Studio inspector on board monitoring by removing duplicate task, workspace, and diagnostic metadata.

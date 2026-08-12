@@ -13,7 +13,7 @@ import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation} from './approval-model.js';
-import {acceleratorMemoryMetrics, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, percentLabel, systemResourceMetrics} from './board-health.js';
+import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
 import {rdkWorkflows} from './rdk-workflows.js';
@@ -913,6 +913,8 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
   const health = boardHealth(snapshot);
   const resources = systemResourceMetrics(snapshot);
   const memoryMetrics = acceleratorMemoryMetrics(snapshot);
+  const bandwidth = activeDDRBandwidth(snapshot);
+  const acceleratorProcesses = snapshot.accelerator?.available ? snapshot.accelerator.processes ?? [] : [];
   const taskAlerts = [task?.lastError ? {tone: 'danger', label: task.lastError} : null, task?.logTruncated ? {tone: 'warning', label: 'Older task events were truncated.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
   const alerts = [...health.issues, ...taskAlerts];
   return <>
@@ -923,12 +925,13 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
         <div className="bpu-hero-meta"><span>{bpuCoreLabel(snapshot)}</span>{utilization.available && <span>Peak core {utilization.peakCore} · {percentLabel(utilization.peak)}</span>}</div>
         {snapshot.bpuCores?.length ? <div className="bpu-core-list">{snapshot.bpuCores.map((core) => <div className="bpu-core" key={core.index}><span>{core.name}</span><div className="bpu-track"><i style={{width: `${Math.max(0, Math.min(100, core.utilizationPercent))}%`}} /></div><strong>{percentLabel(core.utilizationPercent)}</strong></div>)}</div> : <div className="bpu-unavailable">{bpuUnavailableReason(snapshot)}</div>}
       </div>
-      <div className="accelerator-stats"><InfoRow label="Frequency" value={bpuFrequency(snapshot)} /><InfoRow label="Temperature" value={bpuTemperature(snapshot)} /></div>
+      <div className="accelerator-stats"><InfoRow label="Frequency" value={bpuFrequency(snapshot)} /><InfoRow label="Temperature" value={bpuTemperature(snapshot)} />{bandwidth && <InfoRow label="DDR bandwidth" value={`R ${bandwidth.read.toFixed(0)} · W ${bandwidth.write.toFixed(0)} MiB/s`} />}</div>
     </InspectorSection>
     <InspectorSection title="Resources"><div className="resource-list">{resources.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} tone={metric.tone} />)}</div></InspectorSection>
-    <InspectorSection title="Accelerator memory">
-      {memoryMetrics.length ? <><div className="resource-list compact">{memoryMetrics.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} available={metric.available} />)}</div><p className="memory-footnote">ION, BPU client, CMA, and DMA-BUF are overlapping allocation views.</p>{(snapshot.aiMemory?.ionOrphanedBytes ?? 0) > 0 && <div className="memory-warning"><AlertTriangle size={13} />{formatBytes(snapshot.aiMemory?.ionOrphanedBytes ?? 0)} orphaned ION</div>}</> : <div className="snapshot-empty">Allocation counters are not exposed by this RDK OS.</div>}
+    <InspectorSection title="Hbmem">
+      {memoryMetrics.length ? <><div className="resource-list compact">{memoryMetrics.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} available={metric.available} />)}</div>{!snapshot.accelerator?.available && <p className="memory-footnote">Upgrade the board service for reserved capacity and process attribution.</p>}{(snapshot.aiMemory?.ionOrphanedBytes ?? 0) > 0 && <div className="memory-warning"><AlertTriangle size={13} />{formatBytes(snapshot.aiMemory?.ionOrphanedBytes ?? 0)} orphaned ION</div>}</> : <div className="snapshot-empty">Hbmem counters are not exposed by this RDK OS.</div>}
     </InspectorSection>
+    {acceleratorProcesses.length > 0 && <InspectorSection title="BPU processes"><div className="accelerator-processes">{acceleratorProcesses.slice(0, 8).map((process) => <div className="accelerator-process" key={process.pid}><div><strong>{process.name}</strong><span>PID {process.pid}</span></div><div><strong>{formatBytes(process.hbmemBytes)} Hbmem</strong><span>{formatBytes(process.rssBytes)} RSS</span></div></div>)}</div></InspectorSection>}
     {alerts.length > 0 && <InspectorSection title="Attention"><div className="health-issues">{alerts.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div></InspectorSection>}
   </>;
 }

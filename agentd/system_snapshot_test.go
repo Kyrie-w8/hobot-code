@@ -136,6 +136,46 @@ func TestParseBPUAndDMABufMemorySummaries(t *testing.T) {
 	}
 }
 
+func TestParseAcceleratorMonitor(t *testing.T) {
+	content := []byte(`
+| DDR Bandwidth                                  |
+|          Read              232                 |
+|          Write             310                 |
+| ION Info                                       |
+| cma_reserved      1.0G    64.0K  1023.9M       |
+| ion_cma         512.0M     0.0    512.0M       |
+| carveout        512.0M     1.0M   511.0M       |
+| Process Mem Info                               |
+|     18342  infer_hbm          245.5M    96.0M   |
+`)
+	got := parseAcceleratorMonitor(content)
+	if !got.Available || got.DDRReadMiBPS != 232 || got.DDRWriteMiBPS != 310 || len(got.HbmemPools) != 3 || len(got.Processes) != 1 {
+		t.Fatalf("unexpected accelerator snapshot: %+v", got)
+	}
+	if got.HbmemPools[0].TotalBytes != 1<<30 || got.HbmemPools[0].UsedBytes != 64<<10 || got.Processes[0].PID != 18342 || got.Processes[0].HbmemBytes != 96<<20 {
+		t.Fatalf("unexpected parsed values: %+v", got)
+	}
+}
+
+func TestParseMonitorBytes(t *testing.T) {
+	for input, want := range map[string]uint64{"0.0": 0, "64.0K": 64 << 10, "245.5M": 257425408, "1.0G": 1 << 30} {
+		got, ok := parseMonitorBytes(input)
+		if !ok || got != want {
+			t.Fatalf("parseMonitorBytes(%q) = %d, %t; want %d", input, got, ok, want)
+		}
+	}
+}
+
+func TestBoundedMonitorOutput(t *testing.T) {
+	output := &boundedMonitorOutput{maximum: 4}
+	if written, err := output.Write([]byte("abcdef")); err != nil || written != 6 {
+		t.Fatalf("Write() = %d, %v; want 6, nil", written, err)
+	}
+	if got := output.buffer.String(); got != "abcd" || !output.exceeded {
+		t.Fatalf("bounded output = %q, exceeded=%t; want abcd, true", got, output.exceeded)
+	}
+}
+
 func TestReadBoundedTelemetryFileRejectsOversizedInput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "telemetry")
 	if err := os.WriteFile(path, make([]byte, 65), 0o600); err != nil {

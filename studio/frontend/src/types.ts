@@ -39,6 +39,9 @@ export type BPUCoreInfo = {index: number; name: string; utilizationPercent: numb
 export type BPUTelemetryInfo = {status: 'available' | 'device-not-detected' | 'metrics-not-exposed' | 'read-failed'; source?: string};
 export type AIMemoryHeapInfo = {name: string; capacityBytes?: number; allocatedBytes: number; orphanedBytes?: number};
 export type AIMemoryInfo = {available: boolean; bpuAllocationAvailable: boolean; ionAvailable: boolean; cmaAvailable: boolean; dmaBufAvailable: boolean; bpuAllocatedBytes?: number; ionAllocatedBytes?: number; ionOrphanedBytes?: number; cmaTotalBytes?: number; cmaFreeBytes?: number; dmaBufBytes?: number; dmaBufObjects?: number; heaps?: AIMemoryHeapInfo[]};
+export type AcceleratorMemoryPoolInfo = {name: string; totalBytes: number; usedBytes: number; freeBytes: number};
+export type AcceleratorProcessInfo = {pid: number; name: string; rssBytes: number; hbmemBytes: number};
+export type AcceleratorInfo = {available: boolean; source?: string; capturedAt?: string; ddrReadMiBps?: number; ddrWriteMiBps?: number; hbmemPools?: AcceleratorMemoryPoolInfo[]; processes?: AcceleratorProcessInfo[]};
 export type SystemSnapshot = {
   capturedAt: string;
   board: string;
@@ -56,6 +59,7 @@ export type SystemSnapshot = {
   bpuCores?: BPUCoreInfo[];
   bpuTelemetry?: BPUTelemetryInfo;
   aiMemory?: AIMemoryInfo;
+  accelerator?: AcceleratorInfo;
   rdkUtilities: Record<string, boolean>;
   uptimeSeconds: number;
 };

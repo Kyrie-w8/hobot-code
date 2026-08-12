@@ -1,6 +1,6 @@
 {
   "name": "hobot-code",
-  "version": "0.23.5",
+  "version": "0.23.6",
   "description": "Hobot Code, a Pi-compatible development agent for D-Robotics RDK boards",
   "type": "module",
   "piConfig": {
