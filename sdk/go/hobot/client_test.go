@@ -22,6 +22,9 @@ while IFS= read -r line; do
     *'"method":"capabilities"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"protocolMin":1,"protocolMax":1,"eventSchema":2,"capabilities":["bridge.stdio"],"maximumRequestBytes":2097152,"maximumResponseBytes":8388608}}\n' "$id"
       ;;
+    *'"method":"system.snapshot"'*)
+      printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","board":"D-Robotics RDK S100","boardId":"s100","hostname":"rdk","rdkOsVersion":"4.0.2","kernel":"6.1.83","architecture":"arm64","cpuCores":8,"loadAverage":[0.5,0.4,0.3],"memory":{"totalBytes":8589934592,"availableBytes":4294967296},"disk":{"path":"/root","totalBytes":68719476736,"availableBytes":34359738368},"thermalZones":[{"name":"cpu","celsius":52.5}],"bpuDevices":["/dev/bpu0"],"rdkUtilities":{"hrt_model_exec":true},"uptimeSeconds":3600}}\n' "$id"
+      ;;
     *'"method":"task.page"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"tasks":[{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"idle","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:01Z","lastSequence":7}]}}\n' "$id"
       ;;
@@ -57,6 +60,10 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	capabilities, err := client.GetCapabilities(ctx)
 	if err != nil || capabilities.EventSchema != 2 {
 		t.Fatalf("capabilities=%+v err=%v", capabilities, err)
+	}
+	snapshot, err := client.SystemSnapshot(ctx)
+	if err != nil || snapshot.BoardID != "s100" || len(snapshot.BPUDevices) != 1 || snapshot.Memory.AvailableBytes == 0 || len(snapshot.ThermalZones) != 1 || snapshot.ThermalZones[0].Celsius != 52.5 {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}
 	page, err := client.Tasks(ctx, false, "", 50)
 	if err != nil || len(page.Tasks) != 1 || page.Tasks[0].Name != "build" {

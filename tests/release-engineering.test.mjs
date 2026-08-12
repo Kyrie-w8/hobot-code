@@ -507,6 +507,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /package_dir\/agentd/);
   assert.match(installer, /new_runtime\/agentd/);
   assert.match(installer, /Installed component version mismatch/);
+  assert.match(installer, /for process_path in \/proc\/\[0-9\]\*;/);
+  assert.doesNotMatch(installer, /pgrep -f/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
   assert.doesNotMatch(installer, /\/usr\/local\/bin\/hobot --version/);
   assert.match(rollback, /LAST_BACKUP/);
@@ -521,6 +523,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(rollback, /chmod 0755 "\$staged_runtime"/);
   assert.match(rollback, /runtime_device=.*stat -c %d/);
   assert.match(rollback, /check_available_space "\$runtime_required_kib" \/usr\/local\/lib 'rollback'/);
+  assert.match(rollback, /readlink "\$process_path\/exe"/);
+  assert.doesNotMatch(rollback, /pgrep -f/);
   assert.doesNotMatch(launcher, /^\s*\.\s+.*hobot\.env/m);
   assert.match(launcher, /umask "\$original_umask"/);
   assert.match(launcher, /release\.sh update/);
@@ -532,6 +536,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(releaseInstaller, /unsupported entry type/);
   assert.match(uninstaller, /--purge/);
   assert.match(uninstaller, /Stop active Hobot Code processes/);
+  assert.match(uninstaller, /readlink "\$process_path\/exe"/);
+  assert.doesNotMatch(uninstaller, /pgrep -f/);
   assert.match(workflow, /attest-build-provenance@v2/);
   assert.match(workflow, /test "\$\{GITHUB_REF_NAME\}" = "v\$\{version\}"/);
   assert.match(workflow, /environment: production/);

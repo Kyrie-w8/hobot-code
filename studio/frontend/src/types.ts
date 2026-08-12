@@ -33,6 +33,25 @@ export type Connection = {
   error?: string;
 };
 
+export type ThermalZone = {name: string; celsius: number};
+export type SystemSnapshot = {
+  capturedAt: string;
+  board: string;
+  boardId: string;
+  hostname: string;
+  rdkOsVersion: string;
+  kernel: string;
+  architecture: string;
+  cpuCores: number;
+  loadAverage: number[];
+  memory: {totalBytes: number; availableBytes: number};
+  disk: {path: string; totalBytes: number; availableBytes: number};
+  thermalZones: ThermalZone[];
+  bpuDevices: string[];
+  rdkUtilities: Record<string, boolean>;
+  uptimeSeconds: number;
+};
+
 export type Approval = {
   id: string;
   method: 'confirm' | 'select' | 'input' | 'editor';
@@ -54,6 +73,7 @@ export type Task = {
   updatedAt: string;
   lastSequence: number;
   lastError?: string;
+  logTruncated?: boolean;
   sessionFile?: string;
   sessionId?: string;
   approved?: boolean;

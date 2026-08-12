@@ -239,6 +239,17 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if err != nil || ping.Capabilities.EventSchema != eventSchemaVersion || len(ping.Capabilities.Capabilities) == 0 {
 		t.Fatalf("capability negotiation failed: info=%+v err=%v", ping, err)
 	}
+	if !containsString(ping.Capabilities.Capabilities, "system.snapshot") {
+		t.Fatalf("system snapshot capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
+	snapshotResult, err := client.call("system.snapshot", struct{}{})
+	if err != nil {
+		t.Fatalf("system snapshot failed: %v", err)
+	}
+	var snapshot systemSnapshot
+	if err := json.Unmarshal(snapshotResult, &snapshot); err != nil || snapshot.CapturedAt.IsZero() || snapshot.Architecture == "" || snapshot.CPUCores < 1 {
+		t.Fatalf("unexpected system snapshot: snapshot=%+v err=%v", snapshot, err)
+	}
 	bridgeInput := bytes.NewBufferString(
 		`{"protocol":1,"id":"bridge-1","method":"capabilities","params":{}}` + "\n" +
 			`{"protocol":1,"id":"bridge-2","method":"ping","params":{}}` + "\n",
@@ -279,6 +290,15 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if _, err := client.call("task.stop", taskIDParams{TaskID: metadata.ID}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRestartMarksLiveTasksInterrupted(t *testing.T) {

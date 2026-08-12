@@ -1,4 +1,4 @@
-import type {Board, Connection, EventEnvelope, EventPage, ForkTaskRequest, ImageContent, ModelOption, Task, TaskPage, WorkspaceListing} from './types';
+import type {Board, Connection, EventEnvelope, EventPage, ForkTaskRequest, ImageContent, ModelOption, SystemSnapshot, Task, TaskPage, WorkspaceListing} from './types';
 
 type Backend = Record<string, (...args: any[]) => Promise<any>>;
 
@@ -34,7 +34,9 @@ const mockBackend: Backend = {
   ListBoards: async () => [mockBoard],
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
-  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.22.3', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'tasks.permissions', 'tasks.images', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 100}}),
+  ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.22.4', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'system.snapshot', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'tasks.permissions', 'tasks.images', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 100}}),
+  RefreshBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.22.4', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'system.snapshot'], maximumActiveTasks: 3, maximumRetainedTasks: 100}}),
+  GetSystemSnapshot: async (): Promise<SystemSnapshot> => ({capturedAt: new Date().toISOString(), board: 'D-Robotics RDK S100', boardId: 's100', hostname: 'ubuntu', rdkOsVersion: '4.0.2', kernel: '6.1.83', architecture: 'arm64', cpuCores: 8, loadAverage: [1.24, 1.08, 0.92], memory: {totalBytes: 24 * 1024 ** 3, availableBytes: 15.6 * 1024 ** 3}, disk: {path: '/root/.local/state/hobot-code', totalBytes: 117 * 1024 ** 3, availableBytes: 68 * 1024 ** 3}, thermalZones: [{name: 'cpu-thermal', celsius: 47.8}, {name: 'bpu-thermal', celsius: 52.3}], bpuDevices: ['/dev/bpu0', '/dev/bpu1'], rdkUtilities: {hrut_somstatus: true, hrt_model_exec: true, rdkos_info: true}, uptimeSeconds: 186420}),
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
   GetTask: async (_board: string, taskId: string) => mockTasks.find((task) => task.id === taskId),
@@ -70,6 +72,8 @@ export const api = {
   saveBoard: (board: Board): Promise<Board> => backend().SaveBoard(board),
   removeBoard: (id: string) => backend().RemoveBoard(id),
   connectBoard: (id: string): Promise<Connection> => backend().ConnectBoard(id),
+  refreshBoard: (id: string): Promise<Connection> => backend().RefreshBoard(id),
+  systemSnapshot: (id: string): Promise<SystemSnapshot> => backend().GetSystemSnapshot(id),
   disconnectBoard: (id: string) => backend().DisconnectBoard(id),
   tasks: (id: string, archived = false): Promise<TaskPage> => backend().RefreshTasks(id, archived),
   task: (boardId: string, taskId: string): Promise<Task> => backend().GetTask(boardId, taskId),

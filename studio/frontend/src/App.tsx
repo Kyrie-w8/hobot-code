@@ -2,20 +2,22 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
-  Activity, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
+  Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
-  MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
-  Square, SquareTerminal, Trash2, Wrench, X, XCircle,
+  Gauge, HardDrive, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Square, SquareTerminal, Thermometer, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation} from './approval-model.js';
+import {boardHealth, capacityPair, durationLabel, maximumTemperature, temperatureTone} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
+import {rdkWorkflows} from './rdk-workflows.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, ImageContent, ModelOption, Task, TaskEvent} from './types';
+import type {Approval, Board, Connection, ImageContent, ModelOption, SystemSnapshot, Task, TaskEvent} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -35,6 +37,9 @@ const boardPresets: Array<Omit<Board, 'id'>> = [
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [connectionState, setConnectionState] = useState<'connecting' | 'online' | 'offline'>('offline');
+  const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
@@ -65,29 +70,33 @@ function App() {
   const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null; attachments: ImageContent[]}>());
   const previousTaskId = useRef('');
   const activeBoardId = useRef('');
+  const selectedTaskId = useRef('');
 
   const boardId = connection?.board.id ?? '';
 
   const refreshTasks = useCallback(async (targetBoard = boardId) => {
     if (!targetBoard) return;
+    const expectedTask = selectedTaskId.current;
     try {
       const page = await api.tasks(targetBoard);
       if (targetBoard !== activeBoardId.current) return;
       setTasks(page.tasks ?? []);
-      if (selectedTask?.id.startsWith('draft:')) return;
-      const summary = page.tasks?.find((task) => task.id === selectedTask?.id) ?? page.tasks?.[0] ?? null;
+      if (expectedTask.startsWith('draft:') || selectedTaskId.current !== expectedTask) return;
+      const summary = page.tasks?.find((task) => task.id === expectedTask) ?? page.tasks?.[0] ?? null;
+      selectedTaskId.current = summary?.id ?? '';
       setSelectedTask(summary);
       if (summary) {
         const detail = await api.task(targetBoard, summary.id);
-        if (targetBoard === activeBoardId.current) setSelectedTask(detail);
+        if (targetBoard === activeBoardId.current && selectedTaskId.current === summary.id) setSelectedTask(detail);
       }
     } catch (reason) {
       setError(String(reason));
     }
-  }, [boardId, selectedTask?.id]);
+  }, [boardId]);
 
   const connect = useCallback(async (board: Board) => {
     setBusy(true);
+    setConnectionState('connecting');
     setError('');
     try {
       const previousBoard = activeBoardId.current;
@@ -99,16 +108,23 @@ function App() {
       activeBoardId.current = board.id;
       if (previousBoard && previousBoard !== board.id) await api.disconnectBoard(previousBoard).catch(() => undefined);
       setConnection(next);
+      setConnectionState('online');
       setModels(pageModels ?? []);
       setTasks(page.tasks ?? []);
       const initialTask = page.tasks?.[0] ?? null;
+      selectedTaskId.current = initialTask?.id ?? '';
       setSelectedTask(initialTask);
-      if (initialTask) setSelectedTask(await api.task(board.id, initialTask.id));
+      if (initialTask) {
+        const detail = await api.task(board.id, initialTask.id);
+        if (activeBoardId.current === board.id && selectedTaskId.current === initialTask.id) setSelectedTask(detail);
+      }
+      setSnapshot(next.capabilities?.capabilities.includes('system.snapshot') ? await api.systemSnapshot(board.id).catch(() => null) : null);
       setEvents([]);
       setOptimisticPrompt(null);
       setError('');
       setShowBoard(false);
     } catch (reason) {
+      setConnectionState('offline');
       setError(String(reason));
     } finally {
       setBusy(false);
@@ -202,6 +218,28 @@ function App() {
   }, [boardId, refreshTasks]);
 
   useEffect(() => {
+    if (!boardId) return;
+    const interval = showInspector ? 5000 : 30000;
+    const timer = window.setInterval(() => {
+      api.refreshBoard(boardId).then((nextConnection) => {
+        if (activeBoardId.current !== boardId) return;
+        setConnection(nextConnection);
+        setConnectionState('online');
+        if (!nextConnection.capabilities?.capabilities.includes('system.snapshot')) {
+          setSnapshot(null);
+          return;
+        }
+        void api.systemSnapshot(boardId).then((value) => {
+          if (activeBoardId.current === boardId) setSnapshot(value);
+        }).catch(() => undefined);
+      }).catch(() => {
+        if (activeBoardId.current === boardId) setConnectionState('offline');
+      });
+    }, interval);
+    return () => window.clearInterval(timer);
+  }, [boardId, showInspector]);
+
+  useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline) return;
     if (followsOutput.current) {
@@ -244,6 +282,8 @@ function App() {
   const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
   const composerBlocked = busy || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
+  const health = boardHealth(snapshot);
+  const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
@@ -287,6 +327,7 @@ function App() {
       taskDrafts.current.delete(selectedTask.id);
       await refreshTasks();
       if (nextTask) {
+        selectedTaskId.current = nextTask.id;
         setOptimisticPrompt({taskId: nextTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
         setSelectedTask(nextTask);
         setWatchRevision((revision) => revision + 1);
@@ -408,12 +449,14 @@ function App() {
 
   function openNewTask(cwd = '') {
     const now = new Date().toISOString();
+    const id = `draft:${Date.now()}`;
     setRenamingTask(false);
     setOpenMenu('');
     setEvents([]);
     setOptimisticPrompt(null);
+    selectedTaskId.current = id;
     setSelectedTask({
-      id: `draft:${Date.now()}`,
+      id,
       name: 'New task',
       cwd: cwd || selectedTask?.cwd || '/root',
       status: 'draft',
@@ -440,6 +483,7 @@ function App() {
     try {
       const task = await api.forkTask(boardId, {taskId: selectedTask.id, prompt, name, kind: 'side', model: selectedModel});
       await refreshTasks();
+      selectedTaskId.current = task.id;
       setSelectedTask(task);
       setOptimisticPrompt({taskId: task.id, text: prompt, time: new Date().toISOString(), attachments: []});
       setShowSideTask(false);
@@ -451,8 +495,29 @@ function App() {
   }
 
   async function refreshWorkspace() {
-    await refreshTasks();
-    setWatchRevision((revision) => revision + 1);
+    if (!boardId || refreshing) return;
+    setRefreshing(true);
+    setConnectionState('connecting');
+    setError('');
+    try {
+      const nextConnection = await api.refreshBoard(boardId);
+      const [pageModels, nextSnapshot] = await Promise.all([
+        api.models(boardId).catch(() => null),
+        nextConnection.capabilities?.capabilities.includes('system.snapshot') ? api.systemSnapshot(boardId).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (activeBoardId.current !== boardId) return;
+      setConnection(nextConnection);
+      setConnectionState('online');
+      if (pageModels) setModels(pageModels);
+      if (nextSnapshot) setSnapshot(nextSnapshot);
+      await refreshTasks(boardId);
+      setWatchRevision((revision) => revision + 1);
+    } catch (reason) {
+      setConnectionState('offline');
+      setError(String(reason));
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   async function confirmDelete() {
@@ -485,6 +550,7 @@ function App() {
     if (selectedTask?.id.startsWith('draft:') && selectedTask.id !== task.id) {
       taskDrafts.current.delete(selectedTask.id);
     }
+    selectedTaskId.current = task.id;
     if (selectedTask?.id === task.id) setWatchRevision((revision) => revision + 1);
     else setSelectedTask(task);
   }
@@ -506,13 +572,13 @@ function App() {
       <header className="titlebar">
         <div className="brand-lockup"><div className="brand-mark" aria-label="Hobot Code">H</div><span>Hobot Code</span></div>
         <button className="board-switcher" onClick={() => setShowBoard(true)} disabled={busy}>
-          <span className={`connection-dot ${connection ? 'online' : ''}`} />
+          <span className={`connection-dot ${connectionState}`} />
           <span className="board-name">{connection?.board.name ?? 'Connect board'}</span>
           <ChevronDown size={14} />
         </button>
         <div className="titlebar-spacer" />
         {isMock() && <span className="preview-label">Preview</span>}
-        <button className="icon-button" title="Refresh tasks" onClick={() => void refreshWorkspace()}><RefreshCw size={16} /></button>
+        <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Task details" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
       </header>
 
@@ -543,7 +609,7 @@ function App() {
           {visibleTasks.length === 0 && <div className="empty-state"><ListTodo size={21} /><span>No tasks</span></div>}
         </div>
         {connection && <button className="board-summary" onClick={() => setShowBoard(true)}>
-          <Server size={16} /><span><strong>{connection.board.name}</strong><small>{activeTaskCount}/{connection.daemon?.maximumTasks ?? 0} active</small></span><ChevronRight size={15} />
+          <Server size={16} /><span><strong>{connection.board.name}</strong><small>{connection.daemon?.activeTasks ?? activeTaskCount}/{connection.daemon?.maximumTasks ?? 0} active</small></span><ChevronRight size={15} />
         </button>}
       </aside>
 
@@ -560,7 +626,7 @@ function App() {
           <div className="conversation" ref={timelineRef} onScroll={onTimelineScroll} aria-label="Conversation">
             <div className="conversation-inner">
               {eventsLoading && events.length === 0 && <div className="loading-conversation"><LoaderCircle size={18} className="spin" /><span>Loading conversation</span></div>}
-              {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><span>Ask Hobot Code to inspect, build, debug, or deploy on this board.</span></div>}
+              {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} />)}
@@ -602,9 +668,9 @@ function App() {
       </main>
 
       {showInspector && <aside className="inspector">
-        <div className="inspector-header"><span>Details</span><button className="icon-button compact" title="Close details" onClick={() => setShowInspector(false)}><X size={16} /></button></div>
-        {selectedTask && <><InspectorSection title="Task"><InfoRow label="Status" value={statusLabel[selectedTask.status] ?? selectedTask.status} /><InfoRow label="PID" value={selectedTask.pid ? String(selectedTask.pid) : '—'} mono /><InfoRow label="Events" value={String(selectedTask.lastSequence)} mono /><InfoRow label="Resumes" value={String(selectedTask.resumeCount ?? 0)} mono /><InfoRow label="Restarts" value={String(selectedTask.restartCount ?? 0)} mono /><InfoRow label="Session" value={selectedTask.sessionId ? selectedTask.sessionId.slice(0, 12) : '—'} mono copy={selectedTask.sessionId} /></InspectorSection><InspectorSection title="Workspace"><div className="workspace-entry"><Box size={16} /><span>{selectedTask.cwd}</span></div></InspectorSection></>}
-        {connection && <InspectorSection title="Board"><div className="board-identity"><Server size={18} /><div><strong>{connection.board.name}</strong><span>{connection.board.user}@{connection.board.host}</span></div></div><div className="metrics-grid"><Metric icon={<Cpu size={15} />} label="Agentd" value={`v${connection.daemon?.version ?? '—'}`} /><Metric icon={<Activity size={15} />} label="Tasks" value={`${activeTaskCount}/${connection.daemon?.maximumTasks ?? 0}`} /><Metric icon={<MemoryStick size={15} />} label="Schema" value={`v${connection.capabilities?.eventSchema ?? '—'}`} /><Metric icon={<ShieldCheck size={15} />} label="SSH" value="Verified" /></div></InspectorSection>}
+        <div className="inspector-header"><span>Board & task</span><div className="inspector-header-actions"><small>{snapshot ? `Updated ${relativeTime(snapshot.capturedAt)}` : 'Not sampled'}</small><button className="icon-button compact" title="Refresh board status" disabled={refreshing} onClick={() => void refreshWorkspace()}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /></button><button className="icon-button compact" title="Close details" onClick={() => setShowInspector(false)}><X size={16} /></button></div></div>
+        {connection && <InspectorSection title="Board health"><div className="board-identity"><Server size={18} /><div><strong>{snapshot?.board || connection.board.name}</strong><span>{snapshot?.hostname || `${connection.board.user}@${connection.board.host}`} · {connectionState === 'online' ? 'Online' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div>{snapshot ? <><div className="metrics-grid"><Metric icon={<Thermometer size={15} />} label="Temperature" value={maximumTemperature(snapshot)} tone={temperatureTone(snapshot)} /><Metric icon={<MemoryStick size={15} />} label="Memory free" value={capacityPair(snapshot.memory.availableBytes, snapshot.memory.totalBytes)} /><Metric icon={<Gauge size={15} />} label="Load (1m)" value={snapshot.loadAverage[0]?.toFixed(2) ?? '-'} /><Metric icon={<HardDrive size={15} />} label="Disk free" value={capacityPair(snapshot.disk.availableBytes, snapshot.disk.totalBytes)} /></div><div className="health-lines"><InfoRow label="RDK OS" value={snapshot.rdkOsVersion || '-'} /><InfoRow label="BPU" value={snapshot.bpuDevices.length ? `${snapshot.bpuDevices.length} device${snapshot.bpuDevices.length === 1 ? '' : 's'} detected` : 'Not detected'} /><InfoRow label="Uptime" value={durationLabel(snapshot.uptimeSeconds)} /></div>{health.issues.length ? <div className="health-issues">{health.issues.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div> : <div className="health-ready"><Check size={14} /><span>No monitored issues detected.</span></div>}</> : <div className="snapshot-empty">Hardware status is unavailable on this board-side version. Tasks remain available.</div>}</InspectorSection>}
+        {selectedTask && <><InspectorSection title="Current task"><InfoRow label="Status" value={statusLabel[selectedTask.status] ?? selectedTask.status} /><InfoRow label="Model" value={selectedTask.model?.split('/').at(-1) ?? 'Board default'} /><InfoRow label="Permissions" value={permissionLabel(selectedPermissionMode)} /><InfoRow label="Updated" value={relativeTime(selectedTask.updatedAt)} />{selectedTask.parentTaskId && <InfoRow label="Branch" value={selectedTask.branchKind === 'side' ? 'Side Agent' : 'Edited branch'} />}</InspectorSection><InspectorSection title="Workspace"><div className="workspace-entry"><Box size={16} /><span>{selectedTask.cwd}</span><CopyButton value={selectedTask.cwd} /></div></InspectorSection>{(activeApproval || selectedTask.lastError || selectedTask.logTruncated) && <InspectorSection title="Needs attention"><div className="attention-list">{activeApproval && <div><ShieldCheck size={14} /><span>Approval waiting</span></div>}{selectedTask.lastError && <div className="danger"><AlertTriangle size={14} /><span>{selectedTask.lastError}</span></div>}{selectedTask.logTruncated && <div><AlertTriangle size={14} /><span>Older task events were truncated</span></div>}</div></InspectorSection>}<details className="diagnostics"><summary>Diagnostics<ChevronRight size={13} /></summary><div><InfoRow label="Agentd" value={`v${connection?.daemon?.version ?? '—'}`} mono /><InfoRow label="PID" value={selectedTask.pid ? String(selectedTask.pid) : '—'} mono /><InfoRow label="Last sequence" value={String(selectedTask.lastSequence)} mono /><InfoRow label="Schema" value={`v${connection?.capabilities?.eventSchema ?? '—'}`} mono /><InfoRow label="Session" value={selectedTask.sessionId ? selectedTask.sessionId.slice(0, 12) : '—'} mono copy={selectedTask.sessionId} />{snapshot && <InfoRow label="Kernel" value={snapshot.kernel || '—'} mono />}</div></details></>}
       </aside>}
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
@@ -756,9 +822,10 @@ function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conver
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
 function InfoRow({label, value, mono, copy}: {label: string; value: string; mono?: boolean; copy?: string}) { return <div className="info-row"><span>{label}</span><div><strong className={mono ? 'mono' : ''}>{value}</strong>{copy && <CopyButton value={copy} />}</div></div>; }
 function CopyButton({value}: {value: string}) { const [copied, setCopied] = useState(false); return <button type="button" className="copy-button" title={copied ? 'Copied' : 'Copy'} onClick={() => void navigator.clipboard.writeText(value).then(() => {setCopied(true); window.setTimeout(() => setCopied(false), 1200);})}>{copied ? <Check size={13} /> : <Clipboard size={13} />}</button>; }
-function Metric({icon, label, value}: {icon: ReactNode; label: string; value: string}) { return <div className="metric"><span>{icon}{label}</span><strong>{value}</strong></div>; }
+function Metric({icon, label, value, tone = ''}: {icon: ReactNode; label: string; value: string; tone?: string}) { return <div className={`metric ${tone}`}><span>{icon}{label}</span><strong>{value}</strong></div>; }
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
+function permissionLabel(mode: Task['permissionMode']) { return mode === 'review' ? 'Review only' : mode === 'developer' ? 'Developer' : 'Ask for changes'; }
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';

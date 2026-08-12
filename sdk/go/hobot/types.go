@@ -62,6 +62,40 @@ type DaemonInfo struct {
 	Capabilities    Capabilities `json:"capabilities"`
 }
 
+type ThermalZone struct {
+	Name    string  `json:"name"`
+	Celsius float64 `json:"celsius"`
+}
+
+type MemoryInfo struct {
+	TotalBytes     uint64 `json:"totalBytes"`
+	AvailableBytes uint64 `json:"availableBytes"`
+}
+
+type DiskInfo struct {
+	Path           string `json:"path"`
+	TotalBytes     uint64 `json:"totalBytes"`
+	AvailableBytes uint64 `json:"availableBytes"`
+}
+
+type SystemSnapshot struct {
+	CapturedAt    time.Time       `json:"capturedAt"`
+	Board         string          `json:"board"`
+	BoardID       string          `json:"boardId"`
+	Hostname      string          `json:"hostname"`
+	RDKOSVersion  string          `json:"rdkOsVersion"`
+	Kernel        string          `json:"kernel"`
+	Architecture  string          `json:"architecture"`
+	CPUCores      int             `json:"cpuCores"`
+	LoadAverage   []float64       `json:"loadAverage"`
+	Memory        MemoryInfo      `json:"memory"`
+	Disk          DiskInfo        `json:"disk"`
+	ThermalZones  []ThermalZone   `json:"thermalZones"`
+	BPUDevices    []string        `json:"bpuDevices"`
+	RDKUtilities  map[string]bool `json:"rdkUtilities"`
+	UptimeSeconds uint64          `json:"uptimeSeconds"`
+}
+
 type Approval struct {
 	ID          string    `json:"id"`
 	Method      string    `json:"method"`

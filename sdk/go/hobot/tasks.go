@@ -21,6 +21,12 @@ func (client *Client) GetCapabilities(ctx context.Context) (Capabilities, error)
 	return capabilities, err
 }
 
+func (client *Client) SystemSnapshot(ctx context.Context) (SystemSnapshot, error) {
+	var snapshot SystemSnapshot
+	err := client.Call(ctx, "system.snapshot", struct{}{}, &snapshot)
+	return snapshot, err
+}
+
 func (client *Client) Tasks(ctx context.Context, includeArchived bool, cursor string, limit int) (TaskPage, error) {
 	var page TaskPage
 	err := client.Call(ctx, "task.page", map[string]any{

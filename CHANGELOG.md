@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.4
+
+- Add a bounded `system.snapshot` capability so Studio can show the exact RDK identity, OS, BPU devices, temperature, memory, storage, load, uptime, and board-side validation tools without exposing credentials.
+- Turn board telemetry into actionable readiness guidance for thermal, memory, storage, BPU, and runtime-tool problems, while degrading cleanly against older board releases.
+- Add editable RDK workflow starters for board diagnosis, model deployment, camera pipelines, TROS workspaces, and reproducible BPU validation.
+- Replace command-line substring process detection in install, rollback, and uninstall flows with exact `/proc/<pid>/exe` checks, preventing SSH wrapper commands from falsely blocking upgrades.
+- Strengthen Studio board refresh state, real-board SDK coverage, snapshot validation, and frontend health regression tests.
+
 ## 0.22.3
 
 - Preserve single tildes in Studio Markdown so ranges and approximate CLI values do not accidentally strike through intervening options, while retaining standard double-tilde strikethrough.

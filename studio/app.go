@@ -236,6 +236,30 @@ func (app *App) DisconnectBoard(boardID string) {
 	app.disconnect(boardID)
 }
 
+func (app *App) RefreshBoard(boardID string) (BoardConnection, error) {
+	client, err := app.client(boardID)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+		info, pingErr := client.Ping(ctx)
+		cancel()
+		if pingErr == nil {
+			return BoardConnection{Board: app.board(boardID), Connected: true, Daemon: &info, Capabilities: &info.Capabilities}, nil
+		}
+		app.disconnect(boardID)
+	}
+	return app.ConnectBoard(boardID)
+}
+
+func (app *App) GetSystemSnapshot(boardID string) (hobot.SystemSnapshot, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.SystemSnapshot{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SystemSnapshot(ctx)
+}
+
 func (app *App) RefreshTasks(boardID string, includeArchived bool) (hobot.TaskPage, error) {
 	client, err := app.client(boardID)
 	if err != nil {
@@ -581,6 +605,12 @@ func (app *App) client(boardID string) (*hobot.Client, error) {
 		return nil, fmt.Errorf("board is not connected")
 	}
 	return client, nil
+}
+
+func (app *App) board(boardID string) Board {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return app.boards[boardID]
 }
 
 func (app *App) disconnect(boardID string) {

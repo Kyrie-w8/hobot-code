@@ -144,7 +144,23 @@ for root_owned_path in "$backup_root" /usr/local/lib/hobot-code /usr/local/bin/h
   fi
 done
 
-active_pids=$(pgrep -f '(^|[[:space:]])(/usr/local/bin/hobot|/usr/local/lib/hobot-code/(hobot|agentd))([[:space:]]|$)' || true)
+active_hobot_pids() {
+  detected_pids=
+  for process_path in /proc/[0-9]*; do
+    [ -r "$process_path/exe" ] || continue
+    executable=$(readlink "$process_path/exe" 2>/dev/null || true)
+    executable=${executable% (deleted)}
+    case "$executable" in
+      /usr/local/lib/hobot-code/hobot|/usr/local/lib/hobot-code/agentd)
+        process_id=${process_path##*/}
+        detected_pids="${detected_pids}${detected_pids:+ }$process_id"
+        ;;
+    esac
+  done
+  printf '%s\n' "$detected_pids"
+}
+
+active_pids=$(active_hobot_pids)
 if [ -n "$active_pids" ]; then
   printf 'Stop active Hobot Code processes before rollback: %s\n' "$active_pids" >&2
   exit 1

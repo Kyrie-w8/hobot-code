@@ -197,6 +197,12 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, models))
+	case "system.snapshot":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, collectSystemSnapshot(server.cfg)))
 	case "workspace.list":
 		var params workspaceParams
 		if err := decodeParams(req.Params, &params); err != nil {

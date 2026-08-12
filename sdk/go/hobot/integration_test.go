@@ -32,6 +32,21 @@ func TestSSHIntegration(t *testing.T) {
 	if _, err := client.Tasks(ctx, false, "", 10); err != nil {
 		t.Fatal(err)
 	}
+	if containsCapability(info.Capabilities.Capabilities, "system.snapshot") {
+		snapshot, err := client.SystemSnapshot(ctx)
+		if err != nil || snapshot.Board == "" || snapshot.CPUCores < 1 {
+			t.Fatalf("invalid system snapshot: %+v err=%v", snapshot, err)
+		}
+	}
+}
+
+func containsCapability(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func valueOrDefault(value, fallback string) string {

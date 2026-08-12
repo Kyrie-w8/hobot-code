@@ -46,6 +46,7 @@
 |---|---|---|
 | `ping` | `{}` | 版本、PID、协议版本、任务数和路径 |
 | `capabilities` | `{}` | 协议范围、事件 schema、功能标识和资源上限 |
+| `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、BPU 设备和运行时工具的只读实时状态 |
 | `models.list` | `{}` | 板端当前可用模型的 `provider`/`id` 列表，不包含凭据 |
 | `workspace.list` | `{path?}` | 浏览当前用户可见的目录，只返回子目录 |
 | `workspace.create` | `{parent, name}` | 在用户明确选定的父目录中创建私有工作目录 |
