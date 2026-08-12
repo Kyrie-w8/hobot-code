@@ -76,6 +76,96 @@ func TestParseIONHeapsKeepsCapacityAllocationAndOrphansSeparate(t *testing.T) {
 	}
 }
 
+func TestParseIONHeapClientsReadsOnlyHeapSummary(t *testing.T) {
+	content := []byte(`
+    cma_reserved  heap total size       1073741824
+       heap name           client              pid             size
+-------------------------------------------------------------------------
+    cma_reserved         modprobe              504         50069504
+    cma_reserved           python3            54851          6422528
+allocations (info is from last known client):
+          client              pid             tgid             type             size
+          python3            54851            54851              vio          4194304
+          total          56492032
+        carveout  heap total size        536870912
+       heap name           client              pid             size
+-------------------------------------------------------------------------
+        carveout         modprobe              496         20512768
+        carveout           python3            54851         88014848
+allocations (info is from last known client):
+          client              pid             tgid             type             size
+          python3            54851            54851              hbm         66846720
+          total         108527616
+`)
+	clients := parseIONHeapClients(content)
+	if len(clients) != 4 {
+		t.Fatalf("unexpected clients: %+v", clients)
+	}
+	if clients[1].Heap != "cma_reserved" || clients[1].Name != "python3" || clients[1].PID != 54851 || clients[1].Bytes != 6422528 {
+		t.Fatalf("unexpected CMA client: %+v", clients[1])
+	}
+	if clients[3].Heap != "carveout" || clients[3].Bytes != 88014848 {
+		t.Fatalf("unexpected carveout client: %+v", clients[3])
+	}
+}
+
+func TestAcceleratorFromIONAttributesOnlyLiveProcesses(t *testing.T) {
+	const mib = uint64(1024 * 1024)
+	procRoot := t.TempDir()
+	statusRoot := filepath.Join(procRoot, "54851")
+	if err := os.MkdirAll(statusRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(statusRoot, "status"), []byte("Name:\tpython3\nVmRSS:\t245760 kB\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memory := aiMemorySnapshot{
+		Heaps: []aiMemoryHeapSnapshot{
+			{Name: "cma_reserved", CapacityBytes: 1024 * mib, AllocatedBytes: 56 * mib},
+			{Name: "ion_cma", CapacityBytes: 512 * mib},
+			{Name: "carveout", CapacityBytes: 512 * mib, AllocatedBytes: 108 * mib},
+			{Name: "system", CapacityBytes: 1024 * mib, AllocatedBytes: 64 * mib},
+		},
+		clients: []ionHeapClientSnapshot{
+			{Heap: "cma_reserved", Name: "python3", PID: 54851, Bytes: 6 * mib},
+			{Heap: "cma_reserved", Name: "modprobe", PID: 504, Bytes: 50 * mib},
+			{Heap: "carveout", Name: "python3", PID: 54851, Bytes: 88 * mib},
+			{Heap: "carveout", Name: "modprobe", PID: 496, Bytes: 20 * mib},
+		},
+	}
+	got := acceleratorFromIONAt(memory, procRoot)
+	if !got.Available || got.Source != "ion-debugfs" || len(got.HbmemPools) != 3 || len(got.Processes) != 1 {
+		t.Fatalf("unexpected exact accelerator snapshot: %+v", got)
+	}
+	if got.HbmemPools[0].ProcessBytes != 6*mib || got.HbmemPools[0].SystemBytes != 50*mib {
+		t.Fatalf("unexpected CMA attribution: %+v", got.HbmemPools[0])
+	}
+	if got.HbmemPools[2].ProcessBytes != 88*mib || got.HbmemPools[2].SystemBytes != 20*mib {
+		t.Fatalf("unexpected carveout attribution: %+v", got.HbmemPools[2])
+	}
+	if got.Processes[0].PID != 54851 || got.Processes[0].Name != "python3" || got.Processes[0].HbmemBytes != 94*mib || got.Processes[0].RSSBytes != 240*mib {
+		t.Fatalf("unexpected process attribution: %+v", got.Processes[0])
+	}
+}
+
+func TestAcceleratorFromIONRejectsReusedPID(t *testing.T) {
+	procRoot := t.TempDir()
+	statusRoot := filepath.Join(procRoot, "123")
+	if err := os.MkdirAll(statusRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(statusRoot, "status"), []byte("Name:\tunrelated\nVmRSS:\t1024 kB\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := acceleratorFromIONAt(aiMemorySnapshot{
+		Heaps:   []aiMemoryHeapSnapshot{{Name: "carveout", CapacityBytes: 512 << 20, AllocatedBytes: 64 << 20}},
+		clients: []ionHeapClientSnapshot{{Heap: "carveout", Name: "python3", PID: 123, Bytes: 64 << 20}},
+	}, procRoot)
+	if len(got.Processes) != 0 || got.HbmemPools[0].ProcessBytes != 0 || got.HbmemPools[0].SystemBytes != 64<<20 {
+		t.Fatalf("reused PID was attributed: %+v", got)
+	}
+}
+
 func TestSanitizeIONHeapCapacitiesRejectsImpossibleDriverValues(t *testing.T) {
 	heaps := []aiMemoryHeapSnapshot{
 		{Name: "ion_uncache", CapacityBytes: 2 * 1024 * 1024 * 1024, AllocatedBytes: 64 * 1024 * 1024},
@@ -154,6 +244,9 @@ func TestParseAcceleratorMonitor(t *testing.T) {
 	}
 	if got.HbmemPools[0].TotalBytes != 1<<30 || got.HbmemPools[0].UsedBytes != 64<<10 || got.Processes[0].PID != 18342 || got.Processes[0].HbmemBytes != 96<<20 {
 		t.Fatalf("unexpected parsed values: %+v", got)
+	}
+	if got.Source != "hrt_ucp_monitor-estimate" {
+		t.Fatalf("fallback source = %q", got.Source)
 	}
 }
 

@@ -82,9 +82,11 @@ export function systemResourceMetrics(snapshot) {
 export function acceleratorMemoryMetrics(snapshot) {
 	const accelerator = snapshot.accelerator;
 	if (accelerator?.available && accelerator.hbmemPools?.length) {
-		return accelerator.hbmemPools.filter((pool) => pool.totalBytes > 0).map((pool) => ({
+		const exact = accelerator.source === 'ion-debugfs';
+		return accelerator.hbmemPools.filter((pool) => pool.totalBytes > 0).sort((left, right) => hbmemPoolPriority(left.name) - hbmemPoolPriority(right.name)).map((pool) => ({
 			key: `hbmem-${pool.name}`, label: hbmemPoolLabel(pool.name),
 			value: `${formatBytes(pool.usedBytes)} / ${formatBytes(pool.totalBytes)} used`,
+			detail: exact && pool.usedBytes > 0 ? `${formatBytes(pool.processBytes ?? 0)} apps · ${formatBytes(pool.systemBytes ?? 0)} system` : undefined,
 			percent: clampPercent(pool.usedBytes / pool.totalBytes * 100), available: true,
 		}));
 	}
@@ -176,7 +178,16 @@ function maximumTemperatureValue(snapshot) {
 }
 
 function hbmemPoolLabel(name) {
-	return name === 'cma_reserved' ? 'CMA reserved' : name === 'ion_cma' ? 'ION CMA' : name === 'carveout' ? 'BPU carveout' : name.replaceAll('_', ' ');
+	if (name === 'carveout') return 'BPU / codec memory';
+	if (name === 'cma_reserved') return 'VIO / system buffers';
+	if (name === 'ion_cma' || name === 'cma') return 'DMA buffers';
+	if (name === 'ion_uncache') return 'Uncached buffers';
+	if (name === 'sram') return 'Accelerator SRAM';
+	return name.replaceAll('_', ' ');
+}
+
+function hbmemPoolPriority(name) {
+	return name === 'carveout' ? 0 : name === 'cma_reserved' ? 1 : name === 'ion_cma' || name === 'cma' ? 2 : name === 'ion_uncache' ? 3 : 4;
 }
 
 export function formatBytes(value) {

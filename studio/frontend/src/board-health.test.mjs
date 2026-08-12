@@ -56,14 +56,22 @@ test('resource metrics use comparable capacity percentages', () => {
 });
 
 test('accelerator memory uses official Hbmem pools when available', () => {
-  const official = acceleratorMemoryMetrics(snapshot({accelerator: {available: true, ddrReadMiBps: 320, ddrWriteMiBps: 120, hbmemPools: [
-    {name: 'cma_reserved', totalBytes: 1024 ** 3, usedBytes: 256 * 1024 ** 2, freeBytes: 768 * 1024 ** 2},
-    {name: 'carveout', totalBytes: 512 * 1024 ** 2, usedBytes: 64 * 1024 ** 2, freeBytes: 448 * 1024 ** 2},
+  const official = acceleratorMemoryMetrics(snapshot({accelerator: {available: true, source: 'ion-debugfs', ddrReadMiBps: 320, ddrWriteMiBps: 120, hbmemPools: [
+    {name: 'cma_reserved', totalBytes: 1024 ** 3, usedBytes: 256 * 1024 ** 2, freeBytes: 768 * 1024 ** 2, processBytes: 64 * 1024 ** 2, systemBytes: 192 * 1024 ** 2},
+    {name: 'carveout', totalBytes: 512 * 1024 ** 2, usedBytes: 64 * 1024 ** 2, freeBytes: 448 * 1024 ** 2, processBytes: 48 * 1024 ** 2, systemBytes: 16 * 1024 ** 2},
   ]}}));
-  assert.deepEqual(official.map(({label, percent}) => [label, percent]), [['CMA reserved', 25], ['BPU carveout', 12.5]]);
+  assert.deepEqual(official.map(({label, percent}) => [label, percent]), [['BPU / codec memory', 12.5], ['VIO / system buffers', 25]]);
+  assert.equal(official[0].detail, '48 MiB apps · 16 MiB system');
   assert.deepEqual(activeDDRBandwidth(snapshot({accelerator: {available: true, ddrReadMiBps: 320, ddrWriteMiBps: 120}})), {read: 320, write: 120});
   assert.equal(activeDDRBandwidth(snapshot({bpuCores: [{index: 0, utilizationPercent: 0}], accelerator: {available: true, ddrReadMiBps: 320}})), null);
   assert.equal(activeDDRBandwidth(snapshot({accelerator: {available: true, ddrReadMiBps: 0, ddrWriteMiBps: 0}})), null);
+});
+
+test('monitor fallback does not present estimated ownership as exact', () => {
+  const metrics = acceleratorMemoryMetrics(snapshot({accelerator: {available: true, source: 'hrt_ucp_monitor-estimate', hbmemPools: [
+    {name: 'carveout', totalBytes: 512 * 1024 ** 2, usedBytes: 1 * 1024 ** 2, freeBytes: 511 * 1024 ** 2},
+  ]}}));
+  assert.equal(metrics[0].detail, undefined);
 });
 
 test('accelerator memory falls back without inventing a capacity', () => {

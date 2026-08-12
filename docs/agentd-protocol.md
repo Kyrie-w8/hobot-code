@@ -110,7 +110,11 @@ Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 
 
 ## 资源与安全边界
 
-`system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，并在存在时调用固定路径的官方 `hrt_ucp_monitor` 采集加速器状态。该采样有 2.5 秒超时、256 KiB 输出上限和 5 秒缓存，失败时不影响其他快照字段。BPU 负载来自每个核心的 `ratio` 节点，频率来自对应 devfreq；`bpuTelemetry.status` 区分可用、未检测到设备、RDK OS 未暴露指标和读取失败，客户端不得用 CPU 指标代替。`accelerator` 字段仅传递官方监控器返回的 Hbmem 池、DDR 带宽和可选进程归属，不把内存池相加成虚构总量。为兼容旧版板端，`aiMemory` 仍保留 BPU client allocation、ION 活跃分配、ION orphaned、CMA 和 DMA-BUF 诊断字段；不同或可能重叠的指标不会相加。大于实机物理内存的异常 heap 容量不会上报。每个调试文件最多读取 2 MiB，heap 最多返回 32 项，BPU 核心最多返回 16 项。
+`system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，并在存在时调用固定路径的官方 `hrt_ucp_monitor` 采集 DDR 带宽。该命令有 2.5 秒超时、256 KiB 输出上限和 5 秒缓存，失败时不影响其他快照字段。BPU 负载来自每个核心的 `ratio` 节点，频率来自对应 devfreq；`bpuTelemetry.status` 区分可用、未检测到设备、RDK OS 未暴露指标和读取失败，客户端不得用 CPU 指标代替。
+
+Hbmem 容量与当前分配优先来自 `/sys/kernel/debug/ion/heaps/all_heap_info`，`accelerator.source=ion-debugfs` 表示数值来自内核 heap 账本。服务仅把汇总表中仍有同名 `/proc/<pid>/status` 的记录归属到活跃应用，返回其 Hbmem 与 RSS；其余驱动、固件、已退出进程或无法安全归属的分配计入对应 pool 的 `systemBytes`。PID、heap、客户端与进程数均有上限，且进程名不匹配时拒绝归属，避免 PID 复用产生错误结果。debugfs 不可读时才回退到 `hrt_ucp_monitor-estimate`，该来源的 pool 与进程信息只能视为近似值。各 Hbmem pool 是共享 DDR 中用途不同的保留区，不会相加成虚构“显存总量”；`carveout` 也可能由 BPU、编解码和系统组件共同使用。
+
+为兼容旧版板端，`aiMemory` 仍保留 BPU client allocation、ION 活跃分配、ION orphaned、CMA 和 DMA-BUF 诊断字段；不同或可能重叠的指标不会相加。大于实机物理内存的异常 heap 容量不会上报。每个调试文件最多读取 2 MiB，heap 最多返回 32 项，heap 客户端最多解析 256 项，活跃进程最多返回 32 项，BPU 核心最多返回 16 项。
 
 界面术语遵循地瓜官方资料中的 BPU `ratio`/负载、BPU 运行频率和 ION/Hbmem：X 系列将 ION 描述为供 BPU 与图像、视频模块使用的物理内存；S100/S600 的 Hbmem 基于 ION，并区分 `cma_reserved`、`carveout`、`cma`、`ion_uncache` 等 heap。来源：[hrut_somstatus](https://developer.d-robotics.cc/rdk_x_doc/en/Appendix/rdk-command-manual/cmd_hrut_somstatus)、[S100/S600 CPU-BPU-DDR 测试](https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/linux_development/hardware_unit_test/bpu_cpu_ddr_stress)、[X 系列 ION 配置](https://developer.d-robotics.cc/rdk_x_doc/System_configuration/srpi-config)、[S100/S600 Hbmem](https://developer.d-robotics.cc/rdk_s_doc/en/Advanced_development/linux_development/driver_development_super/driver_hbmem/s100_hbmem_hardware)。
 

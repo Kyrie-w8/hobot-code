@@ -110,10 +110,12 @@ type AIMemoryInfo struct {
 }
 
 type AcceleratorMemoryPoolInfo struct {
-	Name       string `json:"name"`
-	TotalBytes uint64 `json:"totalBytes"`
-	UsedBytes  uint64 `json:"usedBytes"`
-	FreeBytes  uint64 `json:"freeBytes"`
+	Name         string `json:"name"`
+	TotalBytes   uint64 `json:"totalBytes"`
+	UsedBytes    uint64 `json:"usedBytes"`
+	FreeBytes    uint64 `json:"freeBytes"`
+	ProcessBytes uint64 `json:"processBytes,omitempty"`
+	SystemBytes  uint64 `json:"systemBytes,omitempty"`
 }
 
 type AcceleratorProcessInfo struct {

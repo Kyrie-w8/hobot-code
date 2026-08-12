@@ -3,7 +3,7 @@ import type {SystemSnapshot} from './types';
 export type HealthTone = 'neutral' | 'healthy' | 'warning' | 'danger';
 export type HealthIssue = {tone: 'warning' | 'danger'; label: string};
 export type ResourceMetric = {key: string; label: string; value: string; percent: number; tone?: HealthTone};
-export type AcceleratorMemoryMetric = {key: string; label: string; value: string; percent?: number; available?: boolean};
+export type AcceleratorMemoryMetric = {key: string; label: string; value: string; detail?: string; percent?: number; available?: boolean};
 
 export function boardHealth(snapshot: SystemSnapshot | null): {tone: HealthTone; issues: HealthIssue[]};
 export function capacityPair(available: number, total: number): string;

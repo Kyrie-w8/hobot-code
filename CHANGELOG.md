@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.7
+
+- Read Hbmem pool capacity and allocation from the kernel ION debugfs ledger, using the official board monitor only for DDR bandwidth or as an explicitly marked estimate when debugfs is unavailable.
+- Attribute Hbmem to live matching processes with RSS context, separate application bytes from driver, firmware, and unowned system bytes, and reject stale records after PID reuse.
+- Present the BPU/codec, VIO/system, and DMA shared-memory pools in development-focused order without describing shared DDR as dedicated accelerator VRAM.
+
 ## 0.23.6
 
 - Sample the official RDK accelerator monitor through a bounded, cached collector to expose DDR bandwidth, named Hbmem pools, and any process attribution supplied by the board runtime.

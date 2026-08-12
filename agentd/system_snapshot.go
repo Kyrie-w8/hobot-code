@@ -72,13 +72,23 @@ type aiMemorySnapshot struct {
 	DMABufBytes            uint64                 `json:"dmaBufBytes,omitempty"`
 	DMABufObjects          uint64                 `json:"dmaBufObjects,omitempty"`
 	Heaps                  []aiMemoryHeapSnapshot `json:"heaps,omitempty"`
+	clients                []ionHeapClientSnapshot
+}
+
+type ionHeapClientSnapshot struct {
+	Heap  string
+	Name  string
+	PID   int
+	Bytes uint64
 }
 
 type acceleratorMemoryPoolSnapshot struct {
-	Name       string `json:"name"`
-	TotalBytes uint64 `json:"totalBytes"`
-	UsedBytes  uint64 `json:"usedBytes"`
-	FreeBytes  uint64 `json:"freeBytes"`
+	Name         string `json:"name"`
+	TotalBytes   uint64 `json:"totalBytes"`
+	UsedBytes    uint64 `json:"usedBytes"`
+	FreeBytes    uint64 `json:"freeBytes"`
+	ProcessBytes uint64 `json:"processBytes,omitempty"`
+	SystemBytes  uint64 `json:"systemBytes,omitempty"`
 }
 
 type acceleratorProcessSnapshot struct {
@@ -129,6 +139,7 @@ func collectSystemSnapshot(cfg config) systemSnapshot {
 	memory := readMemorySnapshot()
 	bpuDevices := listBPUDevices()
 	bpuCores, bpuTelemetry := readBPUCores(bpuDevices)
+	aiMemory := readAIMemorySnapshot(memory)
 	return systemSnapshot{
 		CapturedAt:    time.Now().UTC(),
 		Board:         board,
@@ -145,8 +156,8 @@ func collectSystemSnapshot(cfg config) systemSnapshot {
 		BPUDevices:    bpuDevices,
 		BPUCores:      bpuCores,
 		BPUTelemetry:  bpuTelemetry,
-		AIMemory:      readAIMemorySnapshot(memory),
-		Accelerator:   readAcceleratorSnapshot(),
+		AIMemory:      aiMemory,
+		Accelerator:   readAcceleratorSnapshot(aiMemory),
 		RDKUtilities:  detectRDKUtilities(),
 		UptimeSeconds: readUptimeSeconds(),
 	}
@@ -315,7 +326,7 @@ var (
 	monitorProcPattern = regexp.MustCompile(`^\|\s*(\d+)\s+(\S+)\s+([0-9.]+[KMG]?)\s+([0-9.]+[KMG]?)\s*\|?$`)
 )
 
-func readAcceleratorSnapshot() acceleratorSnapshot {
+func readAcceleratorMonitorSnapshot() acceleratorSnapshot {
 	acceleratorMonitorCache.Lock()
 	defer acceleratorMonitorCache.Unlock()
 	if !acceleratorMonitorCache.captured.IsZero() && time.Since(acceleratorMonitorCache.captured) < 5*time.Second {
@@ -329,6 +340,108 @@ func readAcceleratorSnapshot() acceleratorSnapshot {
 		acceleratorMonitorCache.value = acceleratorSnapshot{}
 	}
 	return acceleratorMonitorCache.value
+}
+
+func readAcceleratorSnapshot(memory aiMemorySnapshot) acceleratorSnapshot {
+	monitor := readAcceleratorMonitorSnapshot()
+	exact := acceleratorFromIONAt(memory, "/proc")
+	if !exact.Available {
+		return monitor
+	}
+	exact.DDRReadMiBPS = monitor.DDRReadMiBPS
+	exact.DDRWriteMiBPS = monitor.DDRWriteMiBPS
+	return exact
+}
+
+func acceleratorFromIONAt(memory aiMemorySnapshot, procRoot string) acceleratorSnapshot {
+	result := acceleratorSnapshot{Source: "ion-debugfs", CapturedAt: time.Now().UTC()}
+	processes := map[int]*acceleratorProcessSnapshot{}
+	processBytesByHeap := map[string]uint64{}
+	for _, client := range memory.clients {
+		name, rss, ok := readProcessIdentity(procRoot, client.PID)
+		if !ok || !sameProcessName(client.Name, name) {
+			continue
+		}
+		process := processes[client.PID]
+		if process == nil {
+			process = &acceleratorProcessSnapshot{PID: client.PID, Name: name, RSSBytes: rss}
+			processes[client.PID] = process
+		}
+		process.HbmemBytes += client.Bytes
+		processBytesByHeap[client.Heap] += client.Bytes
+	}
+	for _, heap := range memory.Heaps {
+		if heap.CapacityBytes == 0 || !isHbmemPool(heap.Name) {
+			continue
+		}
+		used := heap.AllocatedBytes
+		processBytes := processBytesByHeap[heap.Name]
+		if processBytes > used {
+			processBytes = used
+		}
+		free := uint64(0)
+		if used < heap.CapacityBytes {
+			free = heap.CapacityBytes - used
+		}
+		result.HbmemPools = append(result.HbmemPools, acceleratorMemoryPoolSnapshot{
+			Name: heap.Name, TotalBytes: heap.CapacityBytes, UsedBytes: used, FreeBytes: free,
+			ProcessBytes: processBytes, SystemBytes: used - processBytes,
+		})
+	}
+	for _, process := range processes {
+		if process.HbmemBytes > 0 {
+			result.Processes = append(result.Processes, *process)
+		}
+	}
+	sort.Slice(result.Processes, func(i, j int) bool {
+		if result.Processes[i].HbmemBytes == result.Processes[j].HbmemBytes {
+			return result.Processes[i].PID < result.Processes[j].PID
+		}
+		return result.Processes[i].HbmemBytes > result.Processes[j].HbmemBytes
+	})
+	if len(result.Processes) > 32 {
+		result.Processes = result.Processes[:32]
+	}
+	result.Available = len(result.HbmemPools) > 0
+	return result
+}
+
+func sameProcessName(client, process string) bool {
+	return client != "" && process != "" && (client == process || strings.TrimSuffix(client, ":") == process)
+}
+
+func isHbmemPool(name string) bool {
+	switch name {
+	case "carveout", "cma_reserved", "ion_cma", "cma", "ion_uncache", "sram":
+		return true
+	default:
+		return false
+	}
+}
+
+func readProcessIdentity(procRoot string, pid int) (string, uint64, bool) {
+	if pid <= 0 {
+		return "", 0, false
+	}
+	content, err := readBoundedFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"), 64*1024)
+	if err != nil {
+		return "", 0, false
+	}
+	name := ""
+	var rss uint64
+	for _, raw := range bytes.Split(content, []byte{'\n'}) {
+		line := strings.TrimSpace(string(raw))
+		if strings.HasPrefix(line, "Name:") {
+			name = strings.TrimSpace(strings.TrimPrefix(line, "Name:"))
+		} else if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(strings.TrimPrefix(line, "VmRSS:"))
+			if len(fields) > 0 {
+				value, _ := strconv.ParseUint(fields[0], 10, 64)
+				rss = value * 1024
+			}
+		}
+	}
+	return name, rss, name != ""
 }
 
 func sampleAcceleratorMonitor() (acceleratorSnapshot, error) {
@@ -380,7 +493,7 @@ func (output *boundedMonitorOutput) Write(content []byte) (int, error) {
 }
 
 func parseAcceleratorMonitor(content []byte) acceleratorSnapshot {
-	result := acceleratorSnapshot{Source: "hrt_ucp_monitor", CapturedAt: time.Now().UTC()}
+	result := acceleratorSnapshot{Source: "hrt_ucp_monitor-estimate", CapturedAt: time.Now().UTC()}
 	section := ""
 	for _, raw := range bytes.Split(content, []byte{'\n'}) {
 		line := strings.TrimSpace(string(raw))
@@ -524,6 +637,7 @@ func readAIMemorySnapshot(memory memorySnapshot) aiMemorySnapshot {
 	result := aiMemorySnapshot{CMATotalBytes: memory.CMATotalBytes, CMAFreeBytes: memory.CMAFreeBytes}
 	if content, err := readBoundedFile("/sys/kernel/debug/ion/heaps/all_heap_info", maximumTelemetryFileBytes); err == nil {
 		result.Heaps = sanitizeIONHeapCapacities(parseIONHeaps(content), memory.TotalBytes)
+		result.clients = parseIONHeapClients(content)
 		result.Available, result.IONAvailable = true, true
 		for _, heap := range result.Heaps {
 			result.IONAllocatedBytes += heap.AllocatedBytes
@@ -542,6 +656,40 @@ func readAIMemorySnapshot(memory memorySnapshot) aiMemorySnapshot {
 		result.Available, result.CMAAvailable = true, true
 	}
 	return result
+}
+
+func parseIONHeapClients(content []byte) []ionHeapClientSnapshot {
+	clients := []ionHeapClientSnapshot{}
+	heap := ""
+	inSummary := false
+	for _, raw := range bytes.Split(content, []byte{'\n'}) {
+		line := strings.TrimSpace(string(raw))
+		if match := ionHeapPattern.FindStringSubmatch(line); match != nil {
+			heap, inSummary = match[1], false
+			continue
+		}
+		if strings.Contains(line, "heap name") && strings.Contains(line, "client") && strings.Contains(line, "pid") {
+			inSummary = heap != ""
+			continue
+		}
+		if strings.HasPrefix(line, "allocations (") {
+			inSummary = false
+			continue
+		}
+		if !inSummary || line == "" || strings.Trim(line, "-=") == "" || len(clients) >= 256 {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 4 || fields[0] != heap {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[2])
+		size, sizeErr := strconv.ParseUint(fields[3], 10, 64)
+		if pidErr == nil && sizeErr == nil && pid > 0 && size > 0 {
+			clients = append(clients, ionHeapClientSnapshot{Heap: heap, Name: fields[1], PID: pid, Bytes: size})
+		}
+	}
+	return clients
 }
 
 func sanitizeIONHeapCapacities(heaps []aiMemoryHeapSnapshot, physicalMemory uint64) []aiMemoryHeapSnapshot {
