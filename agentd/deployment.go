@@ -468,6 +468,9 @@ func ensurePrivateDirectory(path string) (string, error) {
 	if err != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("path is not a real directory: %s", path)
 	}
+	if owner, ok := fileOwner(info); ok && owner != os.Getuid() {
+		return "", fmt.Errorf("directory is owned by uid %d, expected %d: %s", owner, os.Getuid(), path)
+	}
 	if info.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("directory permissions must be private (0700): %s", path)
 	}

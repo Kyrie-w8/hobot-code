@@ -186,3 +186,22 @@ func TestDeploymentReportPathsAreUniqueAndRejectSymlinkState(t *testing.T) {
 		t.Fatal("symbolic deployment state directory was accepted")
 	}
 }
+
+func TestDeploymentReviewModeIsRejectedBeforeLaunching(t *testing.T) {
+	manager, err := newTaskManager(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	artifact := filepath.Join(workspace, "model.onnx")
+	if err := os.WriteFile(artifact, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.startDeployment(deploymentStartParams{Cwd: workspace, ArtifactPath: artifact, PermissionMode: "review"}, testDeploymentSnapshot())
+	if err == nil || !strings.Contains(err.Error(), "ask or developer") {
+		t.Fatalf("review-only deployment error=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".hobot")); !os.IsNotExist(err) {
+		t.Fatalf("rejected deployment created state: %v", err)
+	}
+}
