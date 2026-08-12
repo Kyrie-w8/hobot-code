@@ -44,12 +44,14 @@ type Board struct {
 }
 
 type BoardConnection struct {
-	Board        Board               `json:"board"`
-	Connected    bool                `json:"connected"`
-	Reconnected  bool                `json:"reconnected,omitempty"`
-	Daemon       *hobot.DaemonInfo   `json:"daemon,omitempty"`
-	Capabilities *hobot.Capabilities `json:"capabilities,omitempty"`
-	Error        string              `json:"error,omitempty"`
+	Board         Board                    `json:"board"`
+	Connected     bool                     `json:"connected"`
+	Reconnected   bool                     `json:"reconnected,omitempty"`
+	Daemon        *hobot.DaemonInfo        `json:"daemon,omitempty"`
+	Capabilities  *hobot.Capabilities      `json:"capabilities,omitempty"`
+	Snapshot      *hobot.SystemSnapshot    `json:"snapshot,omitempty"`
+	Compatibility *connectionCompatibility `json:"compatibility,omitempty"`
+	Error         string                   `json:"error,omitempty"`
 }
 
 type TaskEventEnvelope struct {
@@ -233,14 +235,25 @@ func (app *App) ConnectBoard(boardID string) (BoardConnection, error) {
 		return BoardConnection{Board: board, Error: err.Error()}, err
 	}
 	capabilities := info.Capabilities
-	if capabilities.EventSchema < 2 {
+	var snapshot *hobot.SystemSnapshot
+	var snapshotErr error
+	if containsValue(capabilities.Capabilities, "system.snapshot") {
+		value, err := client.SystemSnapshot(ctx)
+		if err != nil {
+			snapshotErr = err
+		} else {
+			snapshot = &value
+		}
+	}
+	compatibility, compatibilityErr := assessConnectionCompatibility(info, snapshot, snapshotErr)
+	if compatibilityErr != nil {
 		_ = client.Close()
-		return BoardConnection{Board: board}, fmt.Errorf("board requires a newer Hobot Code event schema")
+		return BoardConnection{Board: board, Daemon: &info, Capabilities: &capabilities, Snapshot: snapshot, Compatibility: &compatibility, Error: compatibilityErr.Error()}, compatibilityErr
 	}
 	app.mu.Lock()
 	app.clients[boardID] = client
 	app.mu.Unlock()
-	return BoardConnection{Board: board, Connected: true, Daemon: &info, Capabilities: &capabilities}, nil
+	return BoardConnection{Board: board, Connected: true, Daemon: &info, Capabilities: &capabilities, Snapshot: snapshot, Compatibility: &compatibility}, nil
 }
 
 func (app *App) DisconnectBoard(boardID string) {
@@ -252,10 +265,26 @@ func (app *App) RefreshBoard(boardID string) (BoardConnection, error) {
 	if err == nil {
 		ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 		info, pingErr := client.Ping(ctx)
-		cancel()
 		if pingErr == nil {
-			return BoardConnection{Board: app.board(boardID), Connected: true, Daemon: &info, Capabilities: &info.Capabilities}, nil
+			var snapshot *hobot.SystemSnapshot
+			var snapshotErr error
+			if containsValue(info.Capabilities.Capabilities, "system.snapshot") {
+				value, err := client.SystemSnapshot(ctx)
+				if err != nil {
+					snapshotErr = err
+				} else {
+					snapshot = &value
+				}
+			}
+			compatibility, compatibilityErr := assessConnectionCompatibility(info, snapshot, snapshotErr)
+			cancel()
+			if compatibilityErr == nil {
+				return BoardConnection{Board: app.board(boardID), Connected: true, Daemon: &info, Capabilities: &info.Capabilities, Snapshot: snapshot, Compatibility: &compatibility}, nil
+			}
+			app.disconnect(boardID)
+			return BoardConnection{Board: app.board(boardID), Daemon: &info, Capabilities: &info.Capabilities, Snapshot: snapshot, Compatibility: &compatibility, Error: compatibilityErr.Error()}, compatibilityErr
 		}
+		cancel()
 		app.disconnect(boardID)
 	}
 	connection, connectErr := app.ConnectBoard(boardID)
@@ -496,7 +525,13 @@ func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
 }
 
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
-	allowed := map[string]int{"kimi-k3": 0, "qwen3.8-max": 1, "glm-5.2": 2}
+	allowed := map[string]int{
+		"kimi-k3":           0,
+		"qwen3.8-max":       1,
+		"glm-5.2":           2,
+		"deepseek-v4-flash": 3,
+		"deepseek-v4-pro":   4,
+	}
 	filtered := make([]hobot.ModelOption, 0, len(models))
 	for _, model := range models {
 		if model.Provider == "drobotics" {

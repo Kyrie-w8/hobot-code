@@ -30,6 +30,7 @@ var protocolCapabilities = []string{
 	"tasks.models",
 	"tasks.permissions",
 	"tasks.images",
+	"models.capabilities.v1",
 	"workspaces.browse",
 	"bridge.stdio",
 }

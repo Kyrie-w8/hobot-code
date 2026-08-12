@@ -20,6 +20,55 @@ func TestBoardConnectionSerializesReconnectState(t *testing.T) {
 	}
 }
 
+func TestConnectionCompatibilityMatrix(t *testing.T) {
+	allCapabilities := []string{
+		"tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "system.snapshot",
+		"support.bundle.v1", "deployments.v1", "tasks.fork", "workspaces.browse",
+	}
+	info := hobot.DaemonInfo{
+		Version: "0.24.0", Protocol: hobot.ProtocolVersion,
+		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 3, Capabilities: allCapabilities},
+	}
+	snapshot := &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5"}
+	compatible, err := assessConnectionCompatibility(info, snapshot, nil)
+	if err != nil || compatible.Status != "supported" || !compatible.ValidatedTarget {
+		t.Fatalf("validated S100 was not supported: result=%+v err=%v", compatible, err)
+	}
+
+	limitedInfo := info
+	limitedInfo.Capabilities.Capabilities = []string{"tasks.lifecycle", "tasks.page", "events.page", "system.snapshot"}
+	limited, err := assessConnectionCompatibility(limitedInfo, &hobot.SystemSnapshot{BoardID: "s600", RDKOSVersion: "5.2.0"}, nil)
+	if err != nil || limited.Status != "limited" || len(limited.Issues) == 0 || limited.ValidatedTarget {
+		t.Fatalf("missing optional capabilities or unvalidated OS did not degrade: result=%+v err=%v", limited, err)
+	}
+
+	protocolInfo := info
+	protocolInfo.Capabilities.ProtocolMin = 2
+	incompatible, err := assessConnectionCompatibility(protocolInfo, snapshot, nil)
+	if err == nil || incompatible.Status != "upgrade-required" {
+		t.Fatalf("protocol mismatch was accepted: result=%+v err=%v", incompatible, err)
+	}
+
+	missingRequired := info
+	missingRequired.Capabilities.Capabilities = []string{"tasks.lifecycle", "events.page"}
+	incompatible, err = assessConnectionCompatibility(missingRequired, snapshot, nil)
+	if err == nil || incompatible.Status != "upgrade-required" {
+		t.Fatalf("missing required capability was accepted: result=%+v err=%v", incompatible, err)
+	}
+}
+
+func TestVersionCompatibilityHelpers(t *testing.T) {
+	if currentStudioVersion() != "0.24.0" {
+		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
+	}
+	if !differentReleaseLine("0.24.0", "0.23.9") || differentReleaseLine("0.24.0", "0.24.1") {
+		t.Fatal("release line comparison is incorrect")
+	}
+	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {
+		t.Fatalf("RDK OS major parsing failed: major=%d ok=%v", major, ok)
+	}
+}
+
 func TestBoardStoreRoundTrip(t *testing.T) {
 	store := &boardStore{path: filepath.Join(t.TempDir(), "boards.json")}
 	want := []Board{{
@@ -143,11 +192,16 @@ func TestStudioModelsOnlyExposeDRobotics(t *testing.T) {
 	models := studioModels([]hobot.ModelOption{
 		{Provider: "anthropic", ID: "claude-sonnet", Name: "Claude Sonnet"},
 		{Provider: "drobotics", ID: "claude-sonnet", Name: "Claude via gateway"},
-		{Provider: "drobotics", ID: "kimi-k3", Name: "kimi-k3"},
+		{Provider: "drobotics", ID: "kimi-k3", Name: "kimi-k3", Default: true, Capabilities: hobot.ModelCapabilities{Reasoning: true, ImageInput: true}, CapabilitySource: "runtime-model-table"},
 		{Provider: "drobotics", ID: "qwen3.8-max", Name: "qwen3.8-max"},
 		{Provider: "drobotics", ID: "glm-5.2", Name: "glm-5.2"},
+		{Provider: "drobotics", ID: "deepseek-v4-flash", Name: "deepseek-v4-flash", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
+		{Provider: "drobotics", ID: "deepseek-v4-pro", Name: "deepseek-v4-pro", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
 	})
-	if len(models) != 3 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" {
+	if len(models) != 5 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" || models[3].ID != "deepseek-v4-flash" || models[4].ID != "deepseek-v4-pro" {
 		t.Fatalf("unexpected Studio models: %+v", models)
+	}
+	if !models[0].Default || !models[0].Capabilities.ImageInput || models[0].CapabilitySource != "runtime-model-table" {
+		t.Fatalf("Studio discarded model capabilities: %+v", models[0])
 	}
 }

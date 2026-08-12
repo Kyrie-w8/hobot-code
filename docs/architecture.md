@@ -68,7 +68,7 @@ daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但�
 `extensions/rdk/index.ts` 是发行包必须加载的产品扩展入口，负责向 Pi 注册 Provider、工具、命令与生命周期事件，并编排各个独立模块。协议解析、底层安全判定和状态存储核心均由独立模块承担，入口只连接并执行这些策略：
 
 1. **`drobotics-provider.ts`**：编排 Anthropic-compatible 网络请求、超时、SSE 与有界缓冲回退，并生成 Pi 原生 thinking、text、tool call 和 usage 事件。
-2. **Provider helpers**：`drobotics-config.mjs`、`drobotics-payload.mjs`、`drobotics-response.mjs`、`anthropic-sse.mjs` 和 `text-safety.mjs` 分别收口超时配置、请求转换、响应验证、有界分帧与 Unicode 修复，避免协议细节混入主编排。
+2. **Provider helpers**：`drobotics-config.mjs`、`drobotics-payload.mjs`、`drobotics-response.mjs`、`anthropic-sse.mjs`、`cache-metrics.mjs` 和 `text-safety.mjs` 分别收口超时配置、请求转换、响应验证、有界分帧、缓存观测与 Unicode 修复，避免协议细节混入主编排。
 3. **入口中的板卡编排**：从 device tree、`/etc/version`、procfs、sysfs 和 RDK 工具路径取得实机证据，并按 X5 3.x、S100 4.x、S600 5.x 路由版本化知识。
 4. **`control-plane.mjs`、`runtime-safety.mjs` 与 `user-paths.mjs`**：实现权限和质量门辅助逻辑、脱敏、工作区指纹、路径解析及高风险 Shell 识别。
 5. **`memory-store.ts`、`goal-store.ts`、`hook-runner.ts`、`lsp-manager.ts` 与 `notifications.ts`**：分别管理 SQLite 状态、结构化 Hook 子进程、按需语言服务器和终端通知，入口只负责生命周期衔接。
@@ -82,6 +82,8 @@ daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但�
 D-Robotics 适配器将 Pi 消息、工具描述和 thinking 预算转换为 Anthropic Messages 请求。文本在序列化前修复不完整的 Unicode 代理项，响应体则受超时与字节上限约束。
 
 正常路径以 `stream: true` 请求，并逐条解析 SSE。只有在网关明确返回非 SSE 内容，或返回已知的不支持流式响应时，才读取有界的完整响应；因此两种路径对 Pi 暴露相同的增量事件语义，而不会无限缓冲响应体。
+
+成功响应后，Provider 从 usage 记录未缓存输入、缓存读取和缓存写入 token。系统 Prompt 与有序工具定义只做 SHA-256 指纹，用于发现模型路由、Prompt 或工具契约在相邻请求间变化；请求内容本身不进入指标状态。进程内累计值覆盖完整会话，最近明细有界保留 32 条。该指纹是客户端稳定前缀诊断，不冒充上游私有缓存键。
 
 ## 控制面顺序
 

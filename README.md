@@ -11,7 +11,7 @@ Hobot Code 不维护 Pi 的叉路 TUI。终端交互来自固定版本的 Pi，�
 - **原生终端体验**：流式 thinking、工具调用、会话恢复、分支、压缩和快捷键。
 - **RDK 实机上下文**：按需读取型号、RDK OS、温度、内存、BPU 设备和工具状态。
 - **版本化板卡知识**：按 X5 3.x、S100 4.x、S600 5.x 路由 27 个专业主题，并在每篇资料中保留官方来源与核对日期。
-- **开放模型接入**：内置 D-Robotics Kimi K3、Qwen 3.8 Max 和 GLM 5.2 网关适配，也兼容 Pi 的 Provider、`models.json` 和 `/login`。
+- **开放模型接入**：内置 D-Robotics Kimi K3、Qwen 3.8 Max、GLM 5.2、DeepSeek V4 Flash 和 DeepSeek V4 Pro 网关适配，也兼容 Pi 的 Provider、`models.json` 和 `/login`。
 - **可组合扩展**：继续使用 Pi packages、extensions、MCP、Skills、Prompt templates 和 themes。
 - **工程保障**：工具权限、质量门、Hook、资源受限 LSP、持久记忆和持久目标。
 - **并行协作**：`/btw` 在右侧窗格启动独立、多轮、临时的侧边 Agent。
@@ -81,13 +81,13 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
-桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.24.0 增加一键诊断与支持包下载。旧板端仍可管理任务，Studio 会按能力标识隐藏不支持的入口。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
+桌面应用连接时会协商协议、event schema、功能能力、产品版本、板型与 RDK OS。最低要求是 event schema 2、任务生命周期/分页能力和 `hobot bridge --stdio`；不满足硬条件时拒绝半兼容连接，可降级能力则在板卡详情中明确提示。升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.24.0 增加一键诊断与支持包下载。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。详细边界见[兼容矩阵](docs/compatibility.md)。
 
 消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。编辑历史用户消息会保留该消息之前的上下文，用修改后的内容替换原消息，并在同一主对话中隐藏后续旧时间线，不会创建可见的 Side Agent。左侧项目可以折叠，每个项目可创建多个对话；新对话会从首条指令生成可修改标题。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
 输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 放行非 root 会话的日常 Shell 与工作区编辑。板卡以 root 连接时，变更工具仍要求确认。审批时可选择仅放行一次、仅在当前任务记住这一次完全相同的工具调用，或拒绝；危险 Shell 不提供记忆授权。工作区外写入和受保护系统路径仍需要单独处理。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
 
-桌面端支持在新任务和后续消息中附加 JPEG、PNG、WebP 或 GIF 图片。大图会在 Mac 本地缩放压缩，每条消息最多 4 张、编码前合计不超过 1 MiB；图片通过既有 SSH/RPC 通道直接写入板端会话，不创建公开上传地址，事件日志只保留文件名和 MIME 摘要。PDF、Word 等文档附件尚未开放，也不会被静默当作纯文本发送。
+桌面端在当前模型明确声明支持图像输入时，允许在新任务和后续消息中附加 JPEG、PNG、WebP 或 GIF 图片；模型能力未知时按纯文本处理。大图会在 Mac 本地缩放压缩，每条消息最多 4 张、编码前合计不超过 1 MiB；图片通过既有 SSH/RPC 通道直接写入板端会话，不创建公开上传地址，事件日志只保留文件名和 MIME 摘要。Studio 和 agentd 会分别校验同一套[模型能力契约](docs/model-capabilities.md)，客户端不能绕过。PDF、Word 等文档附件尚未开放，也不会被静默当作纯文本发送。
 
 新任务页提供板卡诊断、模型部署、Camera pipeline、TROS 和 BPU 性能验证入口。板卡诊断等通用入口只会预填一条可编辑的专业任务。0.23.0 及之后的板端上，**Deploy model** 会打开部署向导：它在当前项目内有界扫描模型候选，结合实机板型标注转换需求或疑似不匹配，用户选择产物和目标后才创建持久任务。任务仍走板端审批；0.23.1 要求 schema-v2 报告包含量化前后数值精度、模型与端到端延迟分布、资源采样和温度/内存限制，只有这些证据、板型、产物路径和 SHA-256 均经守护进程复核后，Studio 才显示为 Verified deployment。RDK X5 的 RegNet-X-400MF 目标闭环与固定验收命令见[部署说明](docs/regnet-x5-deployment.md)；[RT-IGEV 说明](docs/rt-igev-x5-deployment.md)保留了复杂立体模型未达到实时阈值时的方案筛选边界。
 
@@ -126,7 +126,7 @@ ANTHROPIC_MODEL=kimi-k3
 API_TIMEOUT_MS=3000000
 ```
 
-内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max` 和 `drobotics/glm-5.2`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
+内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
 
 安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。D-Robotics Provider 优先请求 Anthropic SSE 流；若端点明确不支持流式格式或返回普通 JSON，则回退到有大小上限的缓冲响应。
 
@@ -155,6 +155,7 @@ hobot persistent
 | `/rdk`、`/doctor` | 查看板卡摘要或完整诊断 |
 | `/knowledge <问题>` | 检索当前板卡线路的专业知识与官方来源 |
 | `/system-prompt`、`/system-prompt full` | 查看系统 Prompt 分层或展开完整内容 |
+| `/cache`、`/cache reset` | 查看当前进程的模型缓存命中率、输入 token 构成和前缀稳定性 |
 | `/permissions` | 查看或修改工具权限；`preset developer` 一键启用受保护的开发权限 |
 | `/init`、`/gate` | 初始化并运行项目质量门 |
 | `/memory`、`/goal` | 管理持久记忆与长期目标 |
@@ -165,6 +166,8 @@ hobot persistent
 | `/quit`、`/q`、`/exit` | 退出 |
 
 `Escape` 中断当前模型或工具，`Ctrl+D` 在编辑区为空时退出，`Ctrl+T` 显示或隐藏 thinking。其余快捷键以 `/hotkeys` 为准。
+
+缓存命中率按网关实际 usage 计算，不用字符数或本地估算替代。D-Robotics 端点实测中，Kimi K3 默认产品路径热轮为 **94.58%**，约 50K token 严格稳定前缀达到 **99.46%**。DeepSeek V4 Flash 的同端点路由目前没有返回缓存命中，并暴露了重复长前缀空响应/慢响应问题；Hobot Code 会拒绝空成功响应，不把异常数据包装成性能结果。完整方法和逐轮数据见[缓存效率审计](docs/cache-efficiency.md)。
 
 全屏模式中可用鼠标主键拖选对话文本，松开后会通过终端剪贴板协议复制到本地电脑；执行 `/copy` 可复制最近一条 Agent 回复。`hobot persistent` 会转发该协议。若本地终端禁用了远程剪贴板写入，可使用 `Shift` 加鼠标拖选走终端自身的复制路径，或在终端设置中允许 OSC 52。
 
@@ -290,6 +293,8 @@ make release
 | [配置说明](docs/configuration.md) | 模型、权限、记忆、目标、Hook、通知和 LSP |
 | [系统架构](docs/architecture.md) | 运行路径、适配层、数据边界与部署模型 |
 | [agentd 协议](docs/agentd-protocol.md) | 后台任务协议、状态机、重连与安全边界 |
+| [模型能力契约](docs/model-capabilities.md) | 模型默认选择、推理与图像输入能力协商 |
+| [兼容矩阵](docs/compatibility.md) | Studio、agentd、板型与 RDK OS 的支持边界 |
 | [用户目录布局](docs/user-directory-layout.md) | 配置、状态、迁移与安装目标用户 |
 | [设计调研](docs/prime-agent-crush-review.md) | Prime Agent 与 Crush 的可借鉴设计 |
 | [发布流程](docs/releasing.md) | 版本、GitHub Release、来源证明与实机检查 |

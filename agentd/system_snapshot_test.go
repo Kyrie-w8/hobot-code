@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSystemSnapshotHelpers(t *testing.T) {
@@ -24,6 +26,42 @@ func TestSystemSnapshotHelpers(t *testing.T) {
 		if got := detectBoardID(input); got != want {
 			t.Fatalf("detectBoardID(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestHardwareLeaseSnapshotIsPrivateBoundedAndLive(t *testing.T) {
+	cfg := testConfig(t)
+	root := filepath.Join(cfg.StateRoot, "hardware-leases")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeLease := func(resource string, value map[string]any, mode os.FileMode) {
+		t.Helper()
+		dir := filepath.Join(root, resource)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := json.Marshal(value)
+		if err := os.WriteFile(filepath.Join(dir, "owner.json"), append(content, '\n'), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	writeLease("bpu", map[string]any{
+		"schemaVersion": 1, "resource": "bpu", "taskId": "task-live", "pid": os.Getpid(), "cwd": cfg.StateRoot, "acquiredAt": now,
+	}, 0o600)
+	writeLease("camera-video0", map[string]any{
+		"schemaVersion": 1, "resource": "camera-video0", "taskId": "task-dead", "pid": 99999999, "acquiredAt": now,
+	}, 0o600)
+	writeLease("media-pipeline", map[string]any{
+		"schemaVersion": 1, "resource": "media-pipeline", "taskId": "too-open", "pid": os.Getpid(), "acquiredAt": now,
+	}, 0o644)
+	writeLease("not-a-resource", map[string]any{
+		"schemaVersion": 1, "resource": "not-a-resource", "taskId": "invalid", "pid": os.Getpid(), "acquiredAt": now,
+	}, 0o600)
+	leases := readHardwareLeases(cfg)
+	if len(leases) != 1 || leases[0].Resource != "bpu" || leases[0].TaskID != "task-live" || leases[0].PID != os.Getpid() {
+		t.Fatalf("unexpected hardware leases: %+v", leases)
 	}
 }
 

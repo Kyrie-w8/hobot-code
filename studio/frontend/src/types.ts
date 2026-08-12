@@ -25,12 +25,28 @@ export type DaemonInfo = {
   stateRoot: string;
 };
 
+export type CompatibilityIssue = {code: string; severity: 'warning' | 'error'; message: string; action?: string};
+export type ConnectionCompatibility = {
+  status: 'supported' | 'limited' | 'upgrade-required';
+  summary: string;
+  appVersion: string;
+  agentdVersion: string;
+  protocol: number;
+  eventSchema: number;
+  boardId?: string;
+  rdkOsVersion?: string;
+  validatedTarget: boolean;
+  issues: CompatibilityIssue[];
+};
+
 export type Connection = {
   board: Board;
   connected: boolean;
   reconnected?: boolean;
   daemon?: DaemonInfo;
   capabilities?: Capabilities;
+  snapshot?: SystemSnapshot;
+  compatibility?: ConnectionCompatibility;
   error?: string;
 };
 
@@ -42,6 +58,7 @@ export type AIMemoryInfo = {available: boolean; bpuAllocationAvailable: boolean;
 export type AcceleratorMemoryPoolInfo = {name: string; totalBytes: number; usedBytes: number; freeBytes: number; processBytes?: number; systemBytes?: number};
 export type AcceleratorProcessInfo = {pid: number; name: string; rssBytes: number; hbmemBytes: number};
 export type AcceleratorInfo = {available: boolean; source?: string; capturedAt?: string; ddrReadMiBps?: number; ddrWriteMiBps?: number; hbmemPools?: AcceleratorMemoryPoolInfo[]; processes?: AcceleratorProcessInfo[]};
+export type HardwareLease = {resource: string; taskId: string; pid: number; cwd?: string; acquiredAt: string};
 export type SystemSnapshot = {
   capturedAt: string;
   board: string;
@@ -60,6 +77,7 @@ export type SystemSnapshot = {
   bpuTelemetry?: BPUTelemetryInfo;
   aiMemory?: AIMemoryInfo;
   accelerator?: AcceleratorInfo;
+  hardwareLeases?: HardwareLease[];
   rdkUtilities: Record<string, boolean>;
   uptimeSeconds: number;
 };
@@ -132,7 +150,14 @@ export type TaskEvent = {
 export type TaskPage = { tasks: Task[]; nextCursor?: string };
 export type EventPage = { events: TaskEvent[]; nextAfter?: number; hasMore: boolean };
 export type EventEnvelope = { boardId: string; event: TaskEvent };
-export type ModelOption = {provider: string; id: string; name: string};
+export type ModelOption = {
+  provider: string;
+  id: string;
+  name: string;
+  default?: boolean;
+  capabilities?: {reasoning: boolean; imageInput: boolean};
+  capabilitySource?: 'runtime-model-table' | 'conservative-default' | string;
+};
 export type ImageContent = {type: 'image'; data: string; mimeType: string; name?: string};
 export type AttachmentSummary = {name?: string; mimeType: string};
 export type WorkspaceEntry = {name: string; path: string};

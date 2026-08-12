@@ -169,6 +169,11 @@ func sanitizeSupportSnapshot(snapshot *systemSnapshot) {
 	snapshot.Hostname = "[redacted]"
 	snapshot.Disk.Path = "hobot-code-state"
 	snapshot.Accelerator.Processes = nil
+	for index := range snapshot.HardwareLeases {
+		snapshot.HardwareLeases[index].TaskID = ""
+		snapshot.HardwareLeases[index].PID = 0
+		snapshot.HardwareLeases[index].Cwd = ""
+	}
 	for index, device := range snapshot.BPUDevices {
 		snapshot.BPUDevices[index] = filepath.Base(device)
 	}

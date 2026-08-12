@@ -10,9 +10,32 @@ import (
 )
 
 func TestModelTableAndSelection(t *testing.T) {
-	models := parseModelTable([]byte("provider model context max-out\ndrobotics kimi-k3 1M 8K\nopenai gpt-5 1M 128K\n"))
+	models := parseModelTable([]byte("provider model context max-out thinking images\ndrobotics kimi-k3 1M 8K yes yes\nopenai gpt-5 1M 128K yes no\n"))
 	if len(models) != 2 || models[0].Provider != "drobotics" || models[0].ID != "kimi-k3" {
 		t.Fatalf("unexpected models: %+v", models)
+	}
+	if !models[0].Capabilities.Reasoning || !models[0].Capabilities.ImageInput || models[0].CapabilitySource != "runtime-model-table" {
+		t.Fatalf("runtime capabilities were not parsed: %+v", models[0])
+	}
+	if !models[1].Capabilities.Reasoning || models[1].Capabilities.ImageInput {
+		t.Fatalf("negative image capability was not parsed: %+v", models[1])
+	}
+	legacy := parseModelTable([]byte("provider model context max-out\ndrobotics legacy 1M 8K\n"))
+	if len(legacy) != 1 || legacy[0].Capabilities.ImageInput || legacy[0].CapabilitySource != "conservative-default" {
+		t.Fatalf("legacy runtime must use conservative capabilities: %+v", legacy)
+	}
+	t.Setenv("ANTHROPIC_MODEL", "openai/gpt-5")
+	markDefaultModel(models)
+	if !models[1].Default || models[0].Default {
+		t.Fatalf("default model was not marked: %+v", models)
+	}
+	t.Setenv("ANTHROPIC_MODEL", "missing-model")
+	for index := range models {
+		models[index].Default = false
+	}
+	markDefaultModel(models)
+	if !models[0].Default {
+		t.Fatalf("missing configured default did not fall back to kimi-k3: %+v", models)
 	}
 	if normalized := normalizeModelSelection("drobotics/kimi-k3"); normalized != "drobotics/kimi-k3" {
 		t.Fatalf("model selection was not preserved: %q", normalized)

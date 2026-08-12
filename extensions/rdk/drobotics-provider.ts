@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-ai";
 
 import { iterateAnthropicSse, readBoundedBody } from "./anthropic-sse.mjs";
+import { recordCacheObservation } from "./cache-metrics.mjs";
 import { resolveGatewayTimeout } from "./drobotics-config.mjs";
 import { convertMessages, convertTools } from "./drobotics-payload.mjs";
 import {
@@ -184,6 +185,9 @@ function consumeBufferedGatewayResponse(
   output.stopReason = mapStopReason(result.stop_reason);
   if (output.stopReason === "error") {
     throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${result.stop_reason}`);
+  }
+  if (output.content.length === 0) {
+    throw new Error("Model gateway returned an empty successful response");
   }
 }
 
@@ -391,6 +395,9 @@ async function consumeStreamingGatewayResponse(
   if (output.stopReason === "error") {
     throw new Error(`Model gateway stopped with unsupported or unsuccessful reason: ${output.rawStopReason ?? "unknown"}`);
   }
+  if (output.content.length === 0) {
+    throw new IncompleteGatewayStreamError("Model gateway returned an empty successful response");
+  }
 }
 
 export function streamDrobotics(
@@ -440,20 +447,25 @@ export function streamDrobotics(
       }
       const maxTokens = Math.min(requestedMaxTokens, model.maxTokens);
       const budget = thinkingBudget(extendedOptions.reasoning, maxTokens, extendedOptions.thinkingBudgets);
+      const deepSeekV4 = /^deepseek-v4-(flash|pro)$/.test(model.id);
       const temperature = extendedOptions.temperature;
       if (temperature !== undefined && (!Number.isFinite(temperature) || temperature < 0 || temperature > 1)) {
         throw new Error("Model gateway temperature must be between 0 and 1");
       }
+      const systemPrompt = context.systemPrompt ? toWellFormedText(context.systemPrompt) : undefined;
+      const convertedTools = convertTools(context.tools);
       const body: JsonRecord = {
         model: model.id,
         max_tokens: maxTokens,
         stream: true,
-        system: context.systemPrompt ? toWellFormedText(context.systemPrompt) : undefined,
+        system: systemPrompt,
         messages: convertMessages(context.messages, {
           allowEmptyThinkingSignature: model.compat?.allowEmptySignature === true,
         }),
-        tools: convertTools(context.tools),
-        ...(budget ? { thinking: { type: "enabled", budget_tokens: budget } } : {}),
+        tools: convertedTools,
+        ...(budget
+          ? { thinking: { type: "enabled", budget_tokens: budget } }
+          : deepSeekV4 ? { thinking: { type: "disabled" } } : {}),
         ...(temperature === undefined ? {} : { temperature }),
       };
 
@@ -535,6 +547,12 @@ export function streamDrobotics(
       if (!["stop", "length", "toolUse", "deferred"].includes(output.stopReason)) {
         throw new Error(`Model gateway ended in an invalid state: ${output.stopReason}`);
       }
+      recordCacheObservation({
+        model: model.id,
+        usage: output.usage,
+        systemPrompt,
+        tools: convertedTools,
+      });
       stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse" | "deferred", message: output });
       stream.end();
     } catch (error) {

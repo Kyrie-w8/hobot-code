@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,6 +80,21 @@ func TestImagePromptPersistsOnlyAttachmentMetadata(t *testing.T) {
 	}
 	if state := current.snapshot(); state.Status != statusStopped || state.PID != 0 {
 		t.Fatalf("stop returned before worker exit: %+v", state)
+	}
+}
+
+func TestImagePromptRejectsModelWithoutImageCapability(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.start(startTaskParams{
+		Name: "text-only", Cwd: cfg.StateRoot, Prompt: "inspect this image", Model: "drobotics/text-only",
+		Images: []imageContent{{Type: "image", MimeType: "image/png", Name: "board.png", Data: base64.StdEncoding.EncodeToString([]byte("png"))}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not declare image input support") {
+		t.Fatalf("text-only model accepted an image: %v", err)
 	}
 }
 

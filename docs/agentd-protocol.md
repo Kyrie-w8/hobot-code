@@ -114,6 +114,10 @@ Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 
 
 `system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，并在存在时调用固定路径的官方 `hrt_ucp_monitor` 采集 DDR 带宽。该命令有 2.5 秒超时、256 KiB 输出上限和 5 秒缓存，失败时不影响其他快照字段。BPU 负载来自每个核心的 `ratio` 节点，频率来自对应 devfreq；`bpuTelemetry.status` 区分可用、未检测到设备、RDK OS 未暴露指标和读取失败，客户端不得用 CPU 指标代替。
 
+明确使用 `hrt_model_exec` 等 BPU 工具、`/dev/videoN` 相机设备或地瓜 `vflow/vnode` 媒体管线的 Shell 调用，会在执行前获取当前 OS 用户范围内的硬件资源租约。冲突调用在启动前被拒绝，并返回占用任务、PID 和获取时间；工具结束、失败或 session 关闭时释放。多资源调用按稳定顺序原子抢占，失败会回滚已取得租约；进程崩溃留下的租约会在下一次获取时回收。租约记录位于 `~/.local/state/hobot-code/hardware-leases`，只保存资源名、任务 ID、PID、工作目录与时间，不保存完整命令、模型输入或凭据。`system.snapshot.hardwareLeases` 只返回所有者匹配、权限私有、格式有效且 PID 仍存活的有界摘要。
+
+支持包只保留租约的资源名和获取时间，任务 ID、PID 与工作目录会被清空，避免诊断文件泄露项目路径或进程身份。
+
 `support.bundle` 只组合固定的系统快照、守护进程上限、私有路径权限检查、固定 RDK 工具可用性和任务元数据统计，不读取事件、session、worker stderr、daemon 原始日志、环境变量或工作区。主机名、状态目录和设备绝对路径会被替换；任务标题、工作目录、session 标识、部署路径和原始错误不会进入结果，任务关联与错误仅使用每份文件独立随机密钥生成的截断 HMAC-SHA-256 指纹和错误类别，密钥不持久化。`includeContent` 只决定是否把同一份文件内容通过现有受 UID 保护的协议返回，不改变收集范围或权限判定。
 
 Hbmem 容量与当前分配优先来自 `/sys/kernel/debug/ion/heaps/all_heap_info`，`accelerator.source=ion-debugfs` 表示数值来自内核 heap 账本。服务仅把汇总表中仍有同名 `/proc/<pid>/status` 的记录归属到活跃应用，返回其 Hbmem 与 RSS；其余驱动、固件、已退出进程或无法安全归属的分配计入对应 pool 的 `systemBytes`。PID、heap、客户端与进程数均有上限，且进程名不匹配时拒绝归属，避免 PID 复用产生错误结果。S600 的某些 `carveout` 驱动会把设备地址窗口而非可用物理内存作为 heap 容量；此时服务保留精确分配量与进程归属，但不返回虚假的容量百分比。debugfs 不可读时才回退到 `hrt_ucp_monitor-estimate`，该来源的 pool 与进程信息只能视为近似值。各 Hbmem pool 是共享 DDR 中用途不同的保留区，不会相加成虚构“显存总量”；`carveout` 也可能由 BPU、编解码和系统组件共同使用。

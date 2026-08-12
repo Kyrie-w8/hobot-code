@@ -1,5 +1,13 @@
 #!/bin/sh
 
+if [ "${1:-}" = "--offline" ] && [ "${2:-}" = "--list-models" ]; then
+  printf '%s\n' \
+    'provider model context max-out thinking images' \
+    'drobotics kimi-k3 1M 8K yes yes' \
+    'drobotics text-only 1M 8K yes no'
+  exit 0
+fi
+
 session_dir=
 session_file=
 while [ "$#" -gt 0 ]; do

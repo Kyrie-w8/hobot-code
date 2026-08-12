@@ -105,6 +105,7 @@ async function createProviderHarness(t) {
   const extensionRoot = new URL("../extensions/rdk/", import.meta.url);
   for (const name of [
     "anthropic-sse.mjs",
+    "cache-metrics.mjs",
     "drobotics-config.mjs",
     "drobotics-payload.mjs",
     "drobotics-response.mjs",
@@ -155,13 +156,15 @@ export function createAssistantMessageEventStream() {
 }
 `);
 
-  return import(`${pathToFileURL(join(root, "drobotics-provider.mjs")).href}?fixture=${Date.now()}`);
+  const provider = await import(`${pathToFileURL(join(root, "drobotics-provider.mjs")).href}?fixture=${Date.now()}`);
+  const cacheMetrics = await import(pathToFileURL(join(root, "cache-metrics.mjs")).href);
+  return { ...provider, cacheMetrics };
 }
 
-function providerModel() {
+function providerModel(id = "kimi-k3") {
   return {
-    id: "kimi-k3",
-    name: "Kimi K3",
+    id,
+    name: id,
     api: "drobotics-anthropic",
     provider: "drobotics",
     baseUrl: "https://gateway.invalid",
@@ -436,9 +439,10 @@ test("gateway stream errors preserve standard and compatibility messages", () =>
 });
 
 test("D-Robotics provider fallback state machine", async (t) => {
-  const { streamDrobotics } = await createProviderHarness(t);
+  const { streamDrobotics, cacheMetrics } = await createProviderHarness(t);
 
   await t.test("empty SSE retries once and emits only the buffered response", async () => {
+    cacheMetrics.resetCacheMetrics();
     const requests = [];
     const fetch = fakeFetchSequence([
       sseResponse([emptyMessageStart()]),
@@ -483,6 +487,11 @@ test("D-Robotics provider fallback state machine", async (t) => {
       totalTokens: 17,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     });
+    const metrics = cacheMetrics.getCacheMetrics();
+    assert.equal(metrics.requests, 1);
+    assert.equal(metrics.cacheRead, 2);
+    assert.equal(metrics.cacheWrite, 1);
+    assert.equal(metrics.latest.model, "kimi-k3");
   });
 
   await t.test("a non-standard empty stream error retries once through the buffered gateway", async () => {
@@ -501,6 +510,40 @@ test("D-Robotics provider fallback state machine", async (t) => {
     assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
     assert.equal(events.at(-1).type, "done");
     assert.equal(events.at(-1).message.responseId, "buffered-after-stream-error");
+  });
+
+  await t.test("DeepSeek thinking off is explicit and an empty success retries once then fails", async () => {
+    const empty = {
+      id: "deepseek-empty",
+      type: "message",
+      role: "assistant",
+      content: [],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 42, output_tokens: 0, cache_read_input_tokens: 0 },
+    };
+    const requests = [];
+    const fetch = fakeFetchSequence([
+      sseResponse([
+        emptyMessageStart("deepseek-empty-stream", 42),
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } },
+        { type: "message_stop" },
+      ]),
+      jsonResponse(empty),
+    ], requests);
+
+    const events = await collectProviderEvents(streamDrobotics(
+      providerModel("deepseek-v4-flash"),
+      providerContext(),
+      providerOptions(fetch),
+    ));
+
+    assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
+    assert.deepEqual(requests.map((request) => request.body.thinking), [
+      { type: "disabled" },
+      { type: "disabled" },
+    ]);
+    assert.equal(events.at(-1).type, "error");
+    assert.match(events.at(-1).error.errorMessage, /empty successful response/);
   });
 
   await t.test("partial SSE fails without a buffered retry", async () => {

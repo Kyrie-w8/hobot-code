@@ -28,9 +28,9 @@ HOBOT_CODE_MODEL_CONTEXT_WINDOW=1000000
 HOBOT_CODE_MODEL_MAX_TOKENS=8192
 ```
 
-Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max` 和 `drobotics/glm-5.2`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除另外两个内置模型。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
+Hobot Code 内置 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`，默认选择 Kimi K3，thinking 等级为 `max`。`ANTHROPIC_MODEL` 可覆盖默认选择，但不会移除其他内置模型。DeepSeek V4 在 thinking off 时会显式发送 `thinking.type=disabled`，避免上游“省略即默认开启”的语义产生额外推理。当前 D-Robotics DeepSeek V4 路由仅声明文本输入；不要向它附加图片。`API_TIMEOUT_MS` 是单次网关请求的硬超时，单位为毫秒，默认值为 3000000，并优先于 Pi 传入的 Provider 超时；数值会限制在 1000 到 3600000 之间，空值或非数值回退到默认值。Pi 的 Agent 请求超时和 HTTP 空闲超时也默认设为 3000000 ms。上下文窗口和最大输出来自上面的 Provider 环境变量，不由 `settings.json` 的 TUI 设置决定。
 
-D-Robotics Provider 优先发起 Anthropic SSE 请求并实时转发 thinking、文本、工具参数和 usage。端点明确不支持流式格式或返回普通 JSON 时，会回退到有字节上限的缓冲读取。
+D-Robotics Provider 优先发起 Anthropic SSE 请求并实时转发 thinking、文本、工具参数和 usage。端点明确不支持流式格式或返回普通 JSON 时，会回退到有字节上限的缓冲读取。流式端点若以 `end_turn` 返回空内容，会进行一次有界缓冲回退；缓冲响应仍为空时报告协议错误，不把空白回复作为成功会话持久化。
 
 `hobot.env` 只按逐行 `KEY=VALUE` 数据解析；空行和以 `#` 开头的行会忽略，外层单引号或双引号会移除。变量替换、命令替换和其他 Shell 语法不会执行，危险的进程注入变量会被拒绝。决定配置文件自身位置的 `XDG_CONFIG_HOME`、`XDG_STATE_HOME` 和 `HOBOT_CODE_CONFIG_DIR` 也不能写在该文件中，必须在调用 `hobot` 前设置。
 
@@ -80,6 +80,16 @@ hobot update --extensions
 第三方扩展与 Skills 不是沙箱内容，它们拥有当前用户权限。安装前应审查来源和代码；root 会话尤其不应加载来源不明的 package。
 
 基础 Hobot Code 运行时不依赖板端 Node.js。Pi package 若包含 npm 依赖，安装过程仍需要可用的 `npm`，或在 `settings.json` 中配置 `npmCommand`；Git 来源还需要 `git` 和相应网络或 SSH 凭据。
+
+## Prompt 缓存观测
+
+`/cache` 显示当前 Hobot Code 进程内 D-Robotics Provider 已完成请求的缓存统计；`/cache reset` 只清空本地观测，不清理模型网关缓存。统计直接使用网关返回的 `input`、`cacheRead` 和 `cacheWrite`，命中率定义为：
+
+```text
+cacheRead / (input + cacheRead + cacheWrite)
+```
+
+输出还包含系统 Prompt 与有序工具契约的 SHA-256 指纹，用来判断相邻请求是否更换模型或改变稳定前缀。这里只保存哈希，不记录 Prompt、工具说明、会话正文或凭据。部分兼容网关可能不返回缓存字段，此时 `0%` 只表示 Hobot Code 没有收到可计量的 cache-read token，不能据此证明上游未使用缓存。完整实测与优化边界见[缓存效率审计](cache-efficiency.md)。
 
 ## 路径与开发覆盖
 

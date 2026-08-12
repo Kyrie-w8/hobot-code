@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { access, readFile, readdir } from "node:fs/promises";
 import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -37,8 +37,10 @@ import {
   writeNotificationConfig,
   writePolicy,
 } from "./control-plane.mjs";
+import { formatCacheMetrics, resetCacheMetrics } from "./cache-metrics.mjs";
 import { DEFAULT_DROBOTICS_BASE_URL, streamDrobotics } from "./drobotics-provider.ts";
 import { GoalStore, type GoalRecord } from "./goal-store.ts";
+import { acquireHardwareResourceLease, hardwareResourcesForTool } from "./hardware-resource-lease.mjs";
 import { runHooks, type HookConfig } from "./hook-runner.ts";
 import { LspManager, type LspConfig } from "./lsp-manager.ts";
 import {
@@ -57,7 +59,13 @@ import { resolveUserPaths } from "./user-paths.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = "kimi-k3";
-const BUILTIN_DROBOTICS_MODELS = [DEFAULT_MODEL, "qwen3.8-max", "glm-5.2"] as const;
+const BUILTIN_DROBOTICS_MODELS = [
+  DEFAULT_MODEL,
+  "qwen3.8-max",
+  "glm-5.2",
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
 const APPROVAL_ALLOW_ONCE = "Allow once";
@@ -683,6 +691,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   const sideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
   let disposeSideAgent = async (): Promise<void> => undefined;
   let currentSnapshot: BoardSnapshot | undefined;
+  let currentExpertPrompt: string | undefined;
   let permissionPolicy: PermissionPolicy;
   let permissionPolicyError: string | undefined;
   let qualityGateState: QualityGateState = {
@@ -735,7 +744,14 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let agentHadMutation = false;
   let lastPromptSnapshot: PromptSnapshot | undefined;
   const qualityGateBlockedCalls = new Set<string>();
+  const hardwareLeases = new Map<string, { release: () => Promise<void> }>();
   let permissionHiddenTools = new Set<string>();
+
+  async function releaseAllHardwareLeases(): Promise<void> {
+    const leases = [...hardwareLeases.values()];
+    hardwareLeases.clear();
+    await Promise.allSettled(leases.map((lease) => lease.release()));
+  }
 
   function memoryContext(
     ctx: { cwd: string; sessionManager: { getSessionFile: () => string | undefined } },
@@ -999,7 +1015,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           xhigh: "xhigh",
           max: "max",
         },
-        input: ["text", "image"],
+        input: id.startsWith("deepseek-v4-") ? ["text"] : ["text", "image"],
         contextWindow,
         maxTokens,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1220,6 +1236,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    resetCacheMetrics();
     interactiveTui = ctx.mode === "tui";
     const loadedPolicy = await loadPolicy(permissionPolicyPath());
     permissionPolicy = loadedPolicy.policy as PermissionPolicy;
@@ -1265,6 +1282,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     try {
       const snapshot = await getBoardSnapshot(false);
       currentSnapshot = snapshot;
+      currentExpertPrompt = await renderExpertPrompt(snapshot);
       ctx.ui.setStatus("hobot-rdk", compactBoardSummary(snapshot));
     } catch {
       ctx.ui.setStatus("hobot-rdk", "RDK status unavailable");
@@ -1322,7 +1340,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (sideAgentMode) return undefined;
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
-    const expertPrompt = await renderExpertPrompt(snapshot);
+    const expertPrompt = currentExpertPrompt ?? await renderExpertPrompt(snapshot);
+    currentExpertPrompt = expertPrompt;
     const status = await evaluateQualityStatus(ctx.cwd);
     setQualityStatus(ctx, status);
     const qualityContext = qualityGateState.commands.length > 0
@@ -1379,6 +1398,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     await Promise.allSettled([
       disposeSideAgent(),
       lspManager?.stopAll() ?? Promise.resolve(),
+      releaseAllHardwareLeases(),
     ]);
     try {
       closeMemory();
@@ -1393,6 +1413,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
     goalStore = undefined;
     currentGoal = undefined;
+    currentExpertPrompt = undefined;
     lspManager = undefined;
   });
 
@@ -1426,6 +1447,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async () => {
+    await releaseAllHardwareLeases();
     if (sideAgentMode) return;
     const duration = agentStartedAt ? Date.now() - agentStartedAt : 0;
     if (duration < notificationConfig.minDurationMs) return;
@@ -1569,6 +1591,25 @@ export default function rdkExtension(pi: ExtensionAPI) {
       return { block: true, reason: `PreToolUse hook blocked ${event.toolName}: ${hookResult.reason}` };
     }
 
+    const hardwareResources = hardwareResourcesForTool(event.toolName, event.input);
+    if (hardwareResources.length > 0) {
+      const sessionFile = ctx.sessionManager.getSessionFile();
+      const taskId = process.env.HOBOT_CODE_BACKGROUND_TASK_ID
+        || (sideAgentMode ? `side-${process.pid}` : basename(sessionFile || `process-${process.pid}`));
+      try {
+        const lease = await acquireHardwareResourceLease({
+          resources: hardwareResources,
+          registryDir: resolve(resolveUserPaths().stateRoot, "hardware-leases"),
+          taskId,
+          cwd: ctx.cwd,
+          toolCallId: event.toolCallId,
+        }) as { release: () => Promise<void> };
+        hardwareLeases.set(event.toolCallId, lease);
+      } catch (error) {
+        return { block: true, reason: error instanceof Error ? error.message : String(error) };
+      }
+    }
+
     if (mutatingToolNames.has(event.toolName) || toolIsMcp(event.toolName)) {
       agentHadMutation = true;
       if (qualityGateState.lastRun) {
@@ -1581,6 +1622,15 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
   pi.on("tool_result", async (event, ctx) => {
     if (event.isError) agentHadFailure = true;
+    const hardwareLease = hardwareLeases.get(event.toolCallId);
+    hardwareLeases.delete(event.toolCallId);
+    if (hardwareLease) {
+      try {
+        await hardwareLease.release();
+      } catch (error) {
+        ctx.ui.notify(`Hardware resource release failed: ${String(error)}`, "warning");
+      }
+    }
     const hookResult = await runHooks({
       config: hookConfig,
       event: "PostToolUse",
@@ -2221,7 +2271,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
       let promptSnapshot = lastPromptSnapshot;
       if (!promptSnapshot) {
         const currentPrompt = ctx.getSystemPrompt();
-        const expertPrompt = await renderExpertPrompt(snapshot);
+        const expertPrompt = currentExpertPrompt ?? await renderExpertPrompt(snapshot);
+        currentExpertPrompt = expertPrompt;
         const text = currentPrompt.includes(EXPERT_PROMPT_MARKER)
           ? currentPrompt
           : `${currentPrompt}\n\n${expertPrompt}`;
@@ -2248,6 +2299,23 @@ export default function rdkExtension(pi: ExtensionAPI) {
         lastPromptSnapshot ? "Snapshot: last model turn" : "Snapshot: startup baseline",
         "Use /system-prompt full to inspect the complete text.",
       ].join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("cache", {
+    description: "Show D-Robotics prompt-cache efficiency and prefix stability",
+    handler: async (args, ctx) => {
+      const operation = String(args ?? "").trim() || "status";
+      if (!["status", "reset"].includes(operation)) {
+        ctx.ui.notify("Usage: /cache [status|reset]", "warning");
+        return;
+      }
+      if (operation === "reset") {
+        resetCacheMetrics();
+        ctx.ui.notify("Cache observations reset for this process.", "info");
+        return;
+      }
+      ctx.ui.notify(formatCacheMetrics(), "info");
     },
   });
 

@@ -21,6 +21,17 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 		LastError: "HTTP 400 at /root/private/project using " + secret,
 	}, subscribers: map[uint64]chan taskEvent{}}
 	manager.tasks[current.metadata.ID] = current
+	leaseDir := cfg.StateRoot + "/hardware-leases/bpu"
+	if err := os.MkdirAll(leaseDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leaseOwner, _ := json.Marshal(map[string]any{
+		"schemaVersion": 1, "resource": "bpu", "taskId": current.metadata.ID,
+		"pid": os.Getpid(), "cwd": current.metadata.Cwd, "acquiredAt": time.Now().UTC(),
+	})
+	if err := os.WriteFile(leaseDir+"/owner.json", append(leaseOwner, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	server := &daemonServer{cfg: cfg, manager: manager, started: time.Now().Add(-time.Minute)}
 	bundle, err := server.createSupportBundle(true)
 	if err != nil {
@@ -45,6 +56,10 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 	}
 	if document.System.Hostname != "[redacted]" || len(document.Tasks) != 1 || document.Tasks[0].ErrorFingerprint == "" {
 		t.Fatalf("unexpected sanitized document: %+v", document)
+	}
+	if len(document.System.HardwareLeases) != 1 || document.System.HardwareLeases[0].Resource != "bpu" ||
+		document.System.HardwareLeases[0].TaskID != "" || document.System.HardwareLeases[0].PID != 0 || document.System.HardwareLeases[0].Cwd != "" {
+		t.Fatalf("support bundle leaked hardware lease identity: %+v", document.System.HardwareLeases)
 	}
 }
 

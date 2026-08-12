@@ -135,6 +135,14 @@ type AcceleratorInfo struct {
 	Processes     []AcceleratorProcessInfo    `json:"processes,omitempty"`
 }
 
+type HardwareLease struct {
+	Resource   string    `json:"resource"`
+	TaskID     string    `json:"taskId"`
+	PID        int       `json:"pid"`
+	Cwd        string    `json:"cwd,omitempty"`
+	AcquiredAt time.Time `json:"acquiredAt"`
+}
+
 type DiskInfo struct {
 	Path           string `json:"path"`
 	TotalBytes     uint64 `json:"totalBytes"`
@@ -142,25 +150,26 @@ type DiskInfo struct {
 }
 
 type SystemSnapshot struct {
-	CapturedAt    time.Time        `json:"capturedAt"`
-	Board         string           `json:"board"`
-	BoardID       string           `json:"boardId"`
-	Hostname      string           `json:"hostname"`
-	RDKOSVersion  string           `json:"rdkOsVersion"`
-	Kernel        string           `json:"kernel"`
-	Architecture  string           `json:"architecture"`
-	CPUCores      int              `json:"cpuCores"`
-	LoadAverage   []float64        `json:"loadAverage"`
-	Memory        MemoryInfo       `json:"memory"`
-	Disk          DiskInfo         `json:"disk"`
-	ThermalZones  []ThermalZone    `json:"thermalZones"`
-	BPUDevices    []string         `json:"bpuDevices"`
-	BPUCores      []BPUCoreInfo    `json:"bpuCores"`
-	BPUTelemetry  BPUTelemetryInfo `json:"bpuTelemetry"`
-	AIMemory      AIMemoryInfo     `json:"aiMemory"`
-	Accelerator   AcceleratorInfo  `json:"accelerator"`
-	RDKUtilities  map[string]bool  `json:"rdkUtilities"`
-	UptimeSeconds uint64           `json:"uptimeSeconds"`
+	CapturedAt     time.Time        `json:"capturedAt"`
+	Board          string           `json:"board"`
+	BoardID        string           `json:"boardId"`
+	Hostname       string           `json:"hostname"`
+	RDKOSVersion   string           `json:"rdkOsVersion"`
+	Kernel         string           `json:"kernel"`
+	Architecture   string           `json:"architecture"`
+	CPUCores       int              `json:"cpuCores"`
+	LoadAverage    []float64        `json:"loadAverage"`
+	Memory         MemoryInfo       `json:"memory"`
+	Disk           DiskInfo         `json:"disk"`
+	ThermalZones   []ThermalZone    `json:"thermalZones"`
+	BPUDevices     []string         `json:"bpuDevices"`
+	BPUCores       []BPUCoreInfo    `json:"bpuCores"`
+	BPUTelemetry   BPUTelemetryInfo `json:"bpuTelemetry"`
+	AIMemory       AIMemoryInfo     `json:"aiMemory"`
+	Accelerator    AcceleratorInfo  `json:"accelerator"`
+	HardwareLeases []HardwareLease  `json:"hardwareLeases,omitempty"`
+	RDKUtilities   map[string]bool  `json:"rdkUtilities"`
+	UptimeSeconds  uint64           `json:"uptimeSeconds"`
 }
 
 type SupportBundle struct {
@@ -409,9 +418,17 @@ type ImageContent struct {
 }
 
 type ModelOption struct {
-	Provider string `json:"provider"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
+	Provider         string            `json:"provider"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Default          bool              `json:"default,omitempty"`
+	Capabilities     ModelCapabilities `json:"capabilities"`
+	CapabilitySource string            `json:"capabilitySource"`
+}
+
+type ModelCapabilities struct {
+	Reasoning  bool `json:"reasoning"`
+	ImageInput bool `json:"imageInput"`
 }
 
 type WorkspaceEntry struct {

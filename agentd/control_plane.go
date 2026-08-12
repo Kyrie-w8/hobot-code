@@ -23,9 +23,17 @@ var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,255}$`
 var workspaceNamePattern = regexp.MustCompile(`^[^/\x00]{1,128}$`)
 
 type modelOption struct {
-	Provider string `json:"provider"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
+	Provider         string            `json:"provider"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Default          bool              `json:"default,omitempty"`
+	Capabilities     modelCapabilities `json:"capabilities"`
+	CapabilitySource string            `json:"capabilitySource"`
+}
+
+type modelCapabilities struct {
+	Reasoning  bool `json:"reasoning"`
+	ImageInput bool `json:"imageInput"`
 }
 
 type workspaceParams struct {
@@ -84,16 +92,24 @@ func listModels(cfg config) ([]modelOption, error) {
 	if len(models) == 0 {
 		return nil, fmt.Errorf("model discovery returned no models")
 	}
+	markDefaultModel(models)
 	return models, nil
 }
 
 func parseModelTable(output []byte) []modelOption {
 	models := make([]modelOption, 0)
 	seen := make(map[string]bool)
+	columns := make(map[string]int)
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) < 2 || fields[0] == "provider" || !modelProviderPattern.MatchString(fields[0]) || !modelIDPattern.MatchString(fields[1]) {
+		if len(fields) >= 2 && fields[0] == "provider" && fields[1] == "model" {
+			for index, field := range fields {
+				columns[field] = index
+			}
+			continue
+		}
+		if len(fields) < 2 || !modelProviderPattern.MatchString(fields[0]) || !modelIDPattern.MatchString(fields[1]) {
 			continue
 		}
 		key := fields[0] + "/" + fields[1]
@@ -101,9 +117,53 @@ func parseModelTable(output []byte) []modelOption {
 			continue
 		}
 		seen[key] = true
-		models = append(models, modelOption{Provider: fields[0], ID: fields[1], Name: fields[1]})
+		capabilities := modelCapabilities{}
+		capabilitySource := "conservative-default"
+		if thinkingColumn, ok := columns["thinking"]; ok && thinkingColumn < len(fields) {
+			capabilities.Reasoning = strings.EqualFold(fields[thinkingColumn], "yes")
+			capabilitySource = "runtime-model-table"
+		}
+		if imageColumn, ok := columns["images"]; ok && imageColumn < len(fields) {
+			capabilities.ImageInput = strings.EqualFold(fields[imageColumn], "yes")
+			capabilitySource = "runtime-model-table"
+		}
+		models = append(models, modelOption{
+			Provider: fields[0], ID: fields[1], Name: fields[1], Capabilities: capabilities, CapabilitySource: capabilitySource,
+		})
 	}
 	return models
+}
+
+func markDefaultModel(models []modelOption) {
+	model := strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL"))
+	if model == "" {
+		model = "kimi-k3"
+	}
+	selection := normalizeModelSelection(model)
+	if selection == "" {
+		selection = joinModel("drobotics", model)
+	}
+	for index := range models {
+		if joinModel(models[index].Provider, models[index].ID) == selection {
+			models[index].Default = true
+			return
+		}
+	}
+	for index := range models {
+		if models[index].Provider == "drobotics" && models[index].ID == "kimi-k3" {
+			models[index].Default = true
+			return
+		}
+	}
+	for index := range models {
+		if models[index].Provider == "drobotics" {
+			models[index].Default = true
+			return
+		}
+	}
+	if len(models) > 0 {
+		models[0].Default = true
+	}
 }
 
 func browseWorkspace(params workspaceParams) (workspaceListing, error) {

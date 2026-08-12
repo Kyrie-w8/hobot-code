@@ -2,6 +2,13 @@
 
 ## 0.24.0
 
+- Negotiate model reasoning and image-input capabilities from the board runtime, disable unsupported attachments in Studio, and enforce the same contract again in agentd.
+- Evaluate Studio/agentd protocol, event schema, feature capabilities, product versions, board model, and RDK OS during connection; reject unsafe partial compatibility and explain supported degradations.
+- Serialize BPU, camera-device, and RDK media-pipeline tool calls through private, crash-recoverable hardware leases, with live occupancy in Studio and identity-redacted support bundles.
+- Add `/cache [status|reset]` with gateway-reported aggregate/latest cache hit rates, input-token accounting, and privacy-preserving system/tool contract fingerprints.
+- Freeze the rendered RDK expert prompt for each session so runtime template or probe changes cannot silently invalidate an established model prefix.
+- Add D-Robotics DeepSeek V4 Flash and Pro to the TUI and Studio model catalogs, explicitly disable DeepSeek thinking when requested, and reject empty successful gateway responses after one bounded fallback.
+- Document reproducible S100 cache audits for Kimi K3 and DeepSeek V4 Flash, including Kimi's 99.46% stable-prefix result and the current DeepSeek route limitation.
 - Add `hobot diagnose` and the `support.bundle.v1` control-plane capability for one-command, board-side diagnostics with bounded retention and private file permissions.
 - Produce a self-describing support document with RDK identity and telemetry, daemon limits, fixed utility availability, structured health checks, and pseudonymous task summaries.
 - Exclude conversations, prompts, tool inputs and outputs, environment variables, credentials, project files, raw logs, hostnames, local paths, and raw error messages from support documents by construction, with regression tests for representative secrets.

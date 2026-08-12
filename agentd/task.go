@@ -87,10 +87,13 @@ type task struct {
 }
 
 type taskManager struct {
-	cfg     config
-	mu      sync.RWMutex
-	startMu sync.Mutex
-	tasks   map[string]*task
+	cfg          config
+	mu           sync.RWMutex
+	startMu      sync.Mutex
+	tasks        map[string]*task
+	modelsOnce   sync.Once
+	models       map[string]modelOption
+	modelListErr error
 }
 
 type startTaskParams struct {
@@ -252,6 +255,47 @@ func newTaskManager(cfg config) (*taskManager, error) {
 		}
 	}
 	return manager, nil
+}
+
+func (manager *taskManager) availableModels() (map[string]modelOption, error) {
+	manager.modelsOnce.Do(func() {
+		models, err := listModels(manager.cfg)
+		if err != nil {
+			manager.modelListErr = err
+			return
+		}
+		manager.models = make(map[string]modelOption, len(models))
+		for _, model := range models {
+			manager.models[joinModel(model.Provider, model.ID)] = model
+		}
+	})
+	return manager.models, manager.modelListErr
+}
+
+func (manager *taskManager) validateImagesForModel(selection string, images []imageContent) error {
+	if err := validateImages(images); err != nil || len(images) == 0 {
+		return err
+	}
+	models, err := manager.availableModels()
+	if err != nil {
+		return fmt.Errorf("cannot verify image input support: %w", err)
+	}
+	if selection == "" {
+		for key, model := range models {
+			if model.Default {
+				selection = key
+				break
+			}
+		}
+	}
+	model, ok := models[selection]
+	if !ok {
+		return fmt.Errorf("cannot attach images because model %q is not available", selection)
+	}
+	if !model.Capabilities.ImageInput {
+		return fmt.Errorf("model %s does not declare image input support", selection)
+	}
+	return nil
 }
 
 func isLiveStatus(status taskStatus) bool {
@@ -446,11 +490,11 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
 	}
-	if err := validateImages(params.Images); err != nil {
-		return taskMetadata{}, err
-	}
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
+	}
+	if err := manager.validateImagesForModel(normalizeModelSelection(params.Model), params.Images); err != nil {
+		return taskMetadata{}, err
 	}
 	permissionMode, err := normalizePermissionMode(params.PermissionMode)
 	if err != nil {
@@ -633,6 +677,9 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	model := normalizeModelSelection(params.Model)
 	if model == "" {
 		model = parent.Model
+	}
+	if err := manager.validateImagesForModel(model, params.Images); err != nil {
+		return taskMetadata{}, err
 	}
 	permissionMode := params.PermissionMode
 	if permissionMode == "" {
@@ -1122,6 +1169,7 @@ func (current *task) sendCommand(command json.RawMessage) error {
 	current.mu.Lock()
 	stdin := current.stdin
 	status := current.metadata.Status
+	model := current.metadata.Model
 	current.mu.Unlock()
 	if stdin == nil || !isLiveStatus(status) {
 		return fmt.Errorf("task worker is not running")
@@ -1134,7 +1182,7 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		if status != statusStarting && status != statusIdle {
 			return fmt.Errorf("task must be idle before accepting another prompt")
 		}
-		if err := validateImages(header.Images); err != nil {
+		if err := current.manager.validateImagesForModel(model, header.Images); err != nil {
 			return err
 		}
 	case "abort":
@@ -1660,14 +1708,14 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	if len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain at most %d bytes", maxPromptBytes)
 	}
-	if err := validateImages(params.Images); err != nil {
-		return taskMetadata{}, err
-	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
 	}
 	metadata := current.snapshot()
+	if err := manager.validateImagesForModel(metadata.Model, params.Images); err != nil {
+		return taskMetadata{}, err
+	}
 	if isLiveStatus(metadata.Status) {
 		return taskMetadata{}, fmt.Errorf("task is already running")
 	}
@@ -1707,14 +1755,14 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
 		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
 	}
-	if err := validateImages(params.Images); err != nil {
-		return taskMetadata{}, err
-	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
 	}
 	metadata := current.snapshot()
+	if err := manager.validateImagesForModel(metadata.Model, params.Images); err != nil {
+		return taskMetadata{}, err
+	}
 	if isLiveStatus(metadata.Status) {
 		return taskMetadata{}, fmt.Errorf("task is already running")
 	}

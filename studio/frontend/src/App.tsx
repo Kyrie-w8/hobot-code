@@ -16,6 +16,7 @@ import {approvalPresentation} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
+import {effectiveModel as resolveEffectiveModel, modelAcceptsImages} from './model-capabilities.js';
 import {rdkWorkflows} from './rdk-workflows.js';
 import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 import {shouldToggleMaximise} from './titlebar-policy.js';
@@ -126,7 +127,7 @@ function App() {
         const detail = await api.task(board.id, initialTask.id);
         if (activeBoardId.current === board.id && selectedTaskId.current === initialTask.id) setSelectedTask(detail);
       }
-      setSnapshot(next.capabilities?.capabilities.includes('system.snapshot') ? await api.systemSnapshot(board.id).catch(() => null) : null);
+      setSnapshot(next.snapshot ?? (next.capabilities?.capabilities.includes('system.snapshot') ? await api.systemSnapshot(board.id).catch(() => null) : null));
       setEvents([]);
       setOptimisticPrompt(null);
       setError('');
@@ -304,6 +305,8 @@ function App() {
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
+  const effectiveModel = resolveEffectiveModel(models, selectedModel);
+  const imageInputSupported = modelAcceptsImages(models, selectedModel);
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
   const canChangeModel = Boolean(selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const canChangePermissions = canChangeModel;
@@ -420,6 +423,11 @@ function App() {
     const [provider, ...rest] = value.split('/');
     const modelId = rest.join('/');
     if (!provider || !modelId) return;
+    const nextModel = models.find((model) => model.provider === provider && model.id === modelId);
+    if (attachments.length > 0 && nextModel?.capabilities?.imageInput !== true) {
+      setAttachments([]);
+      setNotice(`${nextModel?.name || modelId} does not support image input. Attachments were removed.`);
+    }
     if (draftSelected) {
       setSelectedTask({...selectedTask, model: value});
       return;
@@ -555,7 +563,7 @@ function App() {
       const nextConnection = await api.refreshBoard(boardId);
       const [pageModels, nextSnapshot] = await Promise.all([
         api.models(boardId).catch(() => null),
-        nextConnection.capabilities?.capabilities.includes('system.snapshot') ? api.systemSnapshot(boardId).catch(() => null) : Promise.resolve(null),
+        nextConnection.snapshot ? Promise.resolve(nextConnection.snapshot) : nextConnection.capabilities?.capabilities.includes('system.snapshot') ? api.systemSnapshot(boardId).catch(() => null) : Promise.resolve(null),
       ]);
       if (activeBoardId.current !== boardId) return;
       setConnection(nextConnection);
@@ -724,7 +732,7 @@ function App() {
                 rows={1}
               />
               <div className="composer-footer">
-                <ImagePickerButton disabled={composerBlocked || attachments.length >= 4} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
+                <ImagePickerButton disabled={composerBlocked || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
                 <span className="composer-state">{draftSelected ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
@@ -804,9 +812,9 @@ function MarkdownContent({value}: {value: string}) {
   }}>{value}</ReactMarkdown></div>;
 }
 
-function ImagePickerButton({disabled, onPick, onError}: {disabled: boolean; onPick: (images: ImageContent[]) => void; onError: (message: string) => void}) {
+function ImagePickerButton({disabled, title, onPick, onError}: {disabled: boolean; title: string; onPick: (images: ImageContent[]) => void; onError: (message: string) => void}) {
   const input = useRef<HTMLInputElement>(null);
-  return <><button className="icon-button compact attach-button" type="button" title="Attach images" disabled={disabled} onClick={() => input.current?.click()}><Paperclip size={15} /></button><input ref={input} className="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(event) => {const files = [...(event.target.files ?? [])]; event.target.value = ''; void Promise.all(files.map(prepareImage)).then(onPick).catch((reason) => onError(friendlyError(String(reason))));}} /></>;
+  return <><button className="icon-button compact attach-button" type="button" title={title} disabled={disabled} onClick={() => input.current?.click()}><Paperclip size={15} /></button><input ref={input} className="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(event) => {const files = [...(event.target.files ?? [])]; event.target.value = ''; void Promise.all(files.map(prepareImage)).then(onPick).catch((reason) => onError(friendlyError(String(reason))));}} /></>;
 }
 
 function appendImages(current: ImageContent[], next: ImageContent[]): ImageContent[] {
@@ -927,7 +935,7 @@ function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conver
 
 function BoardMonitor({connection, connectionState, snapshot, task}: {connection: Connection; connectionState: 'connecting' | 'online' | 'offline'; snapshot: SystemSnapshot | null; task: Task | null}) {
   if (!snapshot) {
-    return <InspectorSection title="Board health"><div className="board-identity"><Server size={18} /><div><strong>{connection.board.name}</strong><span>{connection.board.user}@{connection.board.host} · {connectionState === 'online' ? 'Online' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div><div className="snapshot-empty">Hardware telemetry is unavailable on this board-side version. Tasks remain available.</div></InspectorSection>;
+    return <><CompatibilityPanel connection={connection} /><InspectorSection title="Board health"><div className="board-identity"><Server size={18} /><div><strong>{connection.board.name}</strong><span>{connection.board.user}@{connection.board.host} · {connectionState === 'online' ? 'Online' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div><div className="snapshot-empty">Hardware telemetry is unavailable on this board-side version. Tasks remain available.</div></InspectorSection></>;
   }
   const utilization = bpuUtilization(snapshot);
   const health = boardHealth(snapshot);
@@ -939,6 +947,7 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
   const taskAlerts = [task?.lastError ? {tone: 'danger', label: task.lastError} : null, task?.logTruncated ? {tone: 'warning', label: 'Older task events were truncated.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
   const alerts = [...health.issues, ...taskAlerts];
   return <>
+    <CompatibilityPanel connection={connection} />
     <section className="board-overview"><div className="board-identity"><Server size={18} /><div><strong>{snapshot.board}</strong><span>{snapshot.hostname} · {connectionState === 'online' ? 'Live' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div><div className="board-meta"><span>RDK OS {snapshot.rdkOsVersion || '-'}</span><span>Up {durationLabel(snapshot.uptimeSeconds)}</span></div></section>
     <InspectorSection title="BPU">
       <div className="bpu-hero">
@@ -949,12 +958,20 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
       <div className="accelerator-stats"><InfoRow label="Frequency" value={bpuFrequency(snapshot)} /><InfoRow label="Temperature" value={bpuTemperature(snapshot)} />{bandwidth && <InfoRow label="DDR bandwidth" value={`R ${bandwidth.read.toFixed(0)} · W ${bandwidth.write.toFixed(0)} MiB/s`} />}</div>
     </InspectorSection>
     <InspectorSection title="Resources"><div className="resource-list">{resources.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} tone={metric.tone} />)}</div></InspectorSection>
+    {snapshot.hardwareLeases?.length ? <InspectorSection title="Hardware in use"><div className="hardware-leases">{snapshot.hardwareLeases.map((lease) => <div className="hardware-lease" key={lease.resource}><Cpu size={13} /><span><strong>{hardwareResourceLabel(lease.resource)}</strong><small>{lease.taskId} · PID {lease.pid}</small></span></div>)}</div></InspectorSection> : null}
     <InspectorSection title="Hbmem">
       {memoryMetrics.length ? <><div className="resource-list compact">{memoryMetrics.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} detail={metric.detail} percent={metric.percent} available={metric.available} />)}</div>{!snapshot.accelerator?.available && <p className="memory-footnote">Upgrade the board service for reserved capacity and process attribution.</p>}{snapshot.accelerator?.source === 'hrt_ucp_monitor-estimate' && <p className="memory-footnote">Estimated by the board monitor; process ownership may be incomplete.</p>}{orphanedION && <div className={`memory-warning${orphanedION.warning ? '' : ' minor'}`}>{orphanedION.warning && <AlertTriangle size={13} />}{orphanedION.label}</div>}</> : <div className="snapshot-empty">Hbmem counters are not exposed by this RDK OS.</div>}
     </InspectorSection>
     {acceleratorProcesses.length > 0 && <InspectorSection title="Hbmem processes"><div className="accelerator-processes">{acceleratorProcesses.slice(0, 8).map((process) => <div className="accelerator-process" key={process.pid}><div><strong>{process.name}</strong><span>PID {process.pid}</span></div><div><strong>{formatBytes(process.hbmemBytes)} Hbmem</strong><span>{formatBytes(process.rssBytes)} RSS</span></div></div>)}</div></InspectorSection>}
     {alerts.length > 0 && <InspectorSection title="Attention"><div className="health-issues">{alerts.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div></InspectorSection>}
   </>;
+}
+
+function CompatibilityPanel({connection}: {connection: Connection}) {
+  const compatibility = connection.compatibility;
+  if (!compatibility) return null;
+  const label = compatibility.status === 'supported' ? 'Supported' : compatibility.status === 'limited' ? 'Limited' : 'Upgrade required';
+  return <InspectorSection title="Compatibility"><div className={`compatibility-summary compatibility-${compatibility.status}`}><span>{label}</span><strong>{compatibility.summary}</strong></div><InfoRow label="Studio / board" value={`${compatibility.appVersion} / ${compatibility.agentdVersion}`} /><InfoRow label="Protocol / events" value={`${compatibility.protocol} / ${compatibility.eventSchema}`} />{compatibility.boardId && <InfoRow label="Validated target" value={compatibility.validatedTarget ? `${compatibility.boardId.toUpperCase()} · ${compatibility.rdkOsVersion}` : 'Not fully validated'} />}{compatibility.issues.length > 0 && <div className="compatibility-issues">{compatibility.issues.map((issue) => <div key={issue.code} className={issue.severity}><AlertTriangle size={13} /><span><strong>{issue.message}</strong>{issue.action && <small>{issue.action}</small>}</span></div>)}</div>}</InspectorSection>;
 }
 
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
@@ -965,6 +982,7 @@ function ResourceBar({label, value, detail, percent, available = false, tone = '
   return <div className={`resource-bar ${tone} ${available ? 'available' : ''}`}><div><span>{label}</span><strong>{value}</strong></div>{detail && <small>{detail}</small>}{percent !== undefined && <div className="resource-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(bounded)}><i style={{width: `${bounded}%`}} /></div>}</div>;
 }
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
+function hardwareResourceLabel(value: string) { if (value === 'bpu') return 'BPU'; if (value === 'media-pipeline') return 'Media pipeline'; if (value.startsWith('camera-video')) return value.replace('camera-', '/dev/'); return value; }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
