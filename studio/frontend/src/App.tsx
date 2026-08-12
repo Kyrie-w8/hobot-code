@@ -4,16 +4,16 @@ import ReactMarkdown from 'react-markdown';
 import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
-  GitBranch, ListTodo, LoaderCircle, MemoryStick, MessageSquare,
-  Gauge, HardDrive, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
-  Square, SquareTerminal, Thermometer, Trash2, Wrench, X, XCircle,
+  GitBranch, ListTodo, LoaderCircle, MessageSquare,
+  Gauge, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation} from './approval-model.js';
-import {boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, formatBytes, ionMemoryLabel, loadLabel, maximumTemperature, percentLabel, temperatureTone} from './board-health.js';
+import {acceleratorMemoryMetrics, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
 import {rdkWorkflows} from './rdk-workflows.js';
@@ -629,7 +629,7 @@ function App() {
         <div className="titlebar-spacer" />
         {isMock() && <span className="preview-label">Preview</span>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
-        <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Task details" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
+        <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
       </header>
 
       <aside className="task-sidebar">
@@ -718,9 +718,9 @@ function App() {
       </main>
 
       {showInspector && <aside className="inspector">
-        <div className="inspector-header"><span>Board & task</span><div className="inspector-header-actions"><small>{snapshot ? `Updated ${relativeTime(snapshot.capturedAt)}` : 'Not sampled'}</small><button className="icon-button compact" title="Refresh board status" disabled={refreshing} onClick={() => void refreshWorkspace()}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /></button><button className="icon-button compact" title="Close details" onClick={() => setShowInspector(false)}><X size={16} /></button></div></div>
-        {connection && <BoardMonitor connection={connection} connectionState={connectionState} snapshot={snapshot} />}
-        {selectedTask && <><InspectorSection title="Current task"><InfoRow label="Status" value={statusLabel[selectedTask.status] ?? selectedTask.status} /><InfoRow label="Model" value={selectedTask.model?.split('/').at(-1) ?? 'Board default'} /><InfoRow label="Permissions" value={permissionLabel(selectedPermissionMode)} /><InfoRow label="Updated" value={relativeTime(selectedTask.updatedAt)} />{selectedTask.branchKind === 'side' && <InfoRow label="Branch" value="Side Agent" />}</InspectorSection>{selectedTask.deployment && <DeploymentInspector status={deploymentStatus} record={selectedTask.deployment} />}<InspectorSection title="Workspace"><div className="workspace-entry"><Box size={16} /><span>{selectedTask.cwd}</span><CopyButton value={selectedTask.cwd} /></div></InspectorSection>{(activeApproval || selectedTask.lastError || selectedTask.logTruncated) && <InspectorSection title="Needs attention"><div className="attention-list">{activeApproval && <div><ShieldCheck size={14} /><span>Approval waiting</span></div>}{selectedTask.lastError && <div className="danger"><AlertTriangle size={14} /><span>{selectedTask.lastError}</span></div>}{selectedTask.logTruncated && <div><AlertTriangle size={14} /><span>Older task events were truncated</span></div>}</div></InspectorSection>}<details className="diagnostics"><summary>Diagnostics<ChevronRight size={13} /></summary><div><InfoRow label="Agentd" value={`v${connection?.daemon?.version ?? '—'}`} mono /><InfoRow label="PID" value={selectedTask.pid ? String(selectedTask.pid) : '—'} mono /><InfoRow label="Last sequence" value={String(selectedTask.lastSequence)} mono /><InfoRow label="Schema" value={`v${connection?.capabilities?.eventSchema ?? '—'}`} mono /><InfoRow label="Session" value={selectedTask.sessionId ? selectedTask.sessionId.slice(0, 12) : '—'} mono copy={selectedTask.sessionId} />{snapshot && <InfoRow label="Kernel" value={snapshot.kernel || '—'} mono />}</div></details></>}
+        <div className="inspector-header"><span>Board monitor</span><div className="inspector-header-actions"><small>{snapshot ? `Updated ${relativeTime(snapshot.capturedAt)}` : 'Not sampled'}</small><button className="icon-button compact" title="Close monitor" onClick={() => setShowInspector(false)}><X size={16} /></button></div></div>
+        {connection && <BoardMonitor connection={connection} connectionState={connectionState} snapshot={snapshot} task={selectedTask} />}
+        {selectedTask?.deployment && <DeploymentInspector status={deploymentStatus} record={selectedTask.deployment} />}
       </aside>}
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
@@ -905,39 +905,43 @@ function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conver
   return <div className="modal-backdrop"><div className="modal confirm-modal"><div className="confirm-icon"><Trash2 size={18} /></div><h2>{project ? 'Remove project?' : 'Delete conversation?'}</h2><p>{project ? `This removes ${target.taskIds.length} conversation${target.taskIds.length === 1 ? '' : 's'} from ${target.label}.` : `This permanently removes ${target.label} from Hobot Code.`}</p><small>Running agents will stop. Files in the board workspace will not be deleted.</small><div className="modal-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="danger-button" onClick={onDelete} disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}Delete</button></div></div></div>;
 }
 
-function BoardMonitor({connection, connectionState, snapshot}: {connection: Connection; connectionState: 'connecting' | 'online' | 'offline'; snapshot: SystemSnapshot | null}) {
+function BoardMonitor({connection, connectionState, snapshot, task}: {connection: Connection; connectionState: 'connecting' | 'online' | 'offline'; snapshot: SystemSnapshot | null; task: Task | null}) {
   if (!snapshot) {
     return <InspectorSection title="Board health"><div className="board-identity"><Server size={18} /><div><strong>{connection.board.name}</strong><span>{connection.board.user}@{connection.board.host} · {connectionState === 'online' ? 'Online' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div><div className="snapshot-empty">Hardware telemetry is unavailable on this board-side version. Tasks remain available.</div></InspectorSection>;
   }
   const utilization = bpuUtilization(snapshot);
   const health = boardHealth(snapshot);
-  const aiMemory = snapshot.aiMemory;
+  const resources = systemResourceMetrics(snapshot);
+  const memoryMetrics = acceleratorMemoryMetrics(snapshot);
+  const taskAlerts = [task?.lastError ? {tone: 'danger', label: task.lastError} : null, task?.logTruncated ? {tone: 'warning', label: 'Older task events were truncated.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
+  const alerts = [...health.issues, ...taskAlerts];
   return <>
-    <InspectorSection title="Accelerator">
-      <div className="board-identity"><Server size={18} /><div><strong>{snapshot.board}</strong><span>{snapshot.hostname} · {connectionState === 'online' ? 'Live' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div>
+    <section className="board-overview"><div className="board-identity"><Server size={18} /><div><strong>{snapshot.board}</strong><span>{snapshot.hostname} · {connectionState === 'online' ? 'Live' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div><div className="board-meta"><span>RDK OS {snapshot.rdkOsVersion || '-'}</span><span>Up {durationLabel(snapshot.uptimeSeconds)}</span></div></section>
+    <InspectorSection title="BPU">
       <div className="bpu-hero">
         <div className="bpu-hero-heading"><span><Cpu size={15} />BPU load</span><strong>{utilization.available ? percentLabel(utilization.average) : 'Not reported'}</strong></div>
         <div className="bpu-hero-meta"><span>{bpuCoreLabel(snapshot)}</span>{utilization.available && <span>Peak core {utilization.peakCore} · {percentLabel(utilization.peak)}</span>}</div>
         {snapshot.bpuCores?.length ? <div className="bpu-core-list">{snapshot.bpuCores.map((core) => <div className="bpu-core" key={core.index}><span>{core.name}</span><div className="bpu-track"><i style={{width: `${Math.max(0, Math.min(100, core.utilizationPercent))}%`}} /></div><strong>{percentLabel(core.utilizationPercent)}</strong></div>)}</div> : <div className="bpu-unavailable">{bpuUnavailableReason(snapshot)}</div>}
       </div>
-      <div className="accelerator-stats"><InfoRow label="BPU frequency" value={bpuFrequency(snapshot)} /><InfoRow label="BPU temperature" value={bpuTemperature(snapshot)} /><InfoRow label="ION / Hbmem" value={ionMemoryLabel(snapshot)} /></div>
-      {aiMemory?.available && <details className="accelerator-details"><summary><span>ION / Hbmem details</span><ChevronRight size={13} /></summary><div><InfoRow label="BPU client" value={aiMemory.bpuAllocationAvailable ? formatBytes(aiMemory.bpuAllocatedBytes ?? 0) : 'Unavailable'} /><InfoRow label="ION allocated" value={aiMemory.ionAvailable ? formatBytes(aiMemory.ionAllocatedBytes ?? 0) : 'Unavailable'} /><InfoRow label="CMA free" value={aiMemory.cmaAvailable ? capacityPair(aiMemory.cmaFreeBytes ?? 0, aiMemory.cmaTotalBytes ?? 0) : 'Unavailable'} /><InfoRow label="DMA-BUF shared" value={aiMemory.dmaBufAvailable ? `${formatBytes(aiMemory.dmaBufBytes ?? 0)} · ${aiMemory.dmaBufObjects ?? 0} objects` : 'Unavailable'} />{(aiMemory.ionOrphanedBytes ?? 0) > 0 && <InfoRow label="Orphaned ION" value={formatBytes(aiMemory.ionOrphanedBytes ?? 0)} />}{aiMemory.heaps?.filter((heap) => heap.capacityBytes || heap.allocatedBytes).slice(0, 8).map((heap) => <InfoRow key={heap.name} label={heap.name} value={`${formatBytes(heap.allocatedBytes)}${heap.capacityBytes ? ` / ${formatBytes(heap.capacityBytes)}` : ''}`} mono />)}</div></details>}
+      <div className="accelerator-stats"><InfoRow label="Frequency" value={bpuFrequency(snapshot)} /><InfoRow label="Temperature" value={bpuTemperature(snapshot)} /></div>
     </InspectorSection>
-    <InspectorSection title="System">
-      <div className="metrics-grid"><Metric icon={<Thermometer size={15} />} label="Board temp" value={maximumTemperature(snapshot)} tone={temperatureTone(snapshot)} /><Metric icon={<MemoryStick size={15} />} label="Memory free" value={capacityPair(snapshot.memory.availableBytes, snapshot.memory.totalBytes)} /><Metric icon={<Gauge size={15} />} label="CPU load / cores" value={loadLabel(snapshot)} /><Metric icon={<HardDrive size={15} />} label="Disk free" value={capacityPair(snapshot.disk.availableBytes, snapshot.disk.totalBytes)} /></div>
-      <div className="health-lines"><InfoRow label="RDK OS" value={snapshot.rdkOsVersion || '-'} /><InfoRow label="Uptime" value={durationLabel(snapshot.uptimeSeconds)} /></div>
-      {health.issues.length ? <div className="health-issues">{health.issues.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div> : <div className="health-ready"><Check size={14} /><span>Accelerator and system telemetry look healthy.</span></div>}
+    <InspectorSection title="Resources"><div className="resource-list">{resources.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} tone={metric.tone} />)}</div></InspectorSection>
+    <InspectorSection title="Accelerator memory">
+      {memoryMetrics.length ? <><div className="resource-list compact">{memoryMetrics.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} available={metric.available} />)}</div><p className="memory-footnote">ION, BPU client, CMA, and DMA-BUF are overlapping allocation views.</p>{(snapshot.aiMemory?.ionOrphanedBytes ?? 0) > 0 && <div className="memory-warning"><AlertTriangle size={13} />{formatBytes(snapshot.aiMemory?.ionOrphanedBytes ?? 0)} orphaned ION</div>}</> : <div className="snapshot-empty">Allocation counters are not exposed by this RDK OS.</div>}
     </InspectorSection>
+    {alerts.length > 0 && <InspectorSection title="Attention"><div className="health-issues">{alerts.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div></InspectorSection>}
   </>;
 }
 
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
 function InfoRow({label, value, mono, copy}: {label: string; value: string; mono?: boolean; copy?: string}) { return <div className="info-row"><span>{label}</span><div><strong className={mono ? 'mono' : ''}>{value}</strong>{copy && <CopyButton value={copy} />}</div></div>; }
 function CopyButton({value}: {value: string}) { const [copied, setCopied] = useState(false); return <button type="button" className="copy-button" title={copied ? 'Copied' : 'Copy'} onClick={() => void navigator.clipboard.writeText(value).then(() => {setCopied(true); window.setTimeout(() => setCopied(false), 1200);})}>{copied ? <Check size={13} /> : <Clipboard size={13} />}</button>; }
-function Metric({icon, label, value, tone = ''}: {icon: ReactNode; label: string; value: string; tone?: string}) { return <div className={`metric ${tone}`}><span>{icon}{label}</span><strong>{value}</strong></div>; }
+function ResourceBar({label, value, percent, available = false, tone = ''}: {label: string; value: string; percent?: number; available?: boolean; tone?: string}) {
+  const bounded = Math.max(0, Math.min(100, percent ?? 0));
+  return <div className={`resource-bar ${tone} ${available ? 'available' : ''}`}><div><span>{label}</span><strong>{value}</strong></div>{percent !== undefined && <div className="resource-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(bounded)}><i style={{width: `${bounded}%`}} /></div>}</div>;
+}
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
-function permissionLabel(mode: Task['permissionMode']) { return mode === 'review' ? 'Review only' : mode === 'developer' ? 'Developer' : 'Ask for changes'; }
 function friendlyError(value: string) {
   const message = value.replace(/^Error:\s*/i, '').replace(/^task_[a-z_]+:\s*/i, '');
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';

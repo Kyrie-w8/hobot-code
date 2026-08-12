@@ -53,6 +53,50 @@ export function capacityPair(available, total) {
   return `${formatBytes(available)} / ${formatBytes(total)}`;
 }
 
+export function systemResourceMetrics(snapshot) {
+  const memoryUsed = Math.max(0, snapshot.memory.totalBytes - snapshot.memory.availableBytes);
+  const diskUsed = Math.max(0, snapshot.disk.totalBytes - snapshot.disk.availableBytes);
+  const load = Number.isFinite(snapshot.loadAverage[0]) ? snapshot.loadAverage[0] : 0;
+  const temperature = maximumTemperatureValue(snapshot);
+  return [
+    {
+      key: 'cpu', label: 'CPU load', value: `${load.toFixed(2)} / ${snapshot.cpuCores || '-'} cores`,
+      percent: snapshot.cpuCores > 0 ? clampPercent(load / snapshot.cpuCores * 100) : 0,
+    },
+    {
+      key: 'memory', label: 'Memory', value: `${formatBytes(memoryUsed)} / ${formatBytes(snapshot.memory.totalBytes)} used`,
+      percent: usedPercent(snapshot.memory.availableBytes, snapshot.memory.totalBytes),
+    },
+    {
+      key: 'disk', label: 'Disk', value: `${formatBytes(diskUsed)} / ${formatBytes(snapshot.disk.totalBytes)} used`,
+      percent: usedPercent(snapshot.disk.availableBytes, snapshot.disk.totalBytes),
+    },
+    {
+      key: 'temperature', label: 'Temperature', value: Number.isFinite(temperature) ? `${temperature.toFixed(1)} C` : 'Not reported',
+      percent: Number.isFinite(temperature) ? clampPercent(temperature) : 0,
+      tone: !Number.isFinite(temperature) ? 'neutral' : temperature >= 85 ? 'danger' : temperature >= 75 ? 'warning' : 'healthy',
+    },
+  ];
+}
+
+export function acceleratorMemoryMetrics(snapshot) {
+  const memory = snapshot.aiMemory;
+  if (!memory?.available) return [];
+  const metrics = [];
+  if (memory.ionAvailable) metrics.push({key: 'ion', label: 'ION buffers', value: formatBytes(memory.ionAllocatedBytes ?? 0)});
+  if (memory.bpuAllocationAvailable) metrics.push({key: 'bpu', label: 'BPU clients', value: formatBytes(memory.bpuAllocatedBytes ?? 0)});
+  if (memory.cmaAvailable && memory.cmaTotalBytes > 0) {
+    metrics.push({
+      key: 'cma', label: 'CMA available', value: capacityPair(memory.cmaFreeBytes ?? 0, memory.cmaTotalBytes),
+      percent: clampPercent((memory.cmaFreeBytes ?? 0) / memory.cmaTotalBytes * 100), available: true,
+    });
+  }
+  if (memory.dmaBufAvailable) {
+    metrics.push({key: 'dma', label: 'DMA-BUF shared', value: `${formatBytes(memory.dmaBufBytes ?? 0)} · ${memory.dmaBufObjects ?? 0} objects`});
+  }
+  return metrics;
+}
+
 export function durationLabel(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '-';
   const days = Math.floor(seconds / 86_400);
@@ -60,19 +104,6 @@ export function durationLabel(seconds) {
   if (days) return `${days}d ${hours}h`;
   const minutes = Math.floor((seconds % 3600) / 60);
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
-export function maximumTemperature(snapshot) {
-  const value = Math.max(-Infinity, ...snapshot.thermalZones.map((zone) => zone.celsius));
-  return Number.isFinite(value) ? `${value.toFixed(1)} C` : '-';
-}
-
-export function temperatureTone(snapshot) {
-  const value = Math.max(-Infinity, ...snapshot.thermalZones.map((zone) => zone.celsius));
-  if (!Number.isFinite(value)) return 'neutral';
-  if (value >= 85) return 'danger';
-  if (value >= 75) return 'warning';
-  return 'healthy';
 }
 
 export function bpuCoreLabel(snapshot) {
@@ -116,28 +147,20 @@ export function bpuFrequency(snapshot) {
   return maximum ? `${formatFrequency(current)} / ${formatFrequency(maximum)}` : formatFrequency(current);
 }
 
-export function ionMemoryLabel(snapshot) {
-  const memory = snapshot.aiMemory;
-  if (!memory) return 'Not reported';
-  if (!memory.available) return 'Not exposed';
-  if (memory.ionAvailable) return `${formatBytes(memory.ionAllocatedBytes ?? 0)} allocated`;
-  if (memory.bpuAllocationAvailable) return `${formatBytes(memory.bpuAllocatedBytes ?? 0)} BPU client`;
-  if (memory.cmaAvailable) return `${formatBytes(memory.cmaFreeBytes ?? 0)} CMA free`;
-  if (memory.dmaBufAvailable) return `${formatBytes(memory.dmaBufBytes ?? 0)} DMA-BUF`;
-  return 'Available';
-}
-
 export function percentLabel(value) {
   return `${Math.round(clampPercent(value))}%`;
 }
 
-export function loadLabel(snapshot) {
-  const load = snapshot.loadAverage[0];
-  return Number.isFinite(load) ? `${load.toFixed(2)} / ${snapshot.cpuCores || '-'}` : '-';
-}
-
 function ratio(available, total) {
   return total > 0 ? available / total : 1;
+}
+
+function usedPercent(available, total) {
+  return total > 0 ? clampPercent((total - available) / total * 100) : 0;
+}
+
+function maximumTemperatureValue(snapshot) {
+  return Math.max(-Infinity, ...snapshot.thermalZones.map((zone) => zone.celsius));
 }
 
 export function formatBytes(value) {

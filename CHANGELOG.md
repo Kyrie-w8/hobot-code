@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.23.5
+
+- Refocus the Studio inspector on board monitoring by removing duplicate task, workspace, and diagnostic metadata.
+- Present CPU load, system memory, disk usage, and temperature as consistent capacity bars with compact values and threshold-aware color.
+- Replace the dense ION/Hbmem table with only the allocation views exposed by the board, omit unavailable counters, and explain that BPU client, ION, CMA, and DMA-BUF measurements can overlap.
+- Remove the duplicate inspector refresh action and fit the complete healthy-board overview within a common 720 px application height.
+
 ## 0.23.4
 
 - Recover live task updates after an isolated SSH subscription reset by resuming from the last durable event sequence with bounded exponential backoff.

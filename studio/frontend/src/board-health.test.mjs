@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, ionMemoryLabel, loadLabel, maximumTemperature, temperatureTone} from './board-health.js';
+import {acceleratorMemoryMetrics, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, capacityPair, durationLabel, systemResourceMetrics} from './board-health.js';
 
 function snapshot(overrides = {}) {
   return {
@@ -21,14 +21,10 @@ function snapshot(overrides = {}) {
 
 test('healthy RDK reports no readiness issues', () => {
   assert.deepEqual(boardHealth(snapshot()), {tone: 'healthy', issues: []});
-  assert.equal(maximumTemperature(snapshot()), '54.0 C');
-  assert.equal(temperatureTone(snapshot()), 'healthy');
   assert.equal(bpuCoreLabel(snapshot()), '1 core ready');
   assert.deepEqual(bpuUtilization(snapshot()), {available: true, average: 42, peak: 42, peakCore: 0});
   assert.equal(bpuTemperature(snapshot({thermalZones: [{name: 'pvt_bpu', celsius: 52.5}]})), '52.5 C');
   assert.equal(bpuFrequency(snapshot()), '1 GHz / 1.5 GHz');
-  assert.equal(ionMemoryLabel(snapshot()), '128 MiB allocated');
-  assert.equal(loadLabel(snapshot()), '2.50 / 6');
 });
 
 test('thermal, storage, memory, and BPU failures produce actionable issues', () => {
@@ -49,6 +45,22 @@ test('capacity and uptime labels stay compact', () => {
   assert.equal(durationLabel(183_600), '2d 3h');
 });
 
+test('resource metrics use comparable capacity percentages', () => {
+  const metrics = systemResourceMetrics(snapshot());
+  assert.deepEqual(metrics.map(({key, percent}) => [key, percent]), [
+    ['cpu', 41.66666666666667], ['memory', 50], ['disk', 50], ['temperature', 54],
+  ]);
+  assert.equal(metrics[1].value, '4 GiB / 8 GiB used');
+  assert.equal(metrics[3].tone, 'healthy');
+});
+
+test('accelerator memory omits unavailable counters and preserves overlap', () => {
+  const metrics = acceleratorMemoryMetrics(snapshot());
+  assert.deepEqual(metrics.map((metric) => metric.key), ['ion', 'bpu', 'dma']);
+  const cma = acceleratorMemoryMetrics(snapshot({aiMemory: {available: true, ionAvailable: false, bpuAllocationAvailable: false, cmaAvailable: true, cmaFreeBytes: 256 * 1024 ** 2, cmaTotalBytes: 1024 ** 3, dmaBufAvailable: false}}));
+  assert.deepEqual(cma, [{key: 'cma', label: 'CMA available', value: '256 MiB / 1 GiB', percent: 25, available: true}]);
+});
+
 test('multi-core BPU summaries and unavailable metrics stay honest', () => {
   const multi = snapshot({bpuCores: [
     {index: 0, name: 'BPU 0', utilizationPercent: 15},
@@ -56,9 +68,7 @@ test('multi-core BPU summaries and unavailable metrics stay honest', () => {
   ], thermalZones: [{name: 'cpu', celsius: 60}], aiMemory: {available: false}});
   assert.deepEqual(bpuUtilization(multi), {available: true, average: 45, peak: 75, peakCore: 1});
   assert.equal(bpuTemperature(multi), 'Not exposed');
-  assert.equal(ionMemoryLabel(multi), 'Not exposed');
   assert.equal(bpuFrequency(snapshot({bpuCores: undefined})), 'Not reported');
-  assert.equal(ionMemoryLabel(snapshot({aiMemory: undefined})), 'Not reported');
 });
 
 test('BPU fallback states explain version and hardware differences', () => {
