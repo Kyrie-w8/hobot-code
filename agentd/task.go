@@ -61,6 +61,7 @@ type taskMetadata struct {
 	BranchKind     string            `json:"branchKind,omitempty"`
 	ArchivedAt     *time.Time        `json:"archivedAt,omitempty"`
 	Approvals      []pendingApproval `json:"pendingApprovals,omitempty"`
+	Deployment     *deploymentRecord `json:"deployment,omitempty"`
 }
 
 type task struct {
@@ -91,13 +92,14 @@ type taskManager struct {
 }
 
 type startTaskParams struct {
-	Name           string         `json:"name,omitempty"`
-	Cwd            string         `json:"cwd"`
-	Prompt         string         `json:"prompt"`
-	Images         []imageContent `json:"images,omitempty"`
-	Approve        bool           `json:"approve,omitempty"`
-	Model          string         `json:"model,omitempty"`
-	PermissionMode string         `json:"permissionMode,omitempty"`
+	Name           string            `json:"name,omitempty"`
+	Cwd            string            `json:"cwd"`
+	Prompt         string            `json:"prompt"`
+	Images         []imageContent    `json:"images,omitempty"`
+	Approve        bool              `json:"approve,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	PermissionMode string            `json:"permissionMode,omitempty"`
+	Deployment     *deploymentRecord `json:"-"`
 }
 
 type forkTaskParams struct {
@@ -479,7 +481,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 		metadata: taskMetadata{
 			ID: id, Name: name, Cwd: cwd, Status: statusStarting,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
-			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode,
+			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode, Deployment: params.Deployment,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}

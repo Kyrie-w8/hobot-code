@@ -22,6 +22,9 @@ Usage:
   hobot daemon start|status
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
+  hobot deploy inspect [--cwd DIR]
+  hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer|review] ARTIFACT
+  hobot deploy status TASK_ID
   hobot task start [--name NAME] [--cwd DIR] [--approve] -- PROMPT
   hobot task list [--all]
   hobot task show TASK_ID
@@ -62,6 +65,8 @@ func run(args []string) error {
 		return runDaemonCLI(cfg, args[1:])
 	case "task":
 		return runTaskCLI(cfg, args[1:])
+	case "deploy":
+		return runDeploymentCLI(cfg, args[1:])
 	case "bridge":
 		if len(args) != 2 || args[1] != "--stdio" {
 			return fmt.Errorf("usage: hobot bridge --stdio")
@@ -80,6 +85,94 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func runDeploymentCLI(cfg config, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: hobot deploy inspect|start|status")
+	}
+	client := daemonClient{cfg: cfg}
+	if err := client.ensureStarted(); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "inspect":
+		flags := flag.NewFlagSet("deploy inspect", flag.ContinueOnError)
+		flags.SetOutput(os.Stderr)
+		cwd := flags.String("cwd", "", "workspace directory")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return fmt.Errorf("usage: hobot deploy inspect [--cwd DIR]")
+		}
+		workingDirectory, err := deploymentWorkingDirectory(*cwd)
+		if err != nil {
+			return err
+		}
+		result, err := client.call("deployment.inspect", workspaceParams{Path: workingDirectory})
+		if err != nil {
+			return err
+		}
+		var inspection deploymentInspection
+		if err := json.Unmarshal(result, &inspection); err != nil {
+			return err
+		}
+		return printJSON(inspection)
+	case "start":
+		flags := flag.NewFlagSet("deploy start", flag.ContinueOnError)
+		flags.SetOutput(os.Stderr)
+		cwd := flags.String("cwd", "", "workspace directory")
+		goal := flags.String("goal", "deploy-and-validate", "deployment goal")
+		name := flags.String("name", "", "task name")
+		model := flags.String("model", "", "agent model")
+		permissions := flags.String("permissions", "ask", "task permission mode")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return fmt.Errorf("usage: hobot deploy start [options] ARTIFACT")
+		}
+		workingDirectory, err := deploymentWorkingDirectory(*cwd)
+		if err != nil {
+			return err
+		}
+		params := deploymentStartParams{Cwd: workingDirectory, ArtifactPath: flags.Arg(0), Goal: *goal, Name: *name, Model: *model, PermissionMode: *permissions}
+		result, err := client.call("deployment.start", params)
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		fmt.Printf("Started model deployment %s (%s).\n", metadata.ID, metadata.Name)
+		fmt.Printf("Follow: hobot task attach %s\n", metadata.ID)
+		fmt.Printf("Status: hobot deploy status %s\n", metadata.ID)
+		return nil
+	case "status":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: hobot deploy status TASK_ID")
+		}
+		result, err := client.call("deployment.status", taskIDParams{TaskID: args[1]})
+		if err != nil {
+			return err
+		}
+		var status deploymentStatus
+		if err := json.Unmarshal(result, &status); err != nil {
+			return err
+		}
+		return printJSON(status)
+	default:
+		return fmt.Errorf("unknown deploy command: %s", args[0])
+	}
+}
+
+func deploymentWorkingDirectory(value string) (string, error) {
+	if strings.TrimSpace(value) != "" {
+		return value, nil
+	}
+	return os.Getwd()
 }
 
 func runServer(cfg config) error {

@@ -54,3 +54,45 @@ func TestCommandAvailableRejectsMissingUtility(t *testing.T) {
 		t.Fatal("missing command was reported as available")
 	}
 }
+
+func TestParseIONHeapsKeepsCapacityAllocationAndOrphansSeparate(t *testing.T) {
+	content := []byte(`
+    cma_reserved  heap total size       1073741824
+  total orphaned          4128768
+          total          12451840
+     ion_uncache  heap total size       2147483648
+  total orphaned                0
+          total         180158464
+`)
+	heaps := parseIONHeaps(content)
+	if len(heaps) != 2 {
+		t.Fatalf("unexpected heaps: %+v", heaps)
+	}
+	if heaps[0].Name != "cma_reserved" || heaps[0].CapacityBytes != 1073741824 || heaps[0].AllocatedBytes != 12451840 || heaps[0].OrphanedBytes != 4128768 {
+		t.Fatalf("unexpected CMA heap: %+v", heaps[0])
+	}
+	if heaps[1].Name != "ion_uncache" || heaps[1].AllocatedBytes != 180158464 {
+		t.Fatalf("unexpected uncached heap: %+v", heaps[1])
+	}
+}
+
+func TestParseBPUAndDMABufMemorySummaries(t *testing.T) {
+	bpu := []byte("        carveout:           200000 : 1\n          total            300000\n")
+	if got := parseBPUIONClientTotal(bpu); got != 3*1024*1024 {
+		t.Fatalf("BPU allocation = %d", got)
+	}
+	objects, size := parseDMABufTotal([]byte("Total 2 devices attached\nTotal 1 objects, 4128768 bytes\n"))
+	if objects != 1 || size != 4128768 {
+		t.Fatalf("dma-buf summary = %d objects, %d bytes", objects, size)
+	}
+}
+
+func TestReadBoundedTelemetryFileRejectsOversizedInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "telemetry")
+	if err := os.WriteFile(path, make([]byte, 65), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedFile(path, 64); err == nil {
+		t.Fatal("oversized telemetry file was accepted")
+	}
+}

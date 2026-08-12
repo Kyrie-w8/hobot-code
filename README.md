@@ -60,7 +60,7 @@ curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.22.4
+  | sh -s -- --version 0.23.0
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -80,7 +80,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
-桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；旧板端仍可管理任务，只是不显示硬件健康状态。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
+桌面应用最低兼容板端 event schema 2 和 `hobot bridge --stdio`；升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、AI 内存与结构化模型部署能力。旧板端仍可管理任务，Studio 会隐藏其不支持的硬件或部署入口。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。
 
 消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。左侧项目可以折叠，每个项目可创建多个对话；新对话会从首条指令生成可修改标题。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
@@ -88,7 +88,19 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 桌面端支持在新任务和后续消息中附加 JPEG、PNG、WebP 或 GIF 图片。大图会在 Mac 本地缩放压缩，每条消息最多 4 张、编码前合计不超过 1 MiB；图片通过既有 SSH/RPC 通道直接写入板端会话，不创建公开上传地址，事件日志只保留文件名和 MIME 摘要。PDF、Word 等文档附件尚未开放，也不会被静默当作纯文本发送。
 
-新任务页提供板卡诊断、模型部署、Camera pipeline 和 BPU 性能验证入口。点击入口只会预填一条可编辑的专业任务，不会立即执行或绕过审批。
+新任务页提供板卡诊断、模型部署、Camera pipeline、TROS 和 BPU 性能验证入口。板卡诊断等通用入口只会预填一条可编辑的专业任务。0.23.0 板端上的 **Deploy model** 会打开部署向导：它在当前项目内有界扫描模型候选，结合实机板型标注转换需求或疑似不匹配，用户选择产物和目标后才创建持久任务。任务仍走板端审批，只有结构化报告的板型、正确性、性能、产物路径和 SHA-256 均经守护进程复核后，Studio 才显示为 Verified deployment。
+
+终端使用同一套板端部署协议：
+
+```bash
+cd /path/to/project
+hobot deploy inspect
+hobot deploy start --goal deploy-and-validate model.onnx
+hobot task attach <task-id>
+hobot deploy status <task-id>
+```
+
+`inspect` 只扫描候选，不运行模型；`start` 创建可断线续跑的持久任务；`status` 读取经过板端复核的验收状态。未声明目标的编译产物会显示为待验证，明确属于另一块板或 march 的产物会被拒绝。
 
 ### 2. 配置模型
 
@@ -216,10 +228,10 @@ hobot --resume
 Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 
 - 内置 `write`、`edit` 禁止直接修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
-- 内置工具的工作区外写入和识别出的破坏性 Shell 命令需要交互确认；root 下 `bash`、`write`、`edit` 始终要求精确到本次调用的审批，旧 `/permissions root policy` 开关不再放宽这一边界。
+- 内置工具的工作区外写入和识别出的高风险 Shell 命令需要交互确认；root 下 Ask 模式逐次审批变更工具，Developer 模式按实际风险审批，但不能绕过受保护路径和破坏性操作边界。
 - 默认权限允许模型检索记忆，但每次模型写入记忆都要求确认；用户可以修改该策略。
 - 第三方扩展和 Skills 以当前用户权限运行，安装前必须审查来源与代码。
-- `system_snapshot` 只能证明当前设备与工具状态，不能证明模型已经完成转换、量化或 BPU 验收。
+- `system_snapshot` 只能证明当前设备与工具状态；文件名和 march 也只能用于候选筛选。模型完成状态必须由部署报告、实际产物摘要、正确性与性能证据共同证明。
 - Hobot Code 只适合作为控制面工具，不应进入电机、CAN、GPIO、安全或急停的硬实时闭环。
 
 威胁模型、密钥处理和漏洞报告方式见[安全说明](SECURITY.md)。
@@ -231,7 +243,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.22.4
+hobot update --version 0.23.0
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

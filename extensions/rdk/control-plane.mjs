@@ -27,7 +27,7 @@ export const DEFAULT_POLICY = Object.freeze({
 
 export const DEVELOPER_POLICY = Object.freeze({
   schemaVersion: 2,
-  rootMode: "confirm",
+  rootMode: "policy",
   default: "ask",
   rules: Object.freeze([
     Object.freeze({ tool: "read", action: "allow" }),
@@ -145,6 +145,14 @@ function cloneDefaultPolicy() {
   };
 }
 
+function isLegacyDeveloperPolicy(policy) {
+  if (policy.rootMode !== "confirm" || policy.default !== DEVELOPER_POLICY.default) return false;
+  const broadRules = policy.rules.filter((rule) => !rule.targetHash);
+  return broadRules.length === DEVELOPER_POLICY.rules.length
+    && broadRules.every((rule, index) => rule.tool === DEVELOPER_POLICY.rules[index].tool
+      && rule.action === DEVELOPER_POLICY.rules[index].action);
+}
+
 export function parsePolicy(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("permission policy must be a JSON object");
@@ -196,8 +204,10 @@ export function parsePolicy(value) {
 export async function loadPolicy(path) {
   try {
     const raw = JSON.parse(await readFile(path, "utf8"));
-    const policy = parsePolicy(raw);
-    if (raw.schemaVersion === 1) {
+    let policy = parsePolicy(raw);
+    const legacyDeveloper = raw.schemaVersion === 2 && isLegacyDeveloperPolicy(policy);
+    if (legacyDeveloper) policy = parsePolicy({ ...policy, rootMode: "policy" });
+    if (raw.schemaVersion === 1 || legacyDeveloper) {
       try {
         await writePolicy(path, policy);
         return { policy, migrated: true };
@@ -285,7 +295,8 @@ export function hasAllowedToolCall(policy, toolName, input) {
 }
 
 export function requiresRootToolApproval(policy, runningAsRoot, toolName) {
-  return Boolean(runningAsRoot && ["bash", "write", "edit"].includes(toolName));
+  return Boolean(runningAsRoot && policy.rootMode === "confirm"
+    && ["bash", "write", "edit"].includes(toolName));
 }
 
 export function reconcileToolVisibility(allTools, activeTools, hiddenTools, deniedTools) {

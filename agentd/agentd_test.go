@@ -242,6 +242,9 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if !containsString(ping.Capabilities.Capabilities, "system.snapshot") {
 		t.Fatalf("system snapshot capability is missing: %+v", ping.Capabilities.Capabilities)
 	}
+	if !containsString(ping.Capabilities.Capabilities, "deployments.v1") {
+		t.Fatalf("deployment capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
 	snapshotResult, err := client.call("system.snapshot", struct{}{})
 	if err != nil {
 		t.Fatalf("system snapshot failed: %v", err)

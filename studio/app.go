@@ -265,6 +265,36 @@ func (app *App) GetSystemSnapshot(boardID string) (hobot.SystemSnapshot, error) 
 	return client.SystemSnapshot(ctx)
 }
 
+func (app *App) InspectDeployment(boardID, cwd string) (hobot.DeploymentInspection, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.DeploymentInspection{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.InspectDeployment(ctx, cwd)
+}
+
+func (app *App) StartDeployment(boardID string, request hobot.StartDeploymentRequest) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.StartDeployment(ctx, request)
+}
+
+func (app *App) GetDeploymentStatus(boardID, taskID string) (hobot.DeploymentStatus, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.DeploymentStatus{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.DeploymentStatus(ctx, taskID)
+}
+
 func (app *App) RefreshTasks(boardID string, includeArchived bool) (hobot.TaskPage, error) {
 	client, err := app.client(boardID)
 	if err != nil {

@@ -46,7 +46,10 @@
 |---|---|---|
 | `ping` | `{}` | 版本、PID、协议版本、任务数和路径 |
 | `capabilities` | `{}` | 协议范围、事件 schema、功能标识和资源上限 |
-| `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、BPU 设备和运行时工具的只读实时状态 |
+| `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、逐核 BPU 利用率与频率、AI 内存和运行时工具的只读实时状态 |
+| `deployment.inspect` | `{path}` | 有界扫描工作区内的 ONNX、PyTorch、TFLite、HBM 等模型产物，并按当前板型标注兼容性 |
+| `deployment.start` | `{cwd, artifactPath, goal?, name?, model?, permissionMode?}` | 创建绑定当前板型、RDK OS、产物和验收报告契约的持久 Agent 任务 |
+| `deployment.status` | `{taskId}` | 返回部署阶段、绑定信息和经板端重新校验的结构化报告 |
 | `models.list` | `{}` | 板端当前可用模型的 `provider`/`id` 列表，不包含凭据 |
 | `workspace.list` | `{path?}` | 浏览当前用户可见的目录，只返回子目录 |
 | `workspace.create` | `{parent, name}` | 在用户明确选定的父目录中创建私有工作目录 |
@@ -68,6 +71,8 @@
 | `task.stop` | `{taskId}` | 终止 worker 进程组 |
 | `task.events` | `{taskId, after?, limit?}` | 按序号读取最多 1000 条持久事件 |
 | `task.subscribe` | `{taskId, after?, follow?}` | 先重放 `sequence > after` 的事件，再按需跟随 |
+
+终端 `hobot deploy inspect/start/status` 是上述部署方法的薄客户端，不另设权限或状态体系。`start` 返回普通持久任务 ID，可继续使用 `hobot task attach/stop`；SSH 断开不会终止任务。
 
 `task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。`prompt` 可携带最多 4 个 `ImageContent` 项；每项包含 `type: "image"`、base64 `data`、受支持的 `mimeType`，以及仅用于显示的可选 `name`。板端会校验数量、MIME、base64 和总大小，事件日志只记录附件名称与 MIME 摘要，不持久化图片数据。客户端应使用 `task.model` 切换模型：活动 worker 只在 `idle` 时接受，`stopped`、`failed` 和 `interrupted` 任务会将选择写入元数据并在下次 Resume/Restart 生效。`task.permissions` 为每个任务写入私有策略文件；`review` 禁止变更，`ask` 确认变更，`developer` 放行日常 Shell 与工作区编辑，但破坏性命令、受保护路径、持久状态与未知/MCP 工具仍由板端保护或确认。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果始终在板端 worker 内判定，客户端无法绕过。
 
@@ -104,6 +109,10 @@ tasks/<task-id>/worker.stderr.log
 Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 从标准输入读取一行请求，转发到当前 OS 用户的 Unix socket，并把完整响应或订阅流写到标准输出。长时 `task.subscribe` 会占用该 bridge，因此客户端应为控制请求和每个实时订阅分别建立 SSH 进程。bridge 不监听 TCP、不返回模型 token，也不改变板端 UID 和权限边界。
 
 ## 资源与安全边界
+
+`system.snapshot` 只读取固定的 procfs、sysfs 与 debugfs 节点，不执行外部监控命令。BPU 利用率来自每个核心的 `ratio` 节点，频率来自对应 devfreq；不可用时字段保持为空，客户端不得用 CPU 指标代替。AI 内存明确区分 BPU client allocation、ION 活跃分配、ION orphaned、CMA 和 dma-buf，不把不同或可能重叠的 heap 容量相加为“显存”。每个调试文件最多读取 2 MiB，heap 最多返回 32 项，BPU 核心最多返回 16 项。
+
+`deployment.inspect` 不执行模型或工具，只在所选工作区内检查最多 4096 个目录项、返回最多 256 个候选、进入最多 4 层目录，不进入隐藏目录、不跟随符号链接。文件扩展名、板型名和 march 标识只能作为候选提示，不能证明兼容性。当前保守路由识别 X5/Bayes、S100/Nash-E/Nash-M、S600/Nash-P；没有明确标识的编译产物保持“待验证”，不会伪装为匹配。`deployment.start` 会把当前实机板型与 RDK OS 冻结到任务元数据；Agent 写出的报告仅是候选结果，`deployment.status` 会重新检查 schema、板型、绝对产物路径、工作区边界、普通文件、SHA-256、正确性和性能证据。报告或产物不满足契约时不得显示为通过。部署任务必须使用 `ask` 或 `developer` 权限，以便在审批后写入验收报告；`review` 会在启动前被拒绝。
 
 - 每个 OS 用户默认最多保留 2 个后台 worker，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。创建、分支、Resume 或 Restart 需要空位时，会原子挂起最久未使用的 `idle` worker并保留 session；`running`、`waiting`、`starting` 和 `stopping` 任务绝不会被自动回收。所有槽位都在工作时才返回并发上限错误。
 - 默认最多保留 100 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。

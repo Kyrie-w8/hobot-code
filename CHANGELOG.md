@@ -1,11 +1,17 @@
 # Changelog
 
+## 0.23.0
+
+- Add professional accelerator monitoring with per-core BPU utilization and frequency, BPU-specific temperature, bounded ION/CMA/dma-buf memory telemetry, orphaned-buffer warnings, and honest per-board fallback states.
+- Add a board-bound model deployment workflow: bounded artifact discovery, conservative X5/Bayes, S100/Nash-E/Nash-M, and S600/Nash-P compatibility triage, persistent Agent execution, structured acceptance reports, server-verified artifact digests, and a Studio deployment wizard with live status.
+
 ## 0.22.4
 
 - Add a bounded `system.snapshot` capability so Studio can show the exact RDK identity, OS, BPU devices, temperature, memory, storage, load, uptime, and board-side validation tools without exposing credentials.
 - Turn board telemetry into actionable readiness guidance for thermal, memory, storage, BPU, and runtime-tool problems, while degrading cleanly against older board releases.
 - Add editable RDK workflow starters for board diagnosis, model deployment, camera pipelines, TROS workspaces, and reproducible BPU validation.
 - Validate telemetry on X5, S100, and S600, count BPU cores without unrelated `hobot-*` devices, and discover board utilities in the generation-specific `/usr/hobot/bin` and `/usr/sbin` locations.
+- Make Developer permissions risk-based under root: routine inspection, builds, tests, and workspace edits run without repetitive prompts, while destructive Git/filesystem actions, protected-system writes, service/package/kernel/network changes, process termination, and board hardware writes still require approval.
 - Replace command-line substring process detection in install, rollback, and uninstall flows with exact `/proc/<pid>/exe` checks, preventing SSH wrapper commands from falsely blocking upgrades.
 - Strengthen Studio board refresh state, automatically restore task subscriptions after an SSH control reconnect, and add real-board SDK, snapshot, and frontend health regression coverage.
 

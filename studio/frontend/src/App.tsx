@@ -12,12 +12,13 @@ import {api, isMock} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation} from './approval-model.js';
-import {boardHealth, bpuCoreLabel, capacityPair, durationLabel, loadLabel, maximumTemperature, temperatureTone} from './board-health.js';
+import {aiMemoryLabel, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUtilization, capacityPair, durationLabel, formatBytes, loadLabel, maximumTemperature, percentLabel, temperatureTone} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
 import {rdkWorkflows} from './rdk-workflows.js';
+import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, preferredDeploymentArtifact} from './deployment-model.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, ImageContent, ModelOption, SystemSnapshot, Task, TaskEvent} from './types';
+import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -50,6 +51,8 @@ function App() {
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
   const [showSideTask, setShowSideTask] = useState(false);
+  const [showDeployment, setShowDeployment] = useState(false);
+  const [deploymentStatus, setDeploymentStatus] = useState<DeploymentStatus | null>(null);
   const [activityClock, setActivityClock] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -71,6 +74,7 @@ function App() {
   const previousTaskId = useRef('');
   const activeBoardId = useRef('');
   const selectedTaskId = useRef('');
+  const snapshotSampling = useRef(false);
 
   const boardId = connection?.board.id ?? '';
 
@@ -219,26 +223,31 @@ function App() {
 
   useEffect(() => {
     if (!boardId) return;
-    const interval = showInspector ? 5000 : 30000;
     const timer = window.setInterval(() => {
       api.refreshBoard(boardId).then((nextConnection) => {
         if (activeBoardId.current !== boardId) return;
         setConnection(nextConnection);
         setConnectionState('online');
         if (nextConnection.reconnected) setWatchRevision((revision) => revision + 1);
-        if (!nextConnection.capabilities?.capabilities.includes('system.snapshot')) {
-          setSnapshot(null);
-          return;
-        }
-        void api.systemSnapshot(boardId).then((value) => {
-          if (activeBoardId.current === boardId) setSnapshot(value);
-        }).catch(() => undefined);
       }).catch(() => {
         if (activeBoardId.current === boardId) setConnectionState('offline');
       });
-    }, interval);
+    }, 15000);
     return () => window.clearInterval(timer);
-  }, [boardId, showInspector]);
+  }, [boardId]);
+
+  useEffect(() => {
+    if (!boardId || !connection?.capabilities?.capabilities.includes('system.snapshot')) return;
+    const sample = () => {
+      if (snapshotSampling.current) return;
+      snapshotSampling.current = true;
+      void api.systemSnapshot(boardId).then((value) => {
+        if (activeBoardId.current === boardId) setSnapshot(value);
+      }).catch(() => undefined).finally(() => { snapshotSampling.current = false; });
+    };
+    const timer = window.setInterval(sample, showInspector ? 2000 : 30000);
+    return () => window.clearInterval(timer);
+  }, [boardId, connection?.capabilities, showInspector]);
 
   useEffect(() => {
     const timeline = timelineRef.current;
@@ -283,7 +292,6 @@ function App() {
   const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
   const composerBlocked = busy || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
-  const health = boardHealth(snapshot);
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
@@ -295,6 +303,22 @@ function App() {
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
     ? optimisticPrompt.time
     : latestConversationItem?.kind === 'user' ? latestConversationItem.time : selectedTask?.updatedAt;
+
+  useEffect(() => {
+    setDeploymentStatus(null);
+    if (!boardId || !selectedTask?.deployment || !connection?.capabilities?.capabilities.includes('deployments.v1')) return;
+    let cancelled = false;
+    const refresh = async () => {
+      const status = await api.deploymentStatus(boardId, selectedTask.id).catch(() => null);
+      if (!cancelled) setDeploymentStatus(status);
+    };
+    void refresh();
+    if (!terminalStatuses.has(selectedTask.status) && selectedTask.status !== 'idle') {
+      const timer = window.setInterval(() => void refresh(), 5000);
+      return () => {cancelled = true; window.clearInterval(timer);};
+    }
+    return () => {cancelled = true;};
+  }, [boardId, selectedTask?.id, selectedTask?.status, selectedTask?.deployment, connection?.capabilities?.capabilities]);
 
   async function submitPrompt(event: FormEvent) {
     event.preventDefault();
@@ -495,6 +519,24 @@ function App() {
     }
   }
 
+  async function startDeployment(request: StartDeploymentRequest) {
+    if (!boardId) return;
+    setBusy(true);
+    setError('');
+    try {
+      const task = await api.startDeployment(boardId, request);
+      await refreshTasks();
+      selectedTaskId.current = task.id;
+      setSelectedTask(task);
+      setShowDeployment(false);
+      setWatchRevision((revision) => revision + 1);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshWorkspace() {
     if (!boardId || refreshing) return;
     setRefreshing(true);
@@ -627,7 +669,7 @@ function App() {
           <div className="conversation" ref={timelineRef} onScroll={onTimelineScroll} aria-label="Conversation">
             <div className="conversation-inner">
               {eventsLoading && events.length === 0 && <div className="loading-conversation"><LoaderCircle size={18} className="spin" /><span>Loading conversation</span></div>}
-              {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
+              {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {if (workflow.id === 'deploy-model' && connection?.capabilities?.capabilities.includes('deployments.v1')) {setShowDeployment(true); return;} setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} />)}
@@ -670,13 +712,14 @@ function App() {
 
       {showInspector && <aside className="inspector">
         <div className="inspector-header"><span>Board & task</span><div className="inspector-header-actions"><small>{snapshot ? `Updated ${relativeTime(snapshot.capturedAt)}` : 'Not sampled'}</small><button className="icon-button compact" title="Refresh board status" disabled={refreshing} onClick={() => void refreshWorkspace()}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /></button><button className="icon-button compact" title="Close details" onClick={() => setShowInspector(false)}><X size={16} /></button></div></div>
-        {connection && <InspectorSection title="Board health"><div className="board-identity"><Server size={18} /><div><strong>{snapshot?.board || connection.board.name}</strong><span>{snapshot?.hostname || `${connection.board.user}@${connection.board.host}`} · {connectionState === 'online' ? 'Online' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div>{snapshot ? <><div className="metrics-grid"><Metric icon={<Thermometer size={15} />} label="Temperature" value={maximumTemperature(snapshot)} tone={temperatureTone(snapshot)} /><Metric icon={<MemoryStick size={15} />} label="Memory free" value={capacityPair(snapshot.memory.availableBytes, snapshot.memory.totalBytes)} /><Metric icon={<Gauge size={15} />} label="Load / cores" value={loadLabel(snapshot)} /><Metric icon={<HardDrive size={15} />} label="Disk free" value={capacityPair(snapshot.disk.availableBytes, snapshot.disk.totalBytes)} /></div><div className="health-lines"><InfoRow label="RDK OS" value={snapshot.rdkOsVersion || '-'} /><InfoRow label="BPU" value={bpuCoreLabel(snapshot)} /><InfoRow label="Uptime" value={durationLabel(snapshot.uptimeSeconds)} /></div>{health.issues.length ? <div className="health-issues">{health.issues.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div> : <div className="health-ready"><Check size={14} /><span>No monitored issues detected.</span></div>}</> : <div className="snapshot-empty">Hardware status is unavailable on this board-side version. Tasks remain available.</div>}</InspectorSection>}
-        {selectedTask && <><InspectorSection title="Current task"><InfoRow label="Status" value={statusLabel[selectedTask.status] ?? selectedTask.status} /><InfoRow label="Model" value={selectedTask.model?.split('/').at(-1) ?? 'Board default'} /><InfoRow label="Permissions" value={permissionLabel(selectedPermissionMode)} /><InfoRow label="Updated" value={relativeTime(selectedTask.updatedAt)} />{selectedTask.parentTaskId && <InfoRow label="Branch" value={selectedTask.branchKind === 'side' ? 'Side Agent' : 'Edited branch'} />}</InspectorSection><InspectorSection title="Workspace"><div className="workspace-entry"><Box size={16} /><span>{selectedTask.cwd}</span><CopyButton value={selectedTask.cwd} /></div></InspectorSection>{(activeApproval || selectedTask.lastError || selectedTask.logTruncated) && <InspectorSection title="Needs attention"><div className="attention-list">{activeApproval && <div><ShieldCheck size={14} /><span>Approval waiting</span></div>}{selectedTask.lastError && <div className="danger"><AlertTriangle size={14} /><span>{selectedTask.lastError}</span></div>}{selectedTask.logTruncated && <div><AlertTriangle size={14} /><span>Older task events were truncated</span></div>}</div></InspectorSection>}<details className="diagnostics"><summary>Diagnostics<ChevronRight size={13} /></summary><div><InfoRow label="Agentd" value={`v${connection?.daemon?.version ?? '—'}`} mono /><InfoRow label="PID" value={selectedTask.pid ? String(selectedTask.pid) : '—'} mono /><InfoRow label="Last sequence" value={String(selectedTask.lastSequence)} mono /><InfoRow label="Schema" value={`v${connection?.capabilities?.eventSchema ?? '—'}`} mono /><InfoRow label="Session" value={selectedTask.sessionId ? selectedTask.sessionId.slice(0, 12) : '—'} mono copy={selectedTask.sessionId} />{snapshot && <InfoRow label="Kernel" value={snapshot.kernel || '—'} mono />}</div></details></>}
+        {connection && <BoardMonitor connection={connection} connectionState={connectionState} snapshot={snapshot} />}
+        {selectedTask && <><InspectorSection title="Current task"><InfoRow label="Status" value={statusLabel[selectedTask.status] ?? selectedTask.status} /><InfoRow label="Model" value={selectedTask.model?.split('/').at(-1) ?? 'Board default'} /><InfoRow label="Permissions" value={permissionLabel(selectedPermissionMode)} /><InfoRow label="Updated" value={relativeTime(selectedTask.updatedAt)} />{selectedTask.parentTaskId && <InfoRow label="Branch" value={selectedTask.branchKind === 'side' ? 'Side Agent' : 'Edited branch'} />}</InspectorSection>{selectedTask.deployment && <DeploymentInspector status={deploymentStatus} record={selectedTask.deployment} />}<InspectorSection title="Workspace"><div className="workspace-entry"><Box size={16} /><span>{selectedTask.cwd}</span><CopyButton value={selectedTask.cwd} /></div></InspectorSection>{(activeApproval || selectedTask.lastError || selectedTask.logTruncated) && <InspectorSection title="Needs attention"><div className="attention-list">{activeApproval && <div><ShieldCheck size={14} /><span>Approval waiting</span></div>}{selectedTask.lastError && <div className="danger"><AlertTriangle size={14} /><span>{selectedTask.lastError}</span></div>}{selectedTask.logTruncated && <div><AlertTriangle size={14} /><span>Older task events were truncated</span></div>}</div></InspectorSection>}<details className="diagnostics"><summary>Diagnostics<ChevronRight size={13} /></summary><div><InfoRow label="Agentd" value={`v${connection?.daemon?.version ?? '—'}`} mono /><InfoRow label="PID" value={selectedTask.pid ? String(selectedTask.pid) : '—'} mono /><InfoRow label="Last sequence" value={String(selectedTask.lastSequence)} mono /><InfoRow label="Schema" value={`v${connection?.capabilities?.eventSchema ?? '—'}`} mono /><InfoRow label="Session" value={selectedTask.sessionId ? selectedTask.sessionId.slice(0, 12) : '—'} mono copy={selectedTask.sessionId} />{snapshot && <InfoRow label="Kernel" value={snapshot.kernel || '—'} mono />}</div></details></>}
       </aside>}
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {setBusy(true); setError(''); try {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
       {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
+      {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
     </div>
   );
@@ -815,9 +858,68 @@ function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: 
   return <div className="modal-backdrop"><form className="modal side-task-modal" onSubmit={(event) => {event.preventDefault(); onCreate(prompt.trim(), name.trim());}}><div className="modal-header"><div><span className="modal-eyebrow">Parallel branch</span><h2>New side task</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="fork-source"><GitBranch size={16} /><span><strong>Shares the settled context from {parent.name}</strong><small>The main task stays unchanged and both can continue independently.</small></span></div><div className="form-grid"><label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={`${parent.name}-side`} /></label><label><span>Instruction</span><textarea rows={6} value={prompt} onChange={(event) => setPrompt(event.target.value)} autoFocus required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !prompt.trim()}><GitBranch size={15} />Start side task</button></div></div></form></div>;
 }
 
+function DeploymentDialog({boardId, cwd, snapshot, models, busy, onClose, onStart}: {boardId: string; cwd: string; snapshot: SystemSnapshot; models: ModelOption[]; busy: boolean; onClose: () => void; onStart: (request: StartDeploymentRequest) => void}) {
+  const [inspection, setInspection] = useState<DeploymentInspection | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failure, setFailure] = useState('');
+  const [artifactPath, setArtifactPath] = useState('');
+  const [goal, setGoal] = useState<StartDeploymentRequest['goal']>('deploy-and-validate');
+  const [model, setModel] = useState(models[0] ? `${models[0].provider}/${models[0].id}` : '');
+  const [permissionMode, setPermissionMode] = useState('ask');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.inspectDeployment(boardId, cwd).then((result) => {
+      if (cancelled) return;
+      setInspection(result);
+      const preferred = preferredDeploymentArtifact(result.artifacts);
+      setArtifactPath(preferred?.path ?? '');
+      setFailure('');
+    }).catch((reason) => !cancelled && setFailure(friendlyError(String(reason)))).finally(() => !cancelled && setLoading(false));
+    return () => {cancelled = true;};
+  }, [boardId, cwd]);
+
+  const selected = inspection?.artifacts.find((artifact) => artifact.path === artifactPath);
+  const canStart = deploymentCanStart(selected) && !loading && !busy;
+  return <div className="modal-backdrop"><form className="modal deployment-modal" onSubmit={(event) => {event.preventDefault(); if (canStart && selected) onStart({cwd, artifactPath: selected.path, goal, name: `Deploy ${selected.name}`, model: model || undefined, permissionMode});}}><div className="modal-header"><div><span className="modal-eyebrow">RDK deployment</span><h2>Deploy and validate a model</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="deployment-target"><Cpu size={17} /><span><strong>{snapshot.board}</strong><small>{snapshot.boardId.toUpperCase()} · RDK OS {snapshot.rdkOsVersion} · {cwd}</small></span></div>{loading ? <div className="deployment-loading"><LoaderCircle size={17} className="spin" />Scanning model artifacts</div> : failure ? <div className="deployment-error"><AlertTriangle size={15} />{failure}</div> : <div className="form-grid"><label><span>Model artifact</span><select value={artifactPath} onChange={(event) => setArtifactPath(event.target.value)} required><option value="" disabled>{inspection?.artifacts.length ? 'Choose an artifact' : 'No supported artifacts found'}</option>{inspection?.artifacts.map((artifact) => <option key={artifact.path} value={artifact.path} disabled={artifact.compatibility === 'mismatch'}>{artifact.relativePath} · {artifact.kind} · {deploymentCompatibilityLabel(artifact.compatibility)}</option>)}</select></label>{selected && <div className={`artifact-assessment assessment-${selected.compatibility}`}><div><Box size={15} /><strong>{deploymentCompatibilityLabel(selected.compatibility)}</strong><span>{formatBytes(selected.sizeBytes)}</span></div><p>{selected.reason}</p></div>}<label><span>Goal</span><select value={goal} onChange={(event) => setGoal(event.target.value as StartDeploymentRequest['goal'])}><option value="deploy-and-validate">Deploy, verify, and benchmark</option><option value="benchmark">Validate an existing artifact</option></select></label><div className="form-row deployment-options"><label><span>Agent model</span><select value={model} onChange={(event) => setModel(event.target.value)}>{models.map((option) => <option key={`${option.provider}/${option.id}`} value={`${option.provider}/${option.id}`}>{option.name || option.id}</option>)}</select></label><label><span>Permissions</span><select value={permissionMode} onChange={(event) => setPermissionMode(event.target.value)}><option value="ask">Ask</option><option value="developer">Developer</option></select></label></div>{inspection?.truncated && <div className="deployment-note"><AlertTriangle size={13} />Scan limit reached. Narrow the project directory if the artifact is missing.</div>}<div className="deployment-note"><ShieldCheck size={13} />Commands and file changes remain subject to the board-side permission policy. Completion requires a verified report and artifact digest.</div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={!canStart}>{busy ? <LoaderCircle size={15} className="spin" /> : <Gauge size={15} />}Start deployment</button></div></div>}</form></div>;
+}
+
+function DeploymentInspector({status, record}: {status: DeploymentStatus | null; record: NonNullable<Task['deployment']>}) {
+  const phase = status?.phase ?? 'checking';
+  const report = status?.report;
+  return <InspectorSection title="Model deployment"><div className={`deployment-phase phase-${phase}`}><span>{deploymentPhaseLabel(phase)}</span>{phase === 'running' || phase === 'checking' ? <LoaderCircle size={13} className="spin" /> : phase === 'passed' ? <Check size={13} /> : <AlertTriangle size={13} />}</div><InfoRow label="Target" value={`${record.boardId.toUpperCase()} · ${record.rdkOsVersion || 'unknown OS'}`} /><InfoRow label="Goal" value={record.goal} /><InfoRow label="Artifact" value={record.artifact.name} mono copy={record.artifact.path} />{report && <><InfoRow label="Correctness" value={report.correctness.passed ? 'Passed' : 'Not passed'} /><InfoRow label="Measured" value={report.performance.iterations ? `${report.performance.iterations} iterations` : 'No benchmark'} />{report.performance.p50LatencyMs ? <InfoRow label="Latency" value={`p50 ${report.performance.p50LatencyMs.toFixed(2)} ms · p95 ${(report.performance.p95LatencyMs ?? 0).toFixed(2)} ms`} /> : null}<div className="deployment-summary">{report.summary}</div></>}{status?.issue && <div className="deployment-issue"><AlertTriangle size={13} />{status.issue}</div>}<details className="deployment-report-path"><summary>Report path<ChevronRight size={12} /></summary><div>{record.reportPath}<CopyButton value={record.reportPath} /></div></details></InspectorSection>;
+}
+
 function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conversation' | 'project'; label: string; taskIds: string[]}; busy: boolean; onClose: () => void; onDelete: () => void}) {
   const project = target.kind === 'project';
   return <div className="modal-backdrop"><div className="modal confirm-modal"><div className="confirm-icon"><Trash2 size={18} /></div><h2>{project ? 'Remove project?' : 'Delete conversation?'}</h2><p>{project ? `This removes ${target.taskIds.length} conversation${target.taskIds.length === 1 ? '' : 's'} from ${target.label}.` : `This permanently removes ${target.label} from Hobot Code.`}</p><small>Running agents will stop. Files in the board workspace will not be deleted.</small><div className="modal-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="danger-button" onClick={onDelete} disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}Delete</button></div></div></div>;
+}
+
+function BoardMonitor({connection, connectionState, snapshot}: {connection: Connection; connectionState: 'connecting' | 'online' | 'offline'; snapshot: SystemSnapshot | null}) {
+  if (!snapshot) {
+    return <InspectorSection title="Board health"><div className="board-identity"><Server size={18} /><div><strong>{connection.board.name}</strong><span>{connection.board.user}@{connection.board.host} · {connectionState === 'online' ? 'Online' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div><div className="snapshot-empty">Hardware telemetry is unavailable on this board-side version. Tasks remain available.</div></InspectorSection>;
+  }
+  const utilization = bpuUtilization(snapshot);
+  const health = boardHealth(snapshot);
+  const aiMemory = snapshot.aiMemory;
+  return <>
+    <InspectorSection title="Accelerator">
+      <div className="board-identity"><Server size={18} /><div><strong>{snapshot.board}</strong><span>{snapshot.hostname} · {connectionState === 'online' ? 'Live' : connectionState === 'connecting' ? 'Checking' : 'Offline'}</span></div></div>
+      <div className="bpu-hero">
+        <div className="bpu-hero-heading"><span><Cpu size={15} />BPU utilization</span><strong>{utilization.available ? percentLabel(utilization.average) : 'Unavailable'}</strong></div>
+        <div className="bpu-hero-meta"><span>{bpuCoreLabel(snapshot)}</span>{utilization.available && <span>Peak core {utilization.peakCore} · {percentLabel(utilization.peak)}</span>}</div>
+        {snapshot.bpuCores?.length ? <div className="bpu-core-list">{snapshot.bpuCores.map((core) => <div className="bpu-core" key={core.index}><span>{core.name}</span><div className="bpu-track"><i style={{width: `${Math.max(0, Math.min(100, core.utilizationPercent))}%`}} /></div><strong>{percentLabel(core.utilizationPercent)}</strong></div>)}</div> : <div className="bpu-unavailable">Per-core utilization is not exposed by this board-side version.</div>}
+      </div>
+      <div className="accelerator-stats"><InfoRow label="Frequency" value={bpuFrequency(snapshot)} /><InfoRow label="BPU temperature" value={bpuTemperature(snapshot)} /><InfoRow label="AI memory" value={aiMemoryLabel(snapshot)} /></div>
+      {aiMemory?.available && <details className="accelerator-details"><summary><span>AI memory details</span><ChevronRight size={13} /></summary><div><InfoRow label="BPU allocated" value={aiMemory.bpuAllocationAvailable ? formatBytes(aiMemory.bpuAllocatedBytes ?? 0) : 'Unavailable'} /><InfoRow label="ION active" value={aiMemory.ionAvailable ? formatBytes(aiMemory.ionAllocatedBytes ?? 0) : 'Unavailable'} /><InfoRow label="CMA free" value={aiMemory.cmaAvailable ? capacityPair(aiMemory.cmaFreeBytes ?? 0, aiMemory.cmaTotalBytes ?? 0) : 'Unavailable'} /><InfoRow label="Shared dma-buf" value={aiMemory.dmaBufAvailable ? `${formatBytes(aiMemory.dmaBufBytes ?? 0)} · ${aiMemory.dmaBufObjects ?? 0} objects` : 'Unavailable'} />{(aiMemory.ionOrphanedBytes ?? 0) > 0 && <InfoRow label="Orphaned ION" value={formatBytes(aiMemory.ionOrphanedBytes ?? 0)} />}{aiMemory.heaps?.filter((heap) => heap.capacityBytes || heap.allocatedBytes).slice(0, 8).map((heap) => <InfoRow key={heap.name} label={heap.name} value={`${formatBytes(heap.allocatedBytes)}${heap.capacityBytes ? ` / ${formatBytes(heap.capacityBytes)}` : ''}`} mono />)}</div></details>}
+    </InspectorSection>
+    <InspectorSection title="System">
+      <div className="metrics-grid"><Metric icon={<Thermometer size={15} />} label="Board temp" value={maximumTemperature(snapshot)} tone={temperatureTone(snapshot)} /><Metric icon={<MemoryStick size={15} />} label="Memory free" value={capacityPair(snapshot.memory.availableBytes, snapshot.memory.totalBytes)} /><Metric icon={<Gauge size={15} />} label="CPU load / cores" value={loadLabel(snapshot)} /><Metric icon={<HardDrive size={15} />} label="Disk free" value={capacityPair(snapshot.disk.availableBytes, snapshot.disk.totalBytes)} /></div>
+      <div className="health-lines"><InfoRow label="RDK OS" value={snapshot.rdkOsVersion || '-'} /><InfoRow label="Uptime" value={durationLabel(snapshot.uptimeSeconds)} /></div>
+      {health.issues.length ? <div className="health-issues">{health.issues.map((issue) => <div key={issue.label} className={issue.tone}><AlertTriangle size={14} /><span>{issue.label}</span></div>)}</div> : <div className="health-ready"><Check size={14} /><span>Accelerator and system telemetry look healthy.</span></div>}
+    </InspectorSection>
+  </>;
 }
 
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }

@@ -34,7 +34,7 @@ func TestSSHIntegration(t *testing.T) {
 	}
 	if containsCapability(info.Capabilities.Capabilities, "system.snapshot") {
 		snapshot, err := client.SystemSnapshot(ctx)
-		if err != nil || snapshot.Board == "" || snapshot.CPUCores < 1 {
+		if err != nil || snapshot.Board == "" || snapshot.CPUCores < 1 || len(snapshot.BPUCores) == 0 {
 			t.Fatalf("invalid system snapshot: %+v err=%v", snapshot, err)
 		}
 	}

@@ -35,6 +35,9 @@ export type Connection = {
 };
 
 export type ThermalZone = {name: string; celsius: number};
+export type BPUCoreInfo = {index: number; name: string; utilizationPercent: number; currentFrequencyHz?: number; minimumFrequencyHz?: number; maximumFrequencyHz?: number};
+export type AIMemoryHeapInfo = {name: string; capacityBytes?: number; allocatedBytes: number; orphanedBytes?: number};
+export type AIMemoryInfo = {available: boolean; bpuAllocationAvailable: boolean; ionAvailable: boolean; cmaAvailable: boolean; dmaBufAvailable: boolean; bpuAllocatedBytes?: number; ionAllocatedBytes?: number; ionOrphanedBytes?: number; cmaTotalBytes?: number; cmaFreeBytes?: number; dmaBufBytes?: number; dmaBufObjects?: number; heaps?: AIMemoryHeapInfo[]};
 export type SystemSnapshot = {
   capturedAt: string;
   board: string;
@@ -49,9 +52,18 @@ export type SystemSnapshot = {
   disk: {path: string; totalBytes: number; availableBytes: number};
   thermalZones: ThermalZone[];
   bpuDevices: string[];
+  bpuCores?: BPUCoreInfo[];
+  aiMemory?: AIMemoryInfo;
   rdkUtilities: Record<string, boolean>;
   uptimeSeconds: number;
 };
+
+export type DeploymentArtifact = {path: string; relativePath: string; name: string; kind: string; sizeBytes: number; modifiedAt: string; compatibility: 'candidate' | 'unverified' | 'conversion-required' | 'mismatch'; reason: string};
+export type DeploymentInspection = {capturedAt: string; cwd: string; board: string; boardId: string; rdkOsVersion: string; artifacts: DeploymentArtifact[]; truncated: boolean};
+export type DeploymentRecord = {schema: number; cwd: string; board: string; boardId: string; rdkOsVersion: string; goal: string; artifact: DeploymentArtifact; reportPath: string; createdAt: string};
+export type DeploymentReport = {schema: number; outcome: string; boardId: string; artifactPath: string; artifactSha256?: string; summary: string; correctness: {passed: boolean; method?: string}; performance: {warmupIterations?: number; iterations?: number; p50LatencyMs?: number; p95LatencyMs?: number; throughput?: number}};
+export type DeploymentStatus = {taskId: string; phase: string; deployment: DeploymentRecord; report?: DeploymentReport; issue?: string};
+export type StartDeploymentRequest = {cwd: string; artifactPath: string; goal: 'deploy-and-validate' | 'benchmark'; name?: string; model?: string; permissionMode?: string};
 
 export type Approval = {
   id: string;
@@ -87,6 +99,7 @@ export type Task = {
   branchKind?: 'side' | 'edit';
   archivedAt?: string;
   pendingApprovals?: Approval[];
+  deployment?: DeploymentRecord;
 };
 
 export type NormalizedEvent = {

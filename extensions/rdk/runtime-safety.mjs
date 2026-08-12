@@ -114,5 +114,30 @@ export function destructiveShellReasons(command) {
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:kill|killall|pkill)\b/i, "terminates running processes"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:apt(?:-get)?|dnf|yum)\s+(?:autoremove|purge|remove)\b/i, "removes installed software"],
   ];
-  return checks.filter(([pattern]) => pattern.test(value)).map(([_pattern, reason]) => reason);
+  const highRiskChecks = [
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?git\s+(?:clean\b|reset\s+--hard\b|push\b[^\n]*(?:--force(?:-with-lease)?\b|-f\b)|branch\s+(?:-D\b|--delete\s+--force\b))/i, "performs a destructive or forceful Git operation"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:cp|mv|install|ln|mkdir|touch)\b[^;&|\n]*(?:\s|=)['"]?\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "modifies a protected system path"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:sed\s+[^;&|\n]*(?:-i\b|--in-place\b)|perl\s+[^;&|\n]*-[^;&|\n]*i\b)[^;&|\n]*\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "edits a protected system path in place"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:chmod|chown|chgrp|setfacl)\b/i, "changes file ownership or access permissions"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?systemctl\s+(?:daemon-reload|disable|enable|halt|isolate|mask|poweroff|preset|reboot|reload|restart|start|stop|unmask)\b/i, "changes or stops a system service"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?service\s+\S+\s+(?:start|stop|restart|reload|force-reload)\b/i, "changes or stops a system service"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:apt(?:-get)?|dnf|yum|zypper|pacman)\s+(?:autoremove|dist-upgrade|full-upgrade|install|purge|remove|update|upgrade)\b/i, "changes installed software or package metadata"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:dpkg\s+(?:-i|--install|-r|--remove|-P|--purge)\b|rpm\s+(?:-[A-Za-z]*[eFiU]|--erase|--freshen|--install|--upgrade)\b)/i, "changes installed software"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:make|ninja)\s+(?:[^;&|\n]+\s+)?install\b/i, "installs build output into the system"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?cmake\s+--install\b/i, "installs build output into the system"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:pip3?|npm|pnpm|yarn|gem)\b[^;&|\n]*\b(?:install|add)\b[^;&|\n]*(?:--global\b|-g\b)/i, "installs a global language package"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:docker|podman)\s+(?:container\s+)?(?:rm|kill|stop|run\b[^;&|\n]*(?:--privileged\b|--pid\s*=\s*host\b|-v\s*\/(?:\s|:)|--volume\s*=\s*\/(?:\s|:)))/i, "performs a privileged or destructive container operation"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:mount|umount|swapon|swapoff)\b/i, "changes mounted filesystems or swap"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:insmod|modprobe|rmmod)\b/i, "changes loaded kernel modules"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?sysctl\s+(?:-w|--write)\b/i, "changes kernel runtime settings"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:useradd|userdel|usermod|groupadd|groupdel|groupmod|passwd|chpasswd|visudo)\b/i, "changes users, groups, or authentication"],
+    [/(?:>|>>)(?:\s*['"]?)\/(?:root|home\/[^/\s]+)\/(?:\.ssh|\.config\/hobot-code)(?:\/|\b)/i, "writes credentials or Hobot Code configuration"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:iptables|ip6tables|nft)\b/i, "changes firewall or packet-filter state"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?ip\s+(?:address|addr|link|route|rule)\s+(?:add|append|change|delete|del|flush|replace|set)\b/i, "changes network configuration"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:i2cset|gpioset|devmem|cansend|flash_erase|nandwrite|fw_setenv|efibootmgr)\b/i, "writes to board hardware or firmware state"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:curl|wget)\b[^\n]*(?:\||\|&)\s*(?:sudo\s+)?(?:ba|z|k)?sh\b/i, "downloads and executes remote content"],
+  ];
+  return [...new Set([...checks, ...highRiskChecks]
+    .filter(([pattern]) => pattern.test(value))
+    .map(([_pattern, reason]) => reason))];
 }

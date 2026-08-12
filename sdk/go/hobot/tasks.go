@@ -27,6 +27,24 @@ func (client *Client) SystemSnapshot(ctx context.Context) (SystemSnapshot, error
 	return snapshot, err
 }
 
+func (client *Client) InspectDeployment(ctx context.Context, cwd string) (DeploymentInspection, error) {
+	var inspection DeploymentInspection
+	err := client.Call(ctx, "deployment.inspect", map[string]any{"path": cwd}, &inspection)
+	return inspection, err
+}
+
+func (client *Client) StartDeployment(ctx context.Context, request StartDeploymentRequest) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "deployment.start", request, &task)
+	return task, err
+}
+
+func (client *Client) DeploymentStatus(ctx context.Context, taskID string) (DeploymentStatus, error) {
+	var status DeploymentStatus
+	err := client.Call(ctx, "deployment.status", map[string]any{"taskId": taskID}, &status)
+	return status, err
+}
+
 func (client *Client) Tasks(ctx context.Context, includeArchived bool, cursor string, limit int) (TaskPage, error) {
 	var page TaskPage
 	err := client.Call(ctx, "task.page", map[string]any{

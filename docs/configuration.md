@@ -166,16 +166,16 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 `/permissions set <pattern> <action>` 将规则放到数组开头并原子写回。配置缺失或无效时使用内置保守默认值并显示警告。`deny` 工具从活跃工具集合移除，调用时仍会复核；旧版 schema 1 中可能修改系统的 `allow` 规则会降级为 `ask`。
 
-`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、板卡诊断、知识检索、只读记忆、目标进度和 LSP。root 下的变更工具仍需要精确审批。质量门执行、持久记忆写入、目标完成、MCP 和未知工具仍然确认。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
+`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、板卡诊断、知识检索、只读记忆、目标进度和 LSP。Developer 使用风险审批，即使会话以 root 运行，帮助查询、状态检查、构建和工作区内编辑等普通操作也不会反复确认；质量门执行、持久记忆写入、目标完成、MCP 和未知工具仍然确认。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
 
-root 会话的 `bash`、`write`、`edit` 始终要求精确到本次调用的审批，即使宽泛规则为 `allow`。`rootMode` 字段仅为旧配置兼容而保留；`/permissions root` 已停用，不能再放宽 root 变更边界。完全相同且非危险的调用可以在当前任务内记住，危险 Shell 每次都必须审批。
+root 会话默认使用 `rootMode: "confirm"`，对 `bash`、`write`、`edit` 逐次审批。Developer 预设或 `/permissions root policy` 会改用策略判定，但不会关闭硬安全边界；`/permissions root confirm` 可恢复严格模式。完全相同且非危险的确认调用可以在当前任务内记住，危险 Shell 每次都必须审批。
 
 硬安全边界高于用户规则：
 
 - 内置 `write`、`edit` 禁止修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
 - 内置工具写入工作区外，以及 Shell 命中破坏性规则时，需要交互确认。
-- root 下的 `bash`、`write`、`edit` 必须具有当前调用的精确授权；宽泛 allow 规则不会绕过这一边界。
-- 工作区外写入和识别出的破坏性 Shell 命令仍需确认，关键系统目录的内置 `write`/`edit` 会被阻止。
+- Developer 下的普通读取、构建、测试和工作区内编辑按 allow 规则直接执行；Ask 和 root strict 模式仍逐次确认变更工具。
+- 工作区外写入，以及文件删除、受保护路径修改、服务与软件包变更、设备/固件写入、重启、结束进程等高风险 Shell 命令仍需确认，关键系统目录的内置 `write`/`edit` 会被阻止。
 - 确认详情会尽力隐藏 token、Bearer Token 和常见 secret 字段。
 
 默认策略允许 `memory_search`，将 `memory_save` 设为 `ask`。这意味着默认每次由模型发起的记忆写入都要确认，但用户可以修改该规则；直接执行 `/memory add` 本身就是明确的用户操作。

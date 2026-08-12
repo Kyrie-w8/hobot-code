@@ -203,6 +203,42 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, collectSystemSnapshot(server.cfg)))
+	case "deployment.inspect":
+		var params workspaceParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		inspection, err := inspectDeployment(params, collectSystemSnapshot(server.cfg))
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "deployment_inspect_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, inspection))
+	case "deployment.start":
+		var params deploymentStartParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.startDeployment(params, collectSystemSnapshot(server.cfg))
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "deployment_start_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "deployment.status":
+		var params taskIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		status, err := server.manager.deploymentStatus(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "deployment_status_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, status))
 	case "workspace.list":
 		var params workspaceParams
 		if err := decodeParams(req.Params, &params); err != nil {

@@ -1285,8 +1285,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (permissionPolicyError) {
       ctx.ui.notify(`Permission policy fallback is active: ${permissionPolicyError}`, "warning");
     }
-    if (runningAsRoot) {
-      ctx.ui.notify("Hobot Code is running as root. Shell and file mutations require an exact-call approval.", "warning");
+    if (runningAsRoot && permissionPolicy.rootMode === "confirm") {
+      ctx.ui.notify("Hobot Code is running as root in strict confirmation mode. Use Developer permissions for risk-based approvals.", "warning");
     }
     if (qualityConfigError) {
       ctx.ui.notify(`Quality gate config was ignored: ${qualityConfigError}`, "warning");
@@ -1502,7 +1502,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
     const callAlreadyAllowed = hasAllowedToolCall(permissionPolicy, event.toolName, event.input);
     if (requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName) && !callAlreadyAllowed) {
-      approvalReasons.push("root sessions require confirmation for every mutation-capable tool");
+      approvalReasons.push("root strict mode requires confirmation for every mutation-capable tool");
     }
 
     if (event.toolName === "write" || event.toolName === "edit") {
@@ -1656,7 +1656,14 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
         } else if (operation === "root") {
-          throw new Error("/permissions root is retired; root bash/write/edit always require exact-call approval");
+          if (first !== "confirm" && first !== "policy") {
+            throw new Error("Usage: /permissions root <confirm|policy>");
+          }
+          permissionPolicy = await writePolicy(
+            permissionPolicyPath(),
+            parsePolicy({ ...permissionPolicy, rootMode: first }),
+          ) as PermissionPolicy;
+          permissionPolicyError = undefined;
         } else if (operation === "preset") {
           if (first !== "developer" || second) {
             throw new Error("Usage: /permissions preset developer");
@@ -1667,7 +1674,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
         } else {
-          throw new Error("Usage: /permissions [status|reload|preset developer|set <pattern> <action>|default <action>]");
+          throw new Error("Usage: /permissions [status|reload|preset developer|set <pattern> <action>|default <action>|root <confirm|policy>]");
         }
 
         const hidden = applyDeniedTools();
@@ -2132,8 +2139,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
       const temperatures = snapshot.thermalZones.map((zone) => `${zone.name}=${zone.celsius}C`).join(", ") || "unavailable";
       const warnings = [
-        runningAsRoot
-          ? "Running as root; bash/write/edit require exact-call approval."
+        runningAsRoot && permissionPolicy.rootMode === "confirm"
+          ? "Running as root in strict confirmation mode."
           : undefined,
         permissionPolicyError ? `Permission policy: ${permissionPolicyError}` : undefined,
         memoryRuntimeError ? `Memory: ${memoryRuntimeError}` : undefined,

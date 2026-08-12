@@ -11,8 +11,9 @@ import (
 const defaultTaskPermissionMode = "ask"
 
 type permissionRule struct {
-	Tool   string `json:"tool"`
-	Action string `json:"action"`
+	Tool       string `json:"tool"`
+	Action     string `json:"action"`
+	TargetHash string `json:"targetHash,omitempty"`
 }
 
 type taskPermissionPolicy struct {
@@ -75,9 +76,9 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 			permissionRule{Tool: "mcp:*", Action: "ask"},
 		)
 	case "developer":
-		// RDK sessions commonly run as root. Developer mode removes routine
-		// non-root prompts, while root mutations still require approval.
-		policy.RootMode = "confirm"
+		// RDK sessions commonly run as root. Developer mode delegates routine
+		// calls to the policy while the extension still confirms high-risk work.
+		policy.RootMode = "policy"
 		policy.Rules = append(policy.Rules,
 			permissionRule{Tool: "write", Action: "allow"},
 			permissionRule{Tool: "edit", Action: "allow"},
@@ -108,12 +109,57 @@ func (current *task) writePermissionPolicy(mode string) error {
 }
 
 func (current *task) ensurePermissionPolicy(mode string) error {
-	_, err := privateRegularFileInfo(current.permissionPolicyPath(), maxRequestBytes)
+	path := current.permissionPolicyPath()
+	_, err := privateRegularFileInfo(path, maxRequestBytes)
 	if err == nil {
+		if mode != "developer" {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		var policy taskPermissionPolicy
+		if json.Unmarshal(content, &policy) != nil || policy.SchemaVersion != 2 {
+			return nil
+		}
+		if isLegacyDeveloperTaskPolicy(policy) {
+			policy.RootMode = "policy"
+			updated, marshalErr := json.MarshalIndent(policy, "", "  ")
+			if marshalErr != nil {
+				return marshalErr
+			}
+			return writePrivateFile(path, append(updated, '\n'))
+		}
 		return nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return current.writePermissionPolicy(mode)
+}
+
+func isLegacyDeveloperTaskPolicy(policy taskPermissionPolicy) bool {
+	if policy.SchemaVersion != 2 || policy.RootMode != "confirm" || policy.Default != "ask" {
+		return false
+	}
+	expected, err := permissionPolicyForMode("developer")
+	if err != nil {
+		return false
+	}
+	broad := make([]permissionRule, 0, len(policy.Rules))
+	for _, rule := range policy.Rules {
+		if rule.TargetHash == "" {
+			broad = append(broad, rule)
+		}
+	}
+	if len(broad) != len(expected.Rules) {
+		return false
+	}
+	for index := range broad {
+		if broad[index].Tool != expected.Rules[index].Tool || broad[index].Action != expected.Rules[index].Action {
+			return false
+		}
+	}
+	return true
 }

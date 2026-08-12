@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,7 +51,7 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 	}{
 		{mode: "review", rootMode: "policy", bash: "deny", quality: "deny"},
 		{mode: "ask", rootMode: "confirm", bash: "ask", quality: "ask"},
-		{mode: "developer", rootMode: "confirm", bash: "allow", quality: "ask"},
+		{mode: "developer", rootMode: "policy", bash: "allow", quality: "ask"},
 	}
 	for _, test := range tests {
 		t.Run(test.mode, func(t *testing.T) {
@@ -68,6 +69,36 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 	}
 	if got, err := normalizePermissionMode(""); err != nil || got != "ask" {
 		t.Fatalf("default permission mode = %q, %v", got, err)
+	}
+}
+
+func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	current := &task{dir: dir}
+	policy, err := permissionPolicyForMode("developer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.RootMode = "confirm"
+	policy.Rules = append([]permissionRule{{Tool: "bash", Action: "allow", TargetHash: strings.Repeat("a", 64)}}, policy.Rules...)
+	legacy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.permissionPolicyPath(), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.ensurePermissionPolicy("developer"); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(current.permissionPolicyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated taskPermissionPolicy
+	if json.Unmarshal(content, &migrated) != nil || migrated.RootMode != "policy" ||
+		permissionAction(migrated, "bash") != "allow" || migrated.Rules[0].TargetHash != strings.Repeat("a", 64) {
+		t.Fatalf("legacy developer policy was not migrated safely: %s", content)
 	}
 }
 
