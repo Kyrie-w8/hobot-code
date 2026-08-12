@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, rename, utimes, writeFile } from "node:fs/promises";
+import { readFile, readdir, realpath, rename, utimes, writeFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export async function releaseFiles(rootDirectory) {
   const root = resolve(rootDirectory);
@@ -64,4 +64,4 @@ async function main() {
   console.log(`Wrote MANIFEST.sha256 for ${records.length} release files`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
+if (process.argv[1] && await realpath(process.argv[1]) === await realpath(fileURLToPath(import.meta.url))) await main();

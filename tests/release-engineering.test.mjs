@@ -96,6 +96,32 @@ test("release metadata is derived from the repository version and pinned inputs"
   await assert.rejects(() => validatePackageMetadata(stage), /tool provenance does not match/);
 });
 
+test("release CLIs execute through symbolic directory paths", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-release-cli-"));
+  const linkedScripts = join(root, "linked-scripts");
+  const packageRoot = join(root, "package");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink(join(repository, "scripts"), linkedScripts);
+  await mkdir(packageRoot);
+  await writeFile(join(packageRoot, "payload.txt"), "verified\n");
+
+  const metadata = await execFileAsync(process.execPath, [
+    join(linkedScripts, "release-metadata.mjs"), "validate", repository,
+  ]);
+  assert.match(metadata.stdout, /Validated Hobot Code/);
+
+  const manifest = await execFileAsync(process.execPath, [
+    join(linkedScripts, "write-release-manifest.mjs"), packageRoot, "2026-08-10T00:00:00Z",
+  ]);
+  assert.match(manifest.stdout, /Wrote MANIFEST\.sha256/);
+  await access(join(packageRoot, "MANIFEST.sha256"));
+
+  const validation = await execFileAsync(process.execPath, [
+    join(linkedScripts, "validate-package.mjs"), "--source", repository,
+  ]);
+  assert.match(validation.stdout, /Validated extension import closure/);
+});
+
 test("release manifest detects post-build mutation", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hobot-manifest-"));
   t.after(() => rm(root, { recursive: true, force: true }));

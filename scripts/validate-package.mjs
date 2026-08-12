@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { lstat, open, readFile, readdir } from "node:fs/promises";
+import { lstat, open, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, extname, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { parseDataLock, PI_LOCK_FIELDS, TOOL_LOCK_FIELDS } from "./release-metadata.mjs";
 
@@ -353,4 +353,4 @@ async function main() {
   console.log(mode === "--source" ? "Validated extension import closure" : "Validated release package contents and manifest");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
+if (process.argv[1] && await realpath(process.argv[1]) === await realpath(fileURLToPath(import.meta.url))) await main();

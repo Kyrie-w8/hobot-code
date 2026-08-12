@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.1
+
+- Make release metadata generation and package validation execute reliably through symbolic directory paths, preventing macOS `/tmp` path aliases from producing archives without `BUILD_INFO.json` or `MANIFEST.sha256`.
+
 ## 0.22.0
 
 - Make Ask the default background-task permission mode, require exact-call approval for root shell and file mutations, bound remembered approvals, and prevent broad or legacy root policies from silently authorizing new targets.

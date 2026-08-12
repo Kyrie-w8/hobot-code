@@ -60,7 +60,7 @@ curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot
 
 ```bash
 curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh \
-  | sh -s -- --version 0.22.0
+  | sh -s -- --version 0.22.1
 ```
 
 无法从板卡访问 GitHub 时，可从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载版本化归档和同名 `.sha256`，传入板卡后离线安装：
@@ -229,7 +229,7 @@ Hobot Code 是具备当前用户权限的开发 Agent，不是安全沙箱：
 ```bash
 hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
-hobot update --version 0.22.0
+hobot update --version 0.22.1
 ```
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：
