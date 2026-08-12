@@ -9,6 +9,7 @@ import {
   Square, SquareTerminal, Thermometer, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
+import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation} from './approval-model.js';
@@ -65,6 +66,7 @@ function App() {
   const [renamingTask, setRenamingTask] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [watchRevision, setWatchRevision] = useState(0);
+  const [watchStatus, setWatchStatus] = useState<TaskWatchStatus | null>(null);
   const [hasNewOutput, setHasNewOutput] = useState(false);
   const startupStarted = useRef(false);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -169,14 +171,19 @@ function App() {
       if (['task.running', 'task.idle', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
     });
     const removeError = api.onWatchError((watchError) => {
-      if (watchError.boardId === activeBoardId.current) setError(watchError.error);
+      if (watchError.boardId === activeBoardId.current && watchError.taskId === selectedTask?.id) setError(watchError.error);
     });
-    return () => { removeEvent(); removeError(); };
+    const removeStatus = api.onWatchStatus((status) => {
+      if (status.boardId !== activeBoardId.current || status.taskId !== selectedTask?.id) return;
+      setWatchStatus(status.state === 'connected' ? null : status);
+    });
+    return () => { removeEvent(); removeError(); removeStatus(); };
   }, [boardId, refreshTasks, selectedTask?.id]);
 
   useEffect(() => {
     followsOutput.current = true;
     setHasNewOutput(false);
+    setWatchStatus(null);
     if (!boardId || !selectedTask || selectedTask.id.startsWith('draft:')) {
       setEvents([]);
       setEventsLoading(false);
@@ -659,7 +666,7 @@ function App() {
       <main className="task-main">
         {selectedTask ? <>
           <div className="task-header">
-            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span></div><span className="workspace-path">{selectedTask.cwd}</span></div>
+            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span>{watchStatus?.state === 'reconnecting' && <span className="stream-status" role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />Live updates reconnecting</span>}</div><span className="workspace-path">{selectedTask.cwd}</span></div>
             <div className="task-actions">
               {!draftSelected && <button className="secondary-button side-task-button" title={selectedTask.sessionFile ? 'Create an independent agent from this conversation' : 'Side Agent is available after the first response'} onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={15} />Side Agent</button>}
               {terminalStatuses.has(selectedTask.status) && <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>}

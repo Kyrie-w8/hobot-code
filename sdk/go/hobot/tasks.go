@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -180,22 +181,29 @@ func (client *Client) Events(ctx context.Context, taskID string, after uint64, l
 }
 
 func (client *Client) Subscribe(ctx context.Context, taskID string, after uint64, handler func(Event) error) error {
+	return client.SubscribeWithReady(ctx, taskID, after, nil, handler)
+}
+
+// SubscribeWithReady reports a completed subscription handshake before event
+// delivery begins. Callers can distinguish a healthy quiet stream from one
+// that is still retrying after a transport interruption.
+func (client *Client) SubscribeWithReady(ctx context.Context, taskID string, after uint64, ready func(), handler func(Event) error) error {
 	if handler == nil {
 		return fmt.Errorf("event handler is required")
 	}
 	command := exec.CommandContext(ctx, client.config.SSHBinary, client.sshArgs()...)
 	stdin, err := command.StdinPipe()
 	if err != nil {
-		return err
+		return transientSubscriptionError(err)
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		return err
+		return transientSubscriptionError(err)
 	}
 	stderr := &boundedBuffer{maximum: maximumErrorBytes}
 	command.Stderr = stderr
 	if err := command.Start(); err != nil {
-		return err
+		return transientSubscriptionError(err)
 	}
 	id, err := requestID()
 	if err != nil {
@@ -208,7 +216,7 @@ func (client *Client) Subscribe(ctx context.Context, taskID string, after uint64
 	})
 	if err := writeAll(stdin, append(request, '\n')); err != nil {
 		_ = command.Process.Kill()
-		return err
+		return transientSubscriptionError(err)
 	}
 	_ = stdin.Close()
 	scanner := bufio.NewScanner(stdout)
@@ -216,14 +224,17 @@ func (client *Client) Subscribe(ctx context.Context, taskID string, after uint64
 	if !scanner.Scan() {
 		_ = command.Wait()
 		if message := stderr.String(); message != "" {
-			return fmt.Errorf("SSH subscription failed: %s", message)
+			return transientSubscriptionError(fmt.Errorf("SSH subscription failed: %s", message))
 		}
-		return fmt.Errorf("SSH subscription closed before acknowledgement")
+		return transientSubscriptionError(fmt.Errorf("SSH subscription closed before acknowledgement"))
 	}
 	if err := decodeResponse(scanner.Bytes(), id, nil); err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		return err
+	}
+	if ready != nil {
+		ready()
 	}
 	for scanner.Scan() {
 		var event Event
@@ -249,15 +260,35 @@ func (client *Client) Subscribe(ctx context.Context, taskID string, after uint64
 		return ctx.Err()
 	}
 	if err != nil {
-		return err
+		return transientSubscriptionError(err)
 	}
 	if waitErr != nil && waitErr != io.EOF {
 		if message := stderr.String(); message != "" {
-			return fmt.Errorf("SSH subscription closed: %s", message)
+			return transientSubscriptionError(fmt.Errorf("SSH subscription closed: %s", message))
 		}
-		return waitErr
+		return transientSubscriptionError(waitErr)
 	}
 	return nil
+}
+
+type subscriptionTransportError struct{ cause error }
+
+func (err *subscriptionTransportError) Error() string { return err.cause.Error() }
+
+func (err *subscriptionTransportError) Unwrap() error { return err.cause }
+
+func transientSubscriptionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &subscriptionTransportError{cause: err}
+}
+
+// IsTransientSubscriptionError identifies an SSH or stream transport failure
+// that is safe to retry from the last durable event sequence.
+func IsTransientSubscriptionError(err error) bool {
+	var transport *subscriptionTransportError
+	return errors.As(err, &transport)
 }
 
 func nextCommandID() string {

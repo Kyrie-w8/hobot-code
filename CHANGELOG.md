@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.4
+
+- Recover live task updates after an isolated SSH subscription reset by resuming from the last durable event sequence with bounded exponential backoff.
+- Distinguish retryable transport interruptions from fatal event protocol errors, and keep transient reconnects out of the global error banner.
+- Show a compact task-local reconnecting indicator that clears as soon as the subscription handshake succeeds.
+
 ## 0.23.3
 
 - Make historical message editing replace the visible conversation timeline: retain context before the edited prompt, discard later turns from the new timeline, and keep the replacement in the main conversation instead of presenting it as a Side Agent.

@@ -1,5 +1,7 @@
 import type {Board, Connection, DeploymentInspection, DeploymentStatus, EventEnvelope, EventPage, ForkTaskRequest, ImageContent, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskPage, WorkspaceListing} from './types';
 
+export type TaskWatchStatus = {boardId: string; taskId: string; state: 'connected' | 'reconnecting' | 'failed'; attempt?: number; message?: string};
+
 type Backend = Record<string, (...args: any[]) => Promise<any>>;
 
 declare global {
@@ -102,5 +104,6 @@ export const api = {
   stopWatch: (boardId: string, taskId: string) => backend().StopWatchingTask(boardId, taskId),
   openExternalURL: (url: string) => backend().OpenExternalURL(url),
   onEvent: (callback: (envelope: EventEnvelope) => void) => window.runtime?.EventsOn?.('task:event', callback) ?? (() => undefined),
+  onWatchStatus: (callback: (status: TaskWatchStatus) => void) => window.runtime?.EventsOn?.('task:watch-status', callback) ?? (() => undefined),
   onWatchError: (callback: (error: {boardId: string; taskId: string; error: string}) => void) => window.runtime?.EventsOn?.('task:watch-error', callback) ?? (() => undefined),
 };

@@ -110,7 +110,13 @@ func TestSubscriptionUsesDedicatedBridge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var received Event
-	err = client.Subscribe(ctx, "00112233445566778899aabb", 7, func(event Event) error {
+	ready := false
+	err = client.SubscribeWithReady(ctx, "00112233445566778899aabb", 7, func() {
+		ready = true
+	}, func(event Event) error {
+		if !ready {
+			t.Fatal("event arrived before subscription acknowledgement")
+		}
 		received = event
 		return nil
 	})
@@ -119,6 +125,19 @@ func TestSubscriptionUsesDedicatedBridge(t *testing.T) {
 	}
 	if received.Sequence != 8 || received.Normalized == nil || received.Normalized.Type != "task.idle" {
 		t.Fatalf("unexpected event: %+v", received)
+	}
+}
+
+func TestSubscriptionTransportErrorClassification(t *testing.T) {
+	transportErr := transientSubscriptionError(fmt.Errorf("connection reset by peer"))
+	if !IsTransientSubscriptionError(transportErr) {
+		t.Fatal("SSH transport failure must be retryable")
+	}
+	if !IsTransientSubscriptionError(fmt.Errorf("watch failed: %w", transportErr)) {
+		t.Fatal("wrapped SSH transport failure must remain retryable")
+	}
+	if IsTransientSubscriptionError(fmt.Errorf("corrupt task event envelope")) {
+		t.Fatal("protocol corruption must fail instead of retrying forever")
 	}
 }
 

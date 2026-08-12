@@ -56,6 +56,14 @@ type TaskEventEnvelope struct {
 	Event   hobot.Event `json:"event"`
 }
 
+type TaskWatchStatus struct {
+	BoardID string `json:"boardId"`
+	TaskID  string `json:"taskId"`
+	State   string `json:"state"`
+	Attempt int    `json:"attempt,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 type taskWatcher struct {
 	id     uint64
 	cancel context.CancelFunc
@@ -578,8 +586,17 @@ func (app *App) WatchTask(boardID, taskID string, after uint64) error {
 	go func() {
 		nextAfter := after
 		backoff := time.Second
+		attempt := 0
 		for {
-			err := client.Subscribe(ctx, taskID, nextAfter, func(event hobot.Event) error {
+			connectedAt := time.Time{}
+			err := client.SubscribeWithReady(ctx, taskID, nextAfter, func() {
+				connectedAt = time.Now()
+				runtime.EventsEmit(app.ctx, "task:watch-status", TaskWatchStatus{
+					BoardID: boardID, TaskID: taskID, State: "connected",
+				})
+			}, func(event hobot.Event) error {
+				attempt = 0
+				backoff = time.Second
 				nextAfter = event.Sequence
 				runtime.EventsEmit(app.ctx, "task:event", TaskEventEnvelope{BoardID: boardID, Event: event})
 				return nil
@@ -590,8 +607,22 @@ func (app *App) WatchTask(boardID, taskID string, after uint64) error {
 			if err == nil {
 				break
 			}
-			runtime.EventsEmit(app.ctx, "task:watch-error", map[string]string{
-				"boardId": boardID, "taskId": taskID, "error": "Event stream reconnecting: " + err.Error(),
+			if !connectedAt.IsZero() && time.Since(connectedAt) >= 30*time.Second {
+				attempt = 0
+				backoff = time.Second
+			}
+			if !hobot.IsTransientSubscriptionError(err) {
+				runtime.EventsEmit(app.ctx, "task:watch-status", TaskWatchStatus{
+					BoardID: boardID, TaskID: taskID, State: "failed", Message: err.Error(),
+				})
+				runtime.EventsEmit(app.ctx, "task:watch-error", map[string]string{
+					"boardId": boardID, "taskId": taskID, "error": "Event stream failed: " + err.Error(),
+				})
+				break
+			}
+			attempt++
+			runtime.EventsEmit(app.ctx, "task:watch-status", TaskWatchStatus{
+				BoardID: boardID, TaskID: taskID, State: "reconnecting", Attempt: attempt, Message: err.Error(),
 			})
 			timer := time.NewTimer(backoff)
 			select {
