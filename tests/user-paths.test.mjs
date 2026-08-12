@@ -251,12 +251,14 @@ test("launcher persistent sessions preserve arguments and shell safety", async (
   }
 });
 
-test("launcher routes daemon, task, and bridge commands after loading the user environment", async () => {
+test("launcher routes daemon, deployment, task, and bridge commands after loading the user environment", async () => {
   const fixture = await createLauncherFixture("hobot-agentd-route-");
   try {
     const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
     const daemon = await execFileAsync(fixture.launcher, ["daemon", "status"], { env: environment });
     assert.equal(daemon.stdout.trim(), "agentd=<daemon>\nagentd=<status>");
+    const deployment = await execFileAsync(fixture.launcher, ["deploy", "inspect", "--cwd", "/root/models"], { env: environment });
+    assert.equal(deployment.stdout.trim(), "agentd=<deploy>\nagentd=<inspect>\nagentd=<--cwd>\nagentd=</root/models>");
     const task = await execFileAsync(fixture.launcher, ["task", "list"], { env: environment });
     assert.equal(task.stdout.trim(), "agentd=<task>\nagentd=<list>");
     const bridge = await execFileAsync(fixture.launcher, ["bridge", "--stdio"], { env: environment });
