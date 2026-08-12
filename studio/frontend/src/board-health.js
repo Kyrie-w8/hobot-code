@@ -185,6 +185,7 @@ export function formatBytes(value) {
     const gibibytes = value / GIB;
     return `${Number.isInteger(gibibytes) ? gibibytes.toFixed(0) : gibibytes.toFixed(gibibytes >= 10 ? 0 : 1)} GiB`;
   }
+  if (value > 0 && value < 1024 ** 2) return `${Math.max(1, Math.round(value / 1024))} KiB`;
   return `${Math.round(value / 1024 ** 2)} MiB`;
 }
 

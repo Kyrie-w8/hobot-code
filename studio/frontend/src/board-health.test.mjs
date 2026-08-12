@@ -43,6 +43,7 @@ test('thermal, storage, memory, and BPU failures produce actionable issues', () 
 test('capacity and uptime labels stay compact', () => {
   assert.equal(capacityPair(3.5 * 1024 ** 3, 8 * 1024 ** 3), '3.5 GiB / 8 GiB');
   assert.equal(durationLabel(183_600), '2d 3h');
+  assert.equal(acceleratorMemoryMetrics(snapshot({accelerator: {available: true, hbmemPools: [{name: 'cma_reserved', totalBytes: 1024 ** 3, usedBytes: 64 * 1024, freeBytes: 1024 ** 3 - 64 * 1024}]}}))[0].value, '64 KiB / 1 GiB used');
 });
 
 test('resource metrics use comparable capacity percentages', () => {
