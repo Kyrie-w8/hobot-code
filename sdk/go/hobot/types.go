@@ -431,6 +431,21 @@ type ModelCapabilities struct {
 	ImageInput bool `json:"imageInput"`
 }
 
+type ModelHealth struct {
+	Provider    string    `json:"provider"`
+	Model       string    `json:"model"`
+	Status      string    `json:"status"`
+	Category    string    `json:"category"`
+	Message     string    `json:"message"`
+	Transport   string    `json:"transport,omitempty"`
+	CheckedAt   time.Time `json:"checkedAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	FirstByteMS int64     `json:"firstByteMs,omitempty"`
+	LatencyMS   int64     `json:"latencyMs,omitempty"`
+	Attempts    int       `json:"attempts"`
+	Cached      bool      `json:"cached"`
+}
+
 type WorkspaceEntry struct {
 	Name string `json:"name"`
 	Path string `json:"path"`

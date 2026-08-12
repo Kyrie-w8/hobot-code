@@ -22,7 +22,7 @@ func TestBoardConnectionSerializesReconnectState(t *testing.T) {
 
 func TestConnectionCompatibilityMatrix(t *testing.T) {
 	allCapabilities := []string{
-		"tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "system.snapshot",
+		"tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "system.snapshot",
 		"support.bundle.v1", "deployments.v1", "tasks.fork", "workspaces.browse",
 	}
 	info := hobot.DaemonInfo{

@@ -128,6 +128,14 @@ API_TIMEOUT_MS=3000000
 
 内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
 
+配置完成后可先验证模型的真实流式路由：
+
+```bash
+hobot model check drobotics/kimi-k3
+```
+
+该命令发送无工具的最小文本请求，不创建 Agent 任务或会话；只返回可用状态、脱敏错误类别、首包和总耗时。同一模型结果缓存 5 分钟，使用 `--force` 强制重测。Studio 在模型菜单旁提供相同的 **Check** 控件，但连接板卡时不会自动调用模型或产生费用。健康通过只证明此刻的最小文本链路可用，不代表图像、长上下文、工具调用和生产配额均已验证。
+
 安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。D-Robotics Provider 优先请求 Anthropic SSE 流；若端点明确不支持流式格式或返回普通 JSON，则回退到有大小上限的缓冲响应。
 
 ### 3. 启动
@@ -149,6 +157,7 @@ hobot persistent
 | 命令 | 用途 |
 |---|---|
 | `/model` | 选择已配置模型 |
+| `hobot model check <provider/model>` | 在任务外主动验证模型流式路由与延迟 |
 | `/settings` | 调整 Pi 交互设置 |
 | `/new`、`/resume`、`/tree`、`/fork` | 管理会话与分支 |
 | `/compact` | 手动压缩上下文 |

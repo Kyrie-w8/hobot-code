@@ -26,4 +26,4 @@ The default model is resolved in this order:
 3. The first configured D-Robotics model.
 4. The first available model.
 
-The runtime table reports configured compatibility, not a live gateway health check. Provider authentication, model availability, and an end-to-end image request still belong in connection diagnostics.
+The runtime table reports configured compatibility, not current gateway availability. Users can explicitly run `hobot model check drobotics/kimi-k3`, or use **Check** beside Studio's model picker, to verify the real streaming route without creating a task or writing a session. Health results are cached for five minutes and expose only status, a sanitized failure category, transport, and latency. The probe verifies a minimal text request; it does not prove image quality, long-context stability, tool calling, or production quota.

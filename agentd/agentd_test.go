@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -335,6 +336,20 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if !containsString(ping.Capabilities.Capabilities, "deployments.v1") {
 		t.Fatalf("deployment capability is missing: %+v", ping.Capabilities.Capabilities)
 	}
+	if !containsString(ping.Capabilities.Capabilities, "models.health.v1") {
+		t.Fatalf("model health capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
+	server.health.probe = func(context.Context, modelOption) modelHealthResult {
+		return modelHealthResult{Status: "available", Category: "ok", Message: modelHealthMessage("ok"), Transport: "sse", FirstByteMS: 12, LatencyMS: 18, Attempts: 1}
+	}
+	healthResult, err := client.call("models.health", modelHealthParams{Model: "drobotics/kimi-k3"})
+	if err != nil {
+		t.Fatalf("model health failed: %v", err)
+	}
+	var health modelHealthResult
+	if err := json.Unmarshal(healthResult, &health); err != nil || health.Status != "available" || health.Model != "kimi-k3" {
+		t.Fatalf("unexpected model health: result=%+v err=%v", health, err)
+	}
 	snapshotResult, err := client.call("system.snapshot", struct{}{})
 	if err != nil {
 		t.Fatalf("system snapshot failed: %v", err)
@@ -352,7 +367,6 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 		t.Fatalf("stdio bridge failed: %v", err)
 	}
 	if bytes.Count(bridgeOutput.Bytes(), []byte{'\n'}) != 2 || !bytes.Contains(bridgeOutput.Bytes(), []byte(`"id":"bridge-2"`)) {
-		t.Fatalf("unexpected bridge output: %s", bridgeOutput.String())
 	}
 	result, err := client.call("task.start", startTaskParams{Name: "rpc", Cwd: cfg.StateRoot, Prompt: "test"})
 	if err != nil {

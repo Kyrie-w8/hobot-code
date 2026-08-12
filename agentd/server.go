@@ -17,6 +17,7 @@ import (
 type daemonServer struct {
 	cfg      config
 	manager  *taskManager
+	health   *modelHealthService
 	listener *net.UnixListener
 	started  time.Time
 	stopOnce sync.Once
@@ -42,7 +43,7 @@ func newDaemonServer(cfg config) (*daemonServer, error) {
 		return nil, err
 	}
 	return &daemonServer{
-		cfg: cfg, manager: manager, started: time.Now().UTC(), stop: make(chan struct{}),
+		cfg: cfg, manager: manager, health: newModelHealthService(), started: time.Now().UTC(), stop: make(chan struct{}),
 	}, nil
 }
 
@@ -197,6 +198,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, models))
+	case "models.health":
+		var params modelHealthParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.health.check(server.manager, params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_health_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
 	case "system.snapshot":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))

@@ -14,7 +14,7 @@ The failure includes the detected Studio, agentd, protocol, and event versions p
 
 ## Feature degradation
 
-The board remains usable, but Studio reports `limited`, when a board service is missing model capability negotiation, hardware telemetry, support bundles, deployment workflows, side agents, or workspace browsing. Event schema 2 is also accepted with a warning because it cannot expose every normalized activity detail.
+The board remains usable, but Studio reports `limited`, when a board service is missing model capability negotiation, model route health checks, hardware telemetry, support bundles, deployment workflows, side agents, or workspace browsing. Event schema 2 is also accepted with a warning because it cannot expose every normalized activity detail.
 
 Studio and agentd should use the same major and minor Hobot Code release line. A patch-version difference is accepted; a major or minor difference is reported as limited until the versions are aligned.
 

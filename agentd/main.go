@@ -23,6 +23,7 @@ Usage:
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
   hobot diagnose [--json]
+  hobot model check [--force] [--json] PROVIDER/MODEL
   hobot deploy inspect [--cwd DIR]
   hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--profile PROFILE] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] ARTIFACT
   hobot deploy status TASK_ID
@@ -70,6 +71,8 @@ func run(args []string) error {
 		return runDeploymentCLI(cfg, args[1:])
 	case "diagnose":
 		return runDiagnoseCLI(cfg, args[1:])
+	case "model":
+		return runModelCLI(cfg, args[1:])
 	case "bridge":
 		if len(args) != 2 || args[1] != "--stdio" {
 			return fmt.Errorf("usage: hobot bridge --stdio")
@@ -88,6 +91,54 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func runModelCLI(cfg config, args []string) error {
+	if len(args) == 0 || args[0] != "check" {
+		return fmt.Errorf("usage: hobot model check [--force] [--json] PROVIDER/MODEL")
+	}
+	flags := flag.NewFlagSet("model check", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	force := flags.Bool("force", false, "bypass the five-minute health cache")
+	jsonOutput := flags.Bool("json", false, "print the health result as JSON")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return fmt.Errorf("usage: hobot model check [--force] [--json] PROVIDER/MODEL")
+	}
+	client := daemonClient{cfg: cfg}
+	if err := client.ensureStarted(); err != nil {
+		return err
+	}
+	result, err := client.call("models.health", modelHealthParams{Model: flags.Arg(0), Force: *force})
+	if err != nil {
+		return err
+	}
+	var health modelHealthResult
+	if err := json.Unmarshal(result, &health); err != nil {
+		return err
+	}
+	if *jsonOutput {
+		if err := printJSON(health); err != nil {
+			return err
+		}
+		if health.Status != "available" {
+			return fmt.Errorf("model is unavailable: %s", health.Message)
+		}
+		return nil
+	}
+	fmt.Printf("Model: %s/%s\n", health.Provider, health.Model)
+	fmt.Printf("Status: %s (%s)\n", health.Status, health.Category)
+	fmt.Printf("Detail: %s\n", health.Message)
+	if health.LatencyMS > 0 {
+		fmt.Printf("Latency: first byte %d ms, total %d ms via %s\n", health.FirstByteMS, health.LatencyMS, health.Transport)
+	}
+	fmt.Printf("Checked: %s%s\n", health.CheckedAt.Format(time.RFC3339), map[bool]string{true: " (cached)", false: ""}[health.Cached])
+	if health.Status != "available" {
+		return fmt.Errorf("model is unavailable: %s", health.Message)
+	}
+	return nil
 }
 
 func runDiagnoseCLI(cfg config, args []string) error {

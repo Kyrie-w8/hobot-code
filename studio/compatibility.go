@@ -50,6 +50,7 @@ var recommendedStudioCapabilities = []struct {
 	Impact string
 }{
 	{Name: "models.capabilities.v1", Impact: "Model input capabilities cannot be negotiated; image attachments stay disabled."},
+	{Name: "models.health.v1", Impact: "Model routes cannot be checked before starting a task."},
 	{Name: "system.snapshot", Impact: "Board health and hardware telemetry are unavailable."},
 	{Name: "support.bundle.v1", Impact: "One-click support bundles are unavailable."},
 	{Name: "deployments.v1", Impact: "The guided model deployment workflow is unavailable."},

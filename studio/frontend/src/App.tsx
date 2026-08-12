@@ -17,11 +17,12 @@ import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel,
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
 import {effectiveModel as resolveEffectiveModel, modelAcceptsImages} from './model-capabilities.js';
+import {currentModelHealth as resolveCurrentModelHealth, modelHealthLabel} from './model-health.js';
 import {rdkWorkflows} from './rdk-workflows.js';
 import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 import {shouldToggleMaximise} from './titlebar-policy.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent} from './types';
+import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -51,6 +52,8 @@ function App() {
   const [composer, setComposer] = useState('');
   const [editingMessage, setEditingMessage] = useState<number | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelHealth, setModelHealth] = useState<ModelHealth | null>(null);
+  const [checkingModel, setCheckingModel] = useState(false);
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
   const [showSideTask, setShowSideTask] = useState(false);
@@ -80,6 +83,7 @@ function App() {
   const activeBoardId = useRef('');
   const selectedTaskId = useRef('');
   const snapshotSampling = useRef(false);
+  const modelHealthRequest = useRef(0);
 
   const boardId = connection?.board.id ?? '';
 
@@ -104,6 +108,9 @@ function App() {
   }, [boardId]);
 
   const connect = useCallback(async (board: Board) => {
+    modelHealthRequest.current += 1;
+    setCheckingModel(false);
+    setModelHealth(null);
     setBusy(true);
     setConnectionState('connecting');
     setError('');
@@ -284,6 +291,17 @@ function App() {
   }, [events, optimisticPrompt, selectedTask?.id]);
 
   useEffect(() => {
+    if (!modelHealth) return;
+    const remaining = Date.parse(modelHealth.expiresAt) - Date.now();
+    if (remaining <= 0) {
+      setModelHealth(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setModelHealth((current) => current?.expiresAt === modelHealth.expiresAt ? null : current), remaining);
+    return () => window.clearTimeout(timer);
+  }, [modelHealth]);
+
+  useEffect(() => {
     const textarea = composerRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
@@ -306,6 +324,7 @@ function App() {
   const selectedModel = selectedTask?.model ?? '';
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
   const effectiveModel = resolveEffectiveModel(models, selectedModel);
+  const currentModelHealth = resolveCurrentModelHealth(modelHealth, effectiveModel);
   const imageInputSupported = modelAcceptsImages(models, selectedModel);
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
   const canChangeModel = Boolean(selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
@@ -424,6 +443,9 @@ function App() {
     const modelId = rest.join('/');
     if (!provider || !modelId) return;
     const nextModel = models.find((model) => model.provider === provider && model.id === modelId);
+    modelHealthRequest.current += 1;
+    setCheckingModel(false);
+    setModelHealth(null);
     if (attachments.length > 0 && nextModel?.capabilities?.imageInput !== true) {
       setAttachments([]);
       setNotice(`${nextModel?.name || modelId} does not support image input. Attachments were removed.`);
@@ -442,6 +464,22 @@ function App() {
       setError(String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function checkModelHealth() {
+    if (!boardId || !effectiveModel || checkingModel || !connection?.capabilities?.capabilities.includes('models.health.v1')) return;
+    const targetBoard = boardId;
+    const request = ++modelHealthRequest.current;
+    setCheckingModel(true);
+    setError('');
+    try {
+      const result = await api.modelHealth(targetBoard, `${effectiveModel.provider}/${effectiveModel.id}`, Boolean(currentModelHealth));
+      if (modelHealthRequest.current === request && activeBoardId.current === targetBoard) setModelHealth(result);
+    } catch (reason) {
+      if (modelHealthRequest.current === request && activeBoardId.current === targetBoard) setError(friendlyError(String(reason)));
+    } finally {
+      if (modelHealthRequest.current === request) setCheckingModel(false);
     }
   }
 
@@ -734,6 +772,7 @@ function App() {
               <div className="composer-footer">
                 <ImagePickerButton disabled={composerBlocked || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
+                {connection?.capabilities?.capabilities.includes('models.health.v1') && <button className={`model-health-button ${currentModelHealth?.status ?? ''}`} type="button" title={currentModelHealth ? `${currentModelHealth.message} Click to check again.${currentModelHealth.cached ? ' Cached result.' : ''}` : 'Check model availability'} onClick={() => void checkModelHealth()} disabled={checkingModel || !effectiveModel}>{checkingModel ? <LoaderCircle size={12} className="spin" /> : currentModelHealth?.status === 'available' ? <Check size={12} /> : currentModelHealth?.status === 'unavailable' ? <XCircle size={12} /> : <Activity size={12} />}<span>{checkingModel ? 'Checking' : currentModelHealth?.status === 'available' ? `${currentModelHealth.latencyMs ?? 0} ms` : currentModelHealth?.status === 'unavailable' ? modelHealthLabel(currentModelHealth.category) : 'Check'}</span></button>}
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
                 <span className="composer-state">{draftSelected ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}

@@ -23,6 +23,7 @@ import (
 
 const (
 	requestTimeout          = 20 * time.Second
+	modelHealthTimeout      = 18 * time.Second
 	deploymentStatusTimeout = 10 * time.Minute
 	deleteTimeout           = 45 * time.Second
 	maximumBoards           = 64
@@ -522,6 +523,23 @@ func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
 		return nil, err
 	}
 	return studioModels(models), nil
+}
+
+func (app *App) CheckModelHealth(boardID, model string, force bool) (hobot.ModelHealth, error) {
+	app.mu.Lock()
+	board, ok := app.boards[boardID]
+	app.mu.Unlock()
+	if !ok {
+		return hobot.ModelHealth{}, fmt.Errorf("board does not exist")
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return hobot.ModelHealth{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, modelHealthTimeout)
+	defer cancel()
+	return client.ModelHealth(ctx, model, force)
 }
 
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {

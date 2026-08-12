@@ -357,6 +357,11 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .model-picker select, .permission-picker select { height: 28px; max-width: 100%; padding: 0 24px 0 8px; appearance: none; border: 0; border-radius: var(--radius-sm); outline: 0; background: transparent; color: inherit; font-size: 10px; cursor: pointer; }
 .model-picker select:hover:not(:disabled), .permission-picker select:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); color: var(--text); }
 .model-picker svg, .permission-picker > svg:last-child { position: absolute; right: 7px; pointer-events: none; }
+.model-health-button { display: inline-flex; height: 26px; align-items: center; gap: 4px; margin-left: 2px; padding: 0 7px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font-size: 9px; cursor: pointer; }
+.model-health-button:hover:not(:disabled) { border-color: var(--line); background: var(--surface-hover); color: var(--text-soft); }
+.model-health-button.available { color: var(--accent-strong); }
+.model-health-button.unavailable { color: var(--red); }
+.model-health-button:disabled { cursor: default; opacity: 0.7; }
 .permission-picker { margin-left: 2px; padding-left: 6px; }
 .permission-picker > svg:first-child { flex: 0 0 auto; color: var(--text-dim); pointer-events: none; }
 .permission-picker select { padding-left: 5px; }

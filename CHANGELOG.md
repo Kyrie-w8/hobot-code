@@ -2,6 +2,7 @@
 
 ## 0.24.0
 
+- Add an explicit `hobot model check` and Studio model-health control that validates the real D-Robotics streaming route without creating a task, caches results for five minutes, and returns only sanitized failure categories and bounded latency metadata.
 - Negotiate model reasoning and image-input capabilities from the board runtime, disable unsupported attachments in Studio, and enforce the same contract again in agentd.
 - Evaluate Studio/agentd protocol, event schema, feature capabilities, product versions, board model, and RDK OS during connection; reject unsafe partial compatibility and explain supported degradations.
 - Serialize BPU, camera-device, and RDK media-pipeline tool calls through private, crash-recoverable hardware leases, with live occupancy in Studio and identity-redacted support bundles.

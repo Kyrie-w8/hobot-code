@@ -107,6 +107,12 @@ func (client *Client) Models(ctx context.Context) ([]ModelOption, error) {
 	return models, err
 }
 
+func (client *Client) ModelHealth(ctx context.Context, model string, force bool) (ModelHealth, error) {
+	var result ModelHealth
+	err := client.Call(ctx, "models.health", map[string]any{"model": model, "force": force}, &result)
+	return result, err
+}
+
 func (client *Client) BrowseWorkspace(ctx context.Context, path string) (WorkspaceListing, error) {
 	var listing WorkspaceListing
 	err := client.Call(ctx, "workspace.list", map[string]any{"path": path}, &listing)

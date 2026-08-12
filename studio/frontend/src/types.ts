@@ -158,6 +158,20 @@ export type ModelOption = {
   capabilities?: {reasoning: boolean; imageInput: boolean};
   capabilitySource?: 'runtime-model-table' | 'conservative-default' | string;
 };
+export type ModelHealth = {
+  provider: string;
+  model: string;
+  status: 'available' | 'unavailable';
+  category: string;
+  message: string;
+  transport?: 'sse' | 'json' | string;
+  checkedAt: string;
+  expiresAt: string;
+  firstByteMs?: number;
+  latencyMs?: number;
+  attempts: number;
+  cached: boolean;
+};
 export type ImageContent = {type: 'image'; data: string; mimeType: string; name?: string};
 export type AttachmentSummary = {name?: string; mimeType: string};
 export type WorkspaceEntry = {name: string; path: string};

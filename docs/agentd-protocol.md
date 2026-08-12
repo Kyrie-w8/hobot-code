@@ -52,6 +52,7 @@
 | `deployment.start` | `{cwd, artifactPath, goal?, profile?, name?, model?, permissionMode?}` | 创建绑定当前板型、RDK OS、产物和验收报告契约的持久 Agent 任务；已知工作负载可选择冻结验收档案 |
 | `deployment.status` | `{taskId}` | 返回部署阶段、绑定信息和经板端重新校验的结构化报告 |
 | `models.list` | `{}` | 板端当前可用模型的 `provider`/`id` 列表，不包含凭据 |
+| `models.health` | `{model?, force?}` | 主动验证一个 D-Robotics 模型的真实流式路由；返回有界、脱敏、缓存的状态与延迟，不创建任务或会话 |
 | `workspace.list` | `{path?}` | 浏览当前用户可见的目录，只返回子目录 |
 | `workspace.create` | `{parent, name}` | 在用户明确选定的父目录中创建私有工作目录 |
 | `daemon.shutdown` | `{force?: boolean}` | 请求服务停止；有活跃任务时必须显式 `force` |
@@ -74,6 +75,8 @@
 | `task.subscribe` | `{taskId, after?, follow?}` | 先重放 `sequence > after` 的事件，再按需跟随 |
 
 终端 `hobot deploy inspect/start/status` 是上述部署方法的薄客户端，不另设权限或状态体系。`start` 返回普通持久任务 ID，可继续使用 `hobot task attach/stop`；SSH 断开不会终止任务。
+
+终端 `hobot model check drobotics/kimi-k3` 使用 `models.health`。探测发送无工具的最小请求，优先验证 SSE，并只在成功响应不完整或端点明确不支持流式格式时进行一次缓冲回退。每次响应最多读取 256 KiB，整体约 12 秒超时，同一模型结果缓存 5 分钟；`--force` 跳过现有缓存。返回值只有 `available/unavailable`、认证/限流/路由/超时/网络/网关/协议类别、首包与总耗时，不包含网关响应正文、请求 ID、Prompt 或凭据。不可用结果同样缓存，避免故障期间重复冲击网关。该探测可能产生极少量模型 token，只由用户主动触发，不在 Studio 连接时自动运行。
 
 `task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。`prompt` 可携带最多 4 个 `ImageContent` 项；每项包含 `type: "image"`、base64 `data`、受支持的 `mimeType`，以及仅用于显示的可选 `name`。板端会校验数量、MIME、base64 和总大小，事件日志只记录附件名称与 MIME 摘要，不持久化图片数据。客户端应使用 `task.model` 切换模型：活动 worker 只在 `idle` 时接受，`stopped`、`failed` 和 `interrupted` 任务会将选择写入元数据并在下次 Resume/Restart 生效。`task.permissions` 为每个任务写入私有策略文件；`review` 禁止变更，`ask` 确认变更，`developer` 放行日常 Shell 与工作区编辑，但破坏性命令、受保护路径、持久状态与未知/MCP 工具仍由板端保护或确认。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果始终在板端 worker 内判定，客户端无法绕过。
 
