@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.0
+
+- Make Ask the default background-task permission mode, require exact-call approval for root shell and file mutations, bound remembered approvals, and prevent broad or legacy root policies from silently authorizing new targets.
+- Make task stop synchronous with worker and output-stream teardown, eliminating the CI cleanup race and preventing failed workers from losing their process identity before collection.
+- Require Developer ID signing, hardened runtime, Apple notarization, stapling, and Gatekeeper validation for public macOS releases while retaining credential-free local development builds.
+- Show complete tool, risk, target, and reason details in the Studio approval panel, with an explicit explanation of exact-call scope and a tested minimum-window layout.
+- Bound board storage with three recent upgrade backups within 768 MiB by default, a protected rollback point, 100 retained tasks, and configurable 16 MiB per-task event logs.
+
 ## 0.21.0
 
 - Studio sends and stops from one stateful composer button, limits its model picker to the three D-Robotics gateway models, and offers S100, S600, and X5 board presets.

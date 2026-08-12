@@ -73,7 +73,9 @@ type task struct {
 	metadata    taskMetadata
 	command     *exec.Cmd
 	stdin       io.WriteCloser
+	workerDone  chan struct{}
 	writeMu     sync.Mutex
+	streamWG    sync.WaitGroup
 	stopping    bool
 	interrupted bool
 	eventBytes  int64
@@ -725,6 +727,7 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	current.mu.Lock()
 	current.command = command
 	current.stdin = stdin
+	current.workerDone = make(chan struct{})
 	current.metadata.PID = command.Process.Pid
 	current.metadata.UpdatedAt = time.Now().UTC()
 	current.stopping = false
@@ -736,8 +739,15 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		return err
 	}
 
-	go current.consumeStdout(stdout)
-	go current.consumeStderr(stderr)
+	current.streamWG.Add(2)
+	go func() {
+		defer current.streamWG.Done()
+		current.consumeStdout(stdout)
+	}()
+	go func() {
+		defer current.streamWG.Done()
+		current.consumeStderr(stderr)
+	}()
 	go current.wait()
 	stateCommand, _ := json.Marshal(map[string]any{"id": "agentd-state", "type": "get_state"})
 	if err := current.writeWorkerCommand(stateCommand); err != nil {
@@ -809,11 +819,16 @@ func (writer *boundedLogWriter) Write(value []byte) (int, error) {
 func (current *task) wait() {
 	current.mu.Lock()
 	command := current.command
+	workerDone := current.workerDone
 	current.mu.Unlock()
 	if command == nil {
 		return
 	}
+	if workerDone != nil {
+		defer close(workerDone)
+	}
 	err := command.Wait()
+	current.streamWG.Wait()
 	current.mu.Lock()
 	stopping := current.stopping
 	interrupted := current.interrupted
@@ -834,10 +849,10 @@ func (current *task) wait() {
 }
 
 func (current *task) failWorker(message string) {
-	current.setTerminal(statusFailed, message)
 	current.mu.Lock()
 	pid := current.metadata.PID
 	current.mu.Unlock()
+	current.setTerminal(statusFailed, message)
 	if pid > 0 {
 		_ = terminateProcessGroup(pid, syscall.SIGKILL)
 	}
@@ -1086,14 +1101,15 @@ func (current *task) hasActiveApprovalLocked(id string) bool {
 
 func (current *task) stop() error {
 	current.mu.Lock()
-	if !isLiveStatus(current.metadata.Status) {
+	pid := current.metadata.PID
+	workerDone := current.workerDone
+	if !isLiveStatus(current.metadata.Status) && pid <= 0 {
 		current.mu.Unlock()
 		return nil
 	}
 	current.stopping = true
 	current.metadata.Status = statusStopping
 	current.metadata.UpdatedAt = time.Now().UTC()
-	pid := current.metadata.PID
 	current.mu.Unlock()
 	_ = current.saveMetadata()
 	if pid <= 0 {
@@ -1101,20 +1117,11 @@ func (current *task) stop() error {
 		return nil
 	}
 	if err := terminateProcessGroup(pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
-	}
-	go func() {
-		timer := time.NewTimer(5 * time.Second)
-		defer timer.Stop()
-		<-timer.C
-		current.mu.Lock()
-		stillRunning := current.metadata.PID == pid
-		current.mu.Unlock()
-		if stillRunning {
-			_ = terminateProcessGroup(pid, syscall.SIGKILL)
+		if !errors.Is(err, syscall.ESRCH) {
+			return err
 		}
-	}()
-	return nil
+	}
+	return current.waitForWorkerExit(pid, workerDone)
 }
 
 func (current *task) stopIfIdle() (bool, error) {
@@ -1127,6 +1134,7 @@ func (current *task) stopIfIdle() (bool, error) {
 	current.metadata.Status = statusStopping
 	current.metadata.UpdatedAt = time.Now().UTC()
 	pid := current.metadata.PID
+	workerDone := current.workerDone
 	current.mu.Unlock()
 	if err := current.saveMetadata(); err != nil {
 		return false, err
@@ -1136,20 +1144,38 @@ func (current *task) stopIfIdle() (bool, error) {
 		return true, nil
 	}
 	if err := terminateProcessGroup(pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return false, err
-	}
-	go func() {
-		timer := time.NewTimer(5 * time.Second)
-		defer timer.Stop()
-		<-timer.C
-		current.mu.Lock()
-		stillRunning := current.metadata.PID == pid
-		current.mu.Unlock()
-		if stillRunning {
-			_ = terminateProcessGroup(pid, syscall.SIGKILL)
+		if !errors.Is(err, syscall.ESRCH) {
+			return false, err
 		}
-	}()
-	return true, nil
+	}
+	return true, current.waitForWorkerExit(pid, workerDone)
+}
+
+func (current *task) waitForWorkerExit(pid int, workerDone <-chan struct{}) error {
+	if waitForWorkerDone(workerDone, 5*time.Second) {
+		return nil
+	}
+	if err := terminateProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	if waitForWorkerDone(workerDone, time.Second) {
+		return nil
+	}
+	return fmt.Errorf("timed out waiting for task worker %d to exit", pid)
+}
+
+func waitForWorkerDone(workerDone <-chan struct{}, timeout time.Duration) bool {
+	if workerDone == nil {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-workerDone:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func terminateProcessGroup(pid int, signal syscall.Signal) error {
@@ -1166,7 +1192,6 @@ func (current *task) setTerminal(status taskStatus, message string) {
 		return
 	}
 	current.metadata.Status = status
-	current.metadata.PID = 0
 	current.metadata.UpdatedAt = time.Now().UTC()
 	if message != "" {
 		current.metadata.LastError = message

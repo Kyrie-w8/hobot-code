@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const defaultTaskPermissionMode = "developer"
+const defaultTaskPermissionMode = "ask"
 
 type permissionRule struct {
 	Tool   string `json:"tool"`
@@ -75,6 +75,9 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 			permissionRule{Tool: "mcp:*", Action: "ask"},
 		)
 	case "developer":
+		// RDK sessions commonly run as root. Developer mode removes routine
+		// non-root prompts, while root mutations still require approval.
+		policy.RootMode = "confirm"
 		policy.Rules = append(policy.Rules,
 			permissionRule{Tool: "write", Action: "allow"},
 			permissionRule{Tool: "edit", Action: "allow"},

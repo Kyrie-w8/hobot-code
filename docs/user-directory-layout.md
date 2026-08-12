@@ -9,7 +9,7 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 | `/usr/local/bin/hobot` | 启动器 |
 | `/usr/local/sbin/hobot-rollback` | 需要 root 的回滚命令 |
 | `/usr/local/lib/hobot-code` | 当前 Pi 运行时、`agentd`、扩展、Skills、知识和默认配置 |
-| `/usr/local/lib/hobot-code-backups` | 安装前的运行时与迁移备份 |
+| `/usr/local/lib/hobot-code-backups` | 安装前的运行时与迁移备份；默认保留最近 3 个、总量最多 768 MiB，并始终保留本次可回滚点 |
 
 系统级程序通常为只读安装内容。运行时不应直接修改其中的知识、Prompt 或扩展；变更应在源码中验证后重新打包安装。
 

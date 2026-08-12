@@ -50,7 +50,7 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 	}{
 		{mode: "review", rootMode: "policy", bash: "deny", quality: "deny"},
 		{mode: "ask", rootMode: "confirm", bash: "ask", quality: "ask"},
-		{mode: "developer", rootMode: "policy", bash: "allow", quality: "ask"},
+		{mode: "developer", rootMode: "confirm", bash: "allow", quality: "ask"},
 	}
 	for _, test := range tests {
 		t.Run(test.mode, func(t *testing.T) {
@@ -65,6 +65,9 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 	}
 	if _, err := permissionPolicyForMode("unrestricted"); err == nil {
 		t.Fatal("unsafe permission mode was accepted")
+	}
+	if got, err := normalizePermissionMode(""); err != nil || got != "ask" {
+		t.Fatalf("default permission mode = %q, %v", got, err)
 	}
 }
 

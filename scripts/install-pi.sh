@@ -9,6 +9,8 @@ fi
 package_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 version=$(cat "$package_dir/VERSION")
 install_channel=${HOBOT_CODE_INSTALL_CHANNEL:-stable}
+backup_keep=${HOBOT_CODE_BACKUP_KEEP:-3}
+backup_max_mib=${HOBOT_CODE_BACKUP_MAX_MIB:-768}
 case "$install_channel" in
   stable) ;;
   *)
@@ -16,6 +18,16 @@ case "$install_channel" in
     exit 1
     ;;
 esac
+case "$backup_keep" in ''|*[!0-9]*) printf 'HOBOT_CODE_BACKUP_KEEP must be an integer.\n' >&2; exit 1 ;; esac
+case "$backup_max_mib" in ''|*[!0-9]*) printf 'HOBOT_CODE_BACKUP_MAX_MIB must be an integer.\n' >&2; exit 1 ;; esac
+if [ "$backup_keep" -lt 1 ] || [ "$backup_keep" -gt 20 ]; then
+  printf 'HOBOT_CODE_BACKUP_KEEP must be between 1 and 20.\n' >&2
+  exit 1
+fi
+if [ "$backup_max_mib" -lt 128 ] || [ "$backup_max_mib" -gt 8192 ]; then
+  printf 'HOBOT_CODE_BACKUP_MAX_MIB must be between 128 and 8192.\n' >&2
+  exit 1
+fi
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir=
 new_runtime=
@@ -323,6 +335,36 @@ copy_missing_tree() {
   migration_list=
 }
 
+prune_install_backups() {
+  protected_backup=$1
+  backup_root=/usr/local/lib/hobot-code-backups
+  backup_limit_kib=$((backup_max_mib * 1024))
+  backup_list=$(mktemp "${TMPDIR:-/tmp}/hobot-backups.XXXXXX")
+  find "$backup_root" -mindepth 1 -maxdepth 1 -type d -print | LC_ALL=C sort -r > "$backup_list"
+  backup_index=0
+  backup_total_kib=0
+  while IFS= read -r candidate; do
+    candidate_kib=$(du -sk "$candidate" 2>/dev/null | awk '{print $1}')
+    case "$candidate_kib" in ''|*[!0-9]*) candidate_kib=0 ;; esac
+    backup_index=$((backup_index + 1))
+    if [ "$candidate" = "$protected_backup" ]; then
+      backup_total_kib=$((backup_total_kib + candidate_kib))
+      continue
+    fi
+    if [ "$backup_index" -le "$backup_keep" ] && [ $((backup_total_kib + candidate_kib)) -le "$backup_limit_kib" ]; then
+      backup_total_kib=$((backup_total_kib + candidate_kib))
+      continue
+    fi
+    if [ -L "$candidate" ]; then
+      printf 'Warning: refusing to prune symbolic-link backup: %s\n' "$candidate" >&2
+      continue
+    fi
+    rm -rf "$candidate" || printf 'Warning: could not prune old Hobot Code backup: %s\n' "$candidate" >&2
+  done < "$backup_list"
+  rm -f "$backup_list"
+  return 0
+}
+
 install -d -m 0755 /usr/local/lib /usr/local/bin /usr/local/sbin /usr/local/lib/hobot-code-backups
 
 required_kib=$(du -sk "$package_dir" 2>/dev/null | awk '{print $1}')
@@ -502,6 +544,7 @@ if [ -d "$backup_dir/runtime-installed" ]; then
 fi
 /usr/local/lib/hobot-code/hobot --version
 transaction_complete=1
+prune_install_backups "$backup_dir"
 rm -rf "$legacy_config" "$legacy_state" || printf 'Warning: legacy directories could not be removed after a successful install.\n' >&2
 printf 'Installed Hobot Code %s. Run: hobot\n' "$version"
 printf 'User config: %s\n' "$config_root"

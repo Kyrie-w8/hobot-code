@@ -94,7 +94,7 @@ tasks/<task-id>/events.jsonl
 tasks/<task-id>/worker.stderr.log
 ```
 
-目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务最多 64 MiB，worker stderr 最多保留 1 MiB；达到上限后仍持续排空进程管道，避免 worker 因反压卡死。
+目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整；worker stderr 最多保留 1 MiB。达到上限后仍持续排空进程管道，避免 worker 因反压卡死。
 
 客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源任务：它根据 session 树的 `parentId` 链物化私有分支文件。指定 `sequence` 时截止到该条 `user.message` 之前；未指定时取最新已稳定叶节点，不会复制未完成的用户/工具轮次。
 
@@ -105,7 +105,7 @@ Mac 等远程客户端通过 `ssh <board> hobot bridge --stdio` 连接。bridge 
 ## 资源与安全边界
 
 - 每个 OS 用户默认最多保留 2 个后台 worker，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。创建、分支、Resume 或 Restart 需要空位时，会原子挂起最久未使用的 `idle` worker并保留 session；`running`、`waiting`、`starting` 和 `stopping` 任务绝不会被自动回收。所有槽位都在工作时才返回并发上限错误。
-- 默认最多保留 200 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。
+- 默认最多保留 100 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。
 - worker 位于独立进程组；停止任务会先发送 `SIGTERM`，超时后发送 `SIGKILL`。
 - `--approve` 只传递 Pi 的项目资源信任选项，不会关闭 Hobot Code 的工具权限和硬安全边界。
 - daemon 继承启动器已验证的模型环境，但不会记录或通过协议返回认证 token。

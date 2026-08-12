@@ -413,7 +413,7 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			_ = writeJSON(connection, failure(req.ID, "task_stop_failed", err))
 			return
 		}
-		_ = writeJSON(connection, success(req.ID, map[string]bool{"stopping": true}))
+		_ = writeJSON(connection, success(req.ID, map[string]bool{"stopped": true}))
 	case "task.subscribe":
 		server.subscribe(connection, req)
 	case "task.events":

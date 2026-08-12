@@ -69,6 +69,7 @@ jobs:
   macos-arm64:
     runs-on: macos-14
     timeout-minutes: 30
+    environment: production
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -94,8 +95,54 @@ jobs:
           test "${GITHUB_REF_NAME}" = "v${version}"
           node scripts/validate-version.mjs
 
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          test -n "$MACOS_CERTIFICATE_BASE64"
+          test -n "$MACOS_CERTIFICATE_PASSWORD"
+          certificate="$RUNNER_TEMP/hobot-code-developer-id.p12"
+          keychain="$RUNNER_TEMP/hobot-code-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+          rm -f "$certificate"
+          echo "HOBOT_CODE_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Prepare Apple notarization key
+        env:
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+        run: |
+          test -n "$APPLE_NOTARY_KEY_BASE64"
+          key="$RUNNER_TEMP/hobot-code-notary.p8"
+          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | base64 --decode > "$key"
+          chmod 600 "$key"
+          echo "HOBOT_CODE_NOTARY_KEY_PATH=$key" >> "$GITHUB_ENV"
+
       - name: Build macOS ARM64 release
+        env:
+          HOBOT_CODE_MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          HOBOT_CODE_REQUIRE_SIGNED_RELEASE: "1"
+          HOBOT_CODE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          HOBOT_CODE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: make studio-macos-release
+
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          if [ -n "${HOBOT_CODE_NOTARY_KEY_PATH:-}" ]; then
+            rm -f "$HOBOT_CODE_NOTARY_KEY_PATH"
+          fi
+          if [ -n "${HOBOT_CODE_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$HOBOT_CODE_SIGNING_KEYCHAIN" || true
+          fi
 
       - name: Attest desktop artifact
         uses: actions/attest-build-provenance@v2

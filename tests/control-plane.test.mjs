@@ -24,10 +24,13 @@ import {
   parsePolicy,
   parseQualityConfig,
   reconcileToolVisibility,
+  hasAllowedToolCall,
   requiresRootToolApproval,
+  resolveToolCallAction,
   resolveToolAction,
   sensitiveMemoryReasons,
   setPolicyRule,
+  setPolicyCallRule,
   validateMemoryInput,
 } from "../extensions/rdk/control-plane.mjs";
 
@@ -53,7 +56,7 @@ test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   assert.equal(resolveToolAction(denied, "read"), "allow");
 });
 
-test("root policy mode honors explicit tool rules without weakening hard guards", () => {
+test("root mutations always require exact-call approval", () => {
   const legacyShape = parsePolicy({
     schemaVersion: 2,
     default: "ask",
@@ -64,8 +67,9 @@ test("root policy mode honors explicit tool rules without weakening hard guards"
 
   const trusted = parsePolicy({ ...legacyShape, rootMode: "policy" });
   assert.equal(resolveToolAction(trusted, "bash"), "allow");
-  assert.equal(requiresRootToolApproval(trusted, true, "bash"), false);
-  assert.equal(requiresRootToolApproval(trusted, true, "write"), false);
+  assert.equal(requiresRootToolApproval(trusted, true, "bash"), true);
+  assert.equal(requiresRootToolApproval(trusted, true, "write"), true);
+  assert.equal(requiresRootToolApproval(trusted, true, "edit"), true);
   assert.equal(requiresRootToolApproval(trusted, true, "read"), false);
   assert.ok(destructiveShellReasons("rm -rf ./build").length > 0);
 });
@@ -80,7 +84,7 @@ test("wildcard permission rules take precedence and developer preset stays bound
   assert.equal(resolveToolAction(wildcard, "edit"), "allow");
 
   const developer = applyPermissionPreset("developer");
-  assert.equal(developer.rootMode, "policy");
+  assert.equal(developer.rootMode, "confirm");
   assert.equal(developer.default, "ask");
   assert.equal(resolveToolAction(developer, "ls"), "allow");
   assert.equal(resolveToolAction(developer, "find"), "allow");
@@ -93,6 +97,42 @@ test("wildcard permission rules take precedence and developer preset stays bound
   assert.equal(resolveToolAction(developer, "mcp__unknown__tool", true), "ask");
   assert.equal(resolveToolAction(developer, "future_plugin"), "ask");
   assert.throws(() => applyPermissionPreset("unrestricted"), /developer/);
+});
+
+test("remembered approvals apply only to the exact tool call", () => {
+  const policy = setPolicyCallRule(DEFAULT_POLICY, "bash", { command: "pwd" }, "allow");
+  assert.equal(resolveToolAction(policy, "bash"), "ask");
+  assert.equal(resolveToolCallAction(policy, "bash", { command: "pwd" }), "allow");
+  assert.equal(resolveToolCallAction(policy, "bash", { command: "rm -rf build" }), "ask");
+  assert.equal(hasAllowedToolCall(policy, "bash", { command: "pwd" }), true);
+  assert.equal(hasAllowedToolCall(policy, "bash", { command: "pwd " }), false);
+  assert.match(policy.rules[0].targetHash, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(policy), /\"pwd\"/);
+});
+
+test("remembered approvals retain a bounded call history", () => {
+  let policy = DEFAULT_POLICY;
+  for (let index = 0; index < 80; index += 1) {
+    policy = setPolicyCallRule(policy, "bash", { command: `echo ${index}` }, "allow");
+  }
+  assert.equal(policy.rules.filter((rule) => rule.targetHash).length, 64);
+  assert.equal(resolveToolCallAction(policy, "bash", { command: "echo 79" }), "allow");
+  assert.equal(resolveToolCallAction(policy, "bash", { command: "echo 0" }), "ask");
+  assert.equal(resolveToolAction(policy, "read"), "allow");
+});
+
+test("a broad deny invalidates remembered call approvals", () => {
+  const remembered = setPolicyCallRule(DEFAULT_POLICY, "bash", { command: "pwd" }, "allow");
+  const denied = setPolicyRule(remembered, "bash", "deny");
+  assert.equal(resolveToolCallAction(denied, "bash", { command: "pwd" }), "deny");
+
+  const full = parsePolicy({
+    schemaVersion: 2,
+    rootMode: "confirm",
+    default: "ask",
+    rules: Array.from({length: 128}, (_, index) => ({tool: `tool-${index}`, action: "ask"})),
+  });
+  assert.throws(() => setPolicyCallRule(full, "bash", {command: "pwd"}, "allow"), /no room/);
 });
 
 test("permission changes restore only tools hidden by the permission layer", () => {

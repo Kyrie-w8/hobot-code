@@ -28,8 +28,11 @@ import {
   parseQualityConfig,
   reconcileToolVisibility,
   redactSensitiveText,
+  hasAllowedToolCall,
   requiresRootToolApproval,
+  resolveToolCallAction,
   resolveToolAction,
+  setPolicyCallRule,
   setPolicyRule,
   writeNotificationConfig,
   writePolicy,
@@ -58,7 +61,7 @@ const BUILTIN_DROBOTICS_MODELS = [DEFAULT_MODEL, "qwen3.8-max", "glm-5.2"] as co
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
 const APPROVAL_ALLOW_ONCE = "Allow once";
-const APPROVAL_ALLOW_TASK = "Allow for this task";
+const APPROVAL_ALLOW_TASK = "Allow this exact call for this task";
 const APPROVAL_DENY = "Deny";
 
 type JsonRecord = Record<string, unknown>;
@@ -120,6 +123,7 @@ type PermissionAction = "allow" | "ask" | "deny";
 interface PermissionRule {
   tool: string;
   action: PermissionAction;
+  targetHash?: string;
 }
 
 interface PermissionPolicy {
@@ -804,6 +808,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
     return resolveToolAction(permissionPolicy, toolName, isMcpTool(info ?? toolName)) as PermissionAction;
   }
 
+  function toolCallAction(toolName: string, input: JsonRecord): PermissionAction {
+    const info = pi.getAllTools().find((tool) => tool.name === toolName);
+    return resolveToolCallAction(permissionPolicy, toolName, input, isMcpTool(info ?? toolName)) as PermissionAction;
+  }
+
   async function refreshPermissionPolicy(): Promise<void> {
     const loaded = await loadPolicy(permissionPolicyPath());
     permissionPolicy = loaded.policy as PermissionPolicy;
@@ -1276,10 +1285,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (permissionPolicyError) {
       ctx.ui.notify(`Permission policy fallback is active: ${permissionPolicyError}`, "warning");
     }
-    if (runningAsRoot && permissionPolicy.rootMode === "confirm") {
-      ctx.ui.notify("Hobot Code is running as root. Shell and file mutations require confirmation; use /permissions root policy to honor explicit allow rules.", "warning");
-    } else if (runningAsRoot) {
-      ctx.ui.notify("Root policy mode is active. Explicit allow rules bypass routine confirmations; destructive commands and protected paths remain guarded.", "warning");
+    if (runningAsRoot) {
+      ctx.ui.notify("Hobot Code is running as root. Shell and file mutations require an exact-call approval.", "warning");
     }
     if (qualityConfigError) {
       ctx.ui.notify(`Quality gate config was ignored: ${qualityConfigError}`, "warning");
@@ -1480,7 +1487,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     if (sideAgentMode && ["memory_save", "goal_progress", "goal_complete"].includes(event.toolName)) {
       return { block: true, reason: `${event.toolName} cannot write parent state from an ephemeral side agent` };
     }
-    const action = toolAction(event.toolName);
+    const action = toolCallAction(event.toolName, event.input as JsonRecord);
     if (action === "deny") {
       return { block: true, reason: `${event.toolName} is denied by ${permissionPolicyPath()}` };
     }
@@ -1493,7 +1500,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     const approvalReasons: string[] = [];
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
-    if (requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName)) {
+    const callAlreadyAllowed = hasAllowedToolCall(permissionPolicy, event.toolName, event.input);
+    if (requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName) && !callAlreadyAllowed) {
       approvalReasons.push("root sessions require confirmation for every mutation-capable tool");
     }
 
@@ -1526,8 +1534,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
         describeToolCall(event.toolName, event.input, qualityGateState.commands),
         `Reason: ${approvalReasons.join("; ")}`,
       ].join("\n");
-      const canRemember = action === "ask"
-        || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName);
+      const dangerousShell = event.toolName === "bash"
+        && destructiveShellReasons(String(event.input.command ?? "")).length > 0;
+      const canRemember = !dangerousShell && (action === "ask"
+        || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName));
       const choice = await ctx.ui.select(
         `Allow ${event.toolName}?\n\n${detail}`,
         canRemember
@@ -1536,10 +1546,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         sideAgentMode ? { timeout: SIDE_AGENT_APPROVAL_TIMEOUT_MS } : undefined,
       );
       if (choice === APPROVAL_ALLOW_TASK) {
-        let next = setPolicyRule(permissionPolicy, event.toolName, "allow") as PermissionPolicy;
-        if (runningAsRoot && ["bash", "write", "edit"].includes(event.toolName)) {
-          next = parsePolicy({ ...next, rootMode: "policy" }) as PermissionPolicy;
-        }
+        const next = setPolicyCallRule(permissionPolicy, event.toolName, event.input, "allow") as PermissionPolicy;
         permissionPolicy = await writePolicy(permissionPolicyPath(), next) as PermissionPolicy;
         permissionPolicyError = undefined;
       } else if (choice !== APPROVAL_ALLOW_ONCE) {
@@ -1649,14 +1656,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
         } else if (operation === "root") {
-          if (first !== "confirm" && first !== "policy") {
-            throw new Error("Usage: /permissions root <confirm|policy>");
-          }
-          permissionPolicy = await writePolicy(
-            permissionPolicyPath(),
-            parsePolicy({ ...permissionPolicy, rootMode: first }),
-          ) as PermissionPolicy;
-          permissionPolicyError = undefined;
+          throw new Error("/permissions root is retired; root bash/write/edit always require exact-call approval");
         } else if (operation === "preset") {
           if (first !== "developer" || second) {
             throw new Error("Usage: /permissions preset developer");
@@ -1667,7 +1667,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ) as PermissionPolicy;
           permissionPolicyError = undefined;
         } else {
-          throw new Error("Usage: /permissions [status|reload|preset developer|set <pattern> <action>|default <action>|root <confirm|policy>]");
+          throw new Error("Usage: /permissions [status|reload|preset developer|set <pattern> <action>|default <action>]");
         }
 
         const hidden = applyDeniedTools();
@@ -2132,11 +2132,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
       const temperatures = snapshot.thermalZones.map((zone) => `${zone.name}=${zone.celsius}C`).join(", ") || "unavailable";
       const warnings = [
-        runningAsRoot && permissionPolicy.rootMode === "confirm"
-          ? "Running as root; mutation tools require confirmation."
-          : undefined,
-        runningAsRoot && permissionPolicy.rootMode === "policy"
-          ? "Running as root in policy mode; explicit allow rules are active."
+        runningAsRoot
+          ? "Running as root; bash/write/edit require exact-call approval."
           : undefined,
         permissionPolicyError ? `Permission policy: ${permissionPolicyError}` : undefined,
         memoryRuntimeError ? `Memory: ${memoryRuntimeError}` : undefined,

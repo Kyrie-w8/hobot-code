@@ -12,9 +12,10 @@ import (
 const (
 	defaultMaxTasks      = 2
 	maximumMaxTasks      = 8
-	defaultRetainedTasks = 200
+	defaultRetainedTasks = 100
 	maximumRetainedTasks = 1000
-	defaultMaxEventSize  = int64(64 * 1024 * 1024)
+	defaultMaxEventMiB   = 16
+	maximumMaxEventMiB   = 64
 )
 
 type config struct {
@@ -82,6 +83,7 @@ func loadConfig() (config, error) {
 	}
 	maxTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_BACKGROUND_TASKS"), defaultMaxTasks, 1, maximumMaxTasks)
 	maxRetainedTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_RETAINED_TASKS"), defaultRetainedTasks, 10, maximumRetainedTasks)
+	maxEventMiB := boundedInteger(os.Getenv("HOBOT_CODE_MAX_EVENT_MIB"), defaultMaxEventMiB, 1, maximumMaxEventMiB)
 
 	return config{
 		StateRoot:        filepath.Clean(stateRoot),
@@ -94,7 +96,7 @@ func loadConfig() (config, error) {
 		AgentBinary:      filepath.Clean(agentBinary),
 		MaxTasks:         maxTasks,
 		MaxRetainedTasks: maxRetainedTasks,
-		MaxEventSize:     defaultMaxEventSize,
+		MaxEventSize:     int64(maxEventMiB) * 1024 * 1024,
 	}, nil
 }
 

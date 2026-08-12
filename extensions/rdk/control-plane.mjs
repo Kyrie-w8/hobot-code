@@ -27,7 +27,7 @@ export const DEFAULT_POLICY = Object.freeze({
 
 export const DEVELOPER_POLICY = Object.freeze({
   schemaVersion: 2,
-  rootMode: "policy",
+  rootMode: "confirm",
   default: "ask",
   rules: Object.freeze([
     Object.freeze({ tool: "read", action: "allow" }),
@@ -178,7 +178,11 @@ export function parsePolicy(value) {
     const action = value.schemaVersion === 1 && rule.action === "allow" && matchesMutation
       ? "ask"
       : rule.action;
-    return { tool, action };
+    const targetHash = rule.targetHash === undefined ? undefined : String(rule.targetHash).trim().toLowerCase();
+    if (targetHash !== undefined && !/^[a-f0-9]{64}$/.test(targetHash)) {
+      throw new Error(`permission rule ${index + 1} has an invalid targetHash`);
+    }
+    return targetHash ? { tool, action, targetHash } : { tool, action };
   });
 
   return {
@@ -240,6 +244,7 @@ export function isMcpTool(tool) {
 
 export function resolveToolAction(policy, toolName, mcp = false) {
   for (const rule of policy.rules) {
+    if (rule.targetHash) continue;
     if (rule.tool.toLowerCase() === "mcp:*") {
       if (mcp) return rule.action;
       continue;
@@ -249,12 +254,38 @@ export function resolveToolAction(policy, toolName, mcp = false) {
   return policy.default;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+export function permissionTargetHash(toolName, input) {
+  return createHash("sha256")
+    .update(`${String(toolName).toLowerCase()}\0${stableJson(input ?? {})}`)
+    .digest("hex");
+}
+
+export function resolveToolCallAction(policy, toolName, input, mcp = false) {
+  const broadAction = resolveToolAction(policy, toolName, mcp);
+  if (broadAction === "deny") return "deny";
+  const targetHash = permissionTargetHash(toolName, input);
+  for (const rule of policy.rules) {
+    if (rule.targetHash === targetHash && wildcardMatches(toolName, rule.tool)) return rule.action;
+  }
+  return broadAction;
+}
+
+export function hasAllowedToolCall(policy, toolName, input) {
+  const targetHash = permissionTargetHash(toolName, input);
+  return policy.rules.some((rule) => rule.action === "allow"
+    && rule.targetHash === targetHash && wildcardMatches(toolName, rule.tool));
+}
+
 export function requiresRootToolApproval(policy, runningAsRoot, toolName) {
-  return Boolean(
-    runningAsRoot
-      && policy.rootMode !== "policy"
-      && ["bash", "write", "edit"].includes(toolName),
-  );
+  return Boolean(runningAsRoot && ["bash", "write", "edit"].includes(toolName));
 }
 
 export function reconcileToolVisibility(allTools, activeTools, hiddenTools, deniedTools) {
@@ -283,6 +314,29 @@ export function setPolicyRule(policy, tool, action) {
   return parsePolicy({
     ...policy,
     rules: [{ tool: pattern, action }, ...policy.rules.filter((rule) => rule.tool !== pattern)],
+  });
+}
+
+export function setPolicyCallRule(policy, tool, input, action) {
+  const pattern = String(tool ?? "").trim();
+  if (!pattern || pattern.length > 128 || /[\r\n]/.test(pattern)) {
+    throw new Error("tool pattern must be 1-128 characters without newlines");
+  }
+  if (!permissionActions.has(action)) throw new Error("action must be allow, ask, or deny");
+  const targetHash = permissionTargetHash(pattern, input);
+  const broadRules = policy.rules.filter((rule) => !rule.targetHash);
+  const maximumCallRules = Math.min(64, 128 - broadRules.length);
+  if (maximumCallRules < 1) throw new Error("permission policy has no room for a remembered call");
+  const retainedCallRules = policy.rules
+    .filter((rule) => rule.targetHash && !(rule.tool === pattern && rule.targetHash === targetHash))
+    .slice(0, maximumCallRules - 1);
+  return parsePolicy({
+    ...policy,
+    rules: [
+      { tool: pattern, action, targetHash },
+      ...retainedCallRules,
+      ...broadRules,
+    ],
   });
 }
 

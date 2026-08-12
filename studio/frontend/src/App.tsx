@@ -12,6 +12,7 @@ import {
 import {api, isMock} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
 import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
+import {approvalPresentation} from './approval-model.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
 import type {Approval, Board, Connection, ImageContent, ModelOption, Task, TaskEvent, WorkspaceListing} from './types';
@@ -242,7 +243,7 @@ function App() {
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const selectedModel = selectedTask?.model ?? '';
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
-  const selectedPermissionMode = selectedTask?.permissionMode ?? 'developer';
+  const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
   const canChangeModel = Boolean(selectedTask && (selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const canChangePermissions = canChangeModel;
   const canStopTask = Boolean(selectedTask && ['starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
@@ -681,9 +682,8 @@ function imageFromDataURL(name: string, mimeType: string, value: string): ImageC
 function imageDataURL(image: ImageContent): string { return `data:${image.mimeType};base64,${image.data}`; }
 
 function ApprovalBar({approval, busy, respond}: {approval: Approval; busy: boolean; respond: (response: Record<string, unknown>) => void}) {
-  const [title, ...detail] = (approval.title ?? 'Approval required').split('\n');
-  const message = approval.message || detail.join('\n').trim();
-  return <div className="approval-bar"><div className="approval-icon"><ShieldCheck size={17} /></div><div className="approval-copy"><strong>{title}</strong><span title={message}>{message}</span></div><div className="approval-actions">{approval.method === 'select' ? approval.options?.map((option) => <button key={option} className={option.startsWith('Allow') ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond({value: option})}>{option}</button>) : <><button className="secondary-button" disabled={busy} onClick={() => respond({confirmed: false})}>Deny</button><button className="primary-button" disabled={busy} onClick={() => respond({confirmed: true})}>Allow once</button></>}</div></div>;
+  const view = approvalPresentation(approval);
+  return <section className="approval-bar" role="alert" aria-label={view.title}><div className="approval-heading"><div className="approval-icon"><ShieldCheck size={17} /></div><strong>{view.title}</strong></div><pre className="approval-detail">{view.detail}</pre>{view.remembersExactCall && <div className="approval-scope"><ShieldCheck size={13} />Remembering applies only to this exact tool call in this task.</div>}<div className="approval-actions">{approval.method === 'select' ? approval.options?.map((option) => <button key={option} className={option === 'Allow once' ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond({value: option})}>{option}</button>) : <><button className="secondary-button" disabled={busy} onClick={() => respond({confirmed: false})}>Deny</button><button className="primary-button" disabled={busy} onClick={() => respond({confirmed: true})}>Allow once</button></>}</div></section>;
 }
 
 function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[]; busy: boolean; onClose: () => void; onConnect: (board: Board) => void; onSave: (board: Board) => Promise<void>}) {
@@ -694,7 +694,7 @@ function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[
 }
 
 function NewTaskDialog({boardId, initialCwd, busy, onClose, onCreate}: {boardId: string; initialCwd: string; busy: boolean; onClose: () => void; onCreate: (request: {name: string; cwd: string; prompt: string; images?: ImageContent[]; approve: boolean; model?: string; permissionMode?: string}) => void}) {
-  const [request, setRequest] = useState<{name: string; cwd: string; prompt: string; images: ImageContent[]; approve: boolean; permissionMode: string}>({name: '', cwd: initialCwd, prompt: '', images: [], approve: false, permissionMode: 'developer'});
+  const [request, setRequest] = useState<{name: string; cwd: string; prompt: string; images: ImageContent[]; approve: boolean; permissionMode: string}>({name: '', cwd: initialCwd, prompt: '', images: [], approve: false, permissionMode: 'ask'});
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
   const [folderMode, setFolderMode] = useState(false);
   const [newFolder, setNewFolder] = useState('');

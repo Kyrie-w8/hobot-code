@@ -358,12 +358,13 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .editing-banner { display: flex; min-height: 31px; align-items: center; gap: 7px; padding: 0 8px 0 13px; border-bottom: 1px solid var(--line); background: rgba(215, 180, 107, 0.08); color: var(--amber); font-size: 10px; }
 .editing-banner button { display: grid; width: 24px; height: 24px; place-items: center; margin-left: auto; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
 .editing-banner button:hover { background: var(--surface-hover); color: var(--text); }
-.approval-bar { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-bottom: 8px; padding: 10px; border: 1px solid rgba(215, 180, 107, 0.32); border-radius: var(--radius); background: rgba(215, 180, 107, 0.08); }
+.approval-bar { display: flex; max-height: min(360px, 42vh); flex-direction: column; gap: 9px; overflow: auto; margin-bottom: 8px; padding: 12px; border: 1px solid rgba(215, 180, 107, 0.38); border-radius: var(--radius); background: rgba(215, 180, 107, 0.08); }
+.approval-heading { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--text); }
+.approval-heading strong { font-size: 13px; }
 .approval-icon { display: grid; width: 28px; height: 28px; place-items: center; color: var(--amber); }
-.approval-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.approval-copy strong { font-size: 11px; }
-.approval-copy span { overflow: hidden; max-width: 460px; color: var(--text-muted); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.approval-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.approval-detail { overflow: auto; max-height: 180px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.18); color: var(--text-soft); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.approval-scope { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.approval-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .approval-actions button { white-space: nowrap; }
 
 .inspector { grid-column: 3; grid-row: 2; min-width: 0; overflow-y: auto; border-left: 1px solid var(--line); background: var(--chrome); }

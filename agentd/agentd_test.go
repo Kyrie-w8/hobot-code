@@ -77,6 +77,9 @@ func TestImagePromptPersistsOnlyAttachmentMetadata(t *testing.T) {
 	if err := current.stop(); err != nil {
 		t.Fatal(err)
 	}
+	if state := current.snapshot(); state.Status != statusStopped || state.PID != 0 {
+		t.Fatalf("stop returned before worker exit: %+v", state)
+	}
 }
 
 func waitForStatus(t *testing.T, current *task, expected taskStatus) taskMetadata {

@@ -432,7 +432,7 @@ test("launcher rejects non-regular managed configuration files", async (t) => {
 });
 
 test("release scripts preserve transaction and provenance invariants", async () => {
-  const [makefile, packager, installer, rollback, launcher, releaseInstaller, uninstaller, workflow] = await Promise.all([
+  const [makefile, packager, installer, rollback, launcher, releaseInstaller, uninstaller, workflow, studioPackager] = await Promise.all([
     readFile(join(repository, "Makefile"), "utf8"),
     readFile(join(repository, "scripts/package-pi.sh"), "utf8"),
     readFile(join(repository, "scripts/install-pi.sh"), "utf8"),
@@ -441,6 +441,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
     readFile(join(repository, "scripts/hobot-release.sh"), "utf8"),
     readFile(join(repository, "scripts/uninstall-pi.sh"), "utf8"),
     readFile(join(repository, ".github/workflows/release.yml"), "utf8"),
+    readFile(join(repository, "scripts/package-studio-macos.sh"), "utf8"),
   ]);
   assert.doesNotMatch(makefile, /package-pi\.sh\s+\$\(VERSION\)/);
   assert.doesNotMatch(packager, /^\.\s+.*\.lock/m);
@@ -470,6 +471,11 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /Installed command validation failed/);
   assert.match(installer, /TOOLS_RUNTIME/);
   assert.match(installer, /HOBOT_CODE_INSTALL_CHANNEL/);
+  assert.match(installer, /HOBOT_CODE_BACKUP_KEEP:-3/);
+  assert.match(installer, /HOBOT_CODE_BACKUP_MAX_MIB:-768/);
+  assert.match(installer, /prune_install_backups "\$backup_dir"/);
+  assert.match(installer, /candidate" = "\$protected_backup/);
+  assert.match(installer, /could not prune old Hobot Code backup/);
   assert.match(installer, /package_dir\/agentd/);
   assert.match(installer, /new_runtime\/agentd/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
@@ -499,6 +505,14 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(uninstaller, /Stop active Hobot Code processes/);
   assert.match(workflow, /attest-build-provenance@v2/);
   assert.match(workflow, /test "\$\{GITHUB_REF_NAME\}" = "v\$\{version\}"/);
+  assert.match(workflow, /environment: production/);
+  assert.match(workflow, /MACOS_CERTIFICATE_BASE64/);
+  assert.match(workflow, /APPLE_NOTARY_KEY_BASE64/);
+  assert.match(workflow, /HOBOT_CODE_REQUIRE_SIGNED_RELEASE: "1"/);
+  assert.match(studioPackager, /codesign --force --deep --options runtime --timestamp/);
+  assert.match(studioPackager, /notarytool submit/);
+  assert.match(studioPackager, /stapler validate/);
+  assert.match(studioPackager, /spctl --assess/);
 });
 
 test("packager rejects command-line version overrides before doing release work", async () => {
