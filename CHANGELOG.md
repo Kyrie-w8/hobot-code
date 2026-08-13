@@ -20,8 +20,8 @@
 - Serialize BPU, camera-device, and RDK media-pipeline tool calls through private, crash-recoverable hardware leases, with live occupancy in Studio and identity-redacted support bundles.
 - Add `/cache [status|reset]` with gateway-reported aggregate/latest cache hit rates, input-token accounting, and privacy-preserving system/tool contract fingerprints.
 - Freeze the rendered RDK expert prompt for each session so runtime template or board-state changes cannot silently invalidate an established model prefix.
-- Add D-Robotics DeepSeek V4 Flash and Pro to the TUI and Studio model catalogs, route them through the gateway's cache-capable OpenAI interface, and map Pi thinking-off to the verified chat-template control while retaining text-only input validation.
-- Publish reproducible S100 cache baselines for Kimi K3, GLM 5.2, and DeepSeek V4 Flash, including 99%+ stable-prefix results for Kimi and GLM and the measured DeepSeek routing boundary.
+- Add D-Robotics DeepSeek V4 Flash and Pro to the TUI and Studio model catalogs, route Flash through the verified `deepseek/deepseek-v4-flash` gateway model group, and map Pi thinking-off to the chat-template control while retaining text-only input validation.
+- Publish reproducible S100 cache baselines for Kimi K3, GLM 5.2, and DeepSeek V4 Flash, including 99%+ stable-prefix results for all three model families.
 - Add `hobot diagnose` and the `support.bundle.v1` control-plane capability for one-command, board-side diagnostics with bounded retention and private file permissions.
 - Produce a self-describing support document with RDK identity and telemetry, daemon limits, fixed utility availability, structured health checks, and pseudonymous task summaries.
 - Exclude conversations, prompts, tool inputs and outputs, environment variables, credentials, project files, raw logs, hostnames, local paths, and raw error messages from support documents by construction, with regression tests for representative secrets.

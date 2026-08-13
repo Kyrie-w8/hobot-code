@@ -64,7 +64,7 @@ const BUILTIN_DROBOTICS_MODELS = [
   DEFAULT_MODEL,
   "qwen3.8-max",
   "glm-5.2",
-  "deepseek-v4-flash",
+  "deepseek/deepseek-v4-flash",
   "deepseek-v4-pro",
 ] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";

@@ -203,10 +203,10 @@ func TestStudioModelsOnlyExposeDRobotics(t *testing.T) {
 		{Provider: "drobotics", ID: "kimi-k3", Name: "kimi-k3", Default: true, Capabilities: hobot.ModelCapabilities{Reasoning: true, ImageInput: true}, CapabilitySource: "runtime-model-table"},
 		{Provider: "drobotics", ID: "qwen3.8-max", Name: "qwen3.8-max"},
 		{Provider: "drobotics", ID: "glm-5.2", Name: "glm-5.2"},
-		{Provider: "drobotics", ID: "deepseek-v4-flash", Name: "deepseek-v4-flash", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
+		{Provider: "drobotics", ID: "deepseek/deepseek-v4-flash", Name: "deepseek/deepseek-v4-flash", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
 		{Provider: "drobotics", ID: "deepseek-v4-pro", Name: "deepseek-v4-pro", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
 	})
-	if len(models) != 5 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" || models[3].ID != "deepseek-v4-flash" || models[4].ID != "deepseek-v4-pro" {
+	if len(models) != 5 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" || models[3].ID != "deepseek/deepseek-v4-flash" || models[4].ID != "deepseek-v4-pro" {
 		t.Fatalf("unexpected Studio models: %+v", models)
 	}
 	if !models[0].Default || !models[0].Capabilities.ImageInput || models[0].CapabilitySource != "runtime-model-table" {

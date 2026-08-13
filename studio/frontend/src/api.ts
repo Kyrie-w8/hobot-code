@@ -63,7 +63,7 @@ const mockBackend: Backend = {
     {provider: 'drobotics', id: 'kimi-k3', name: 'kimi-k3', default: true, capabilities: {reasoning: true, imageInput: true}, capabilitySource: 'runtime-model-table'},
     {provider: 'drobotics', id: 'qwen3.8-max', name: 'qwen3.8-max', capabilities: {reasoning: true, imageInput: true}, capabilitySource: 'runtime-model-table'},
     {provider: 'drobotics', id: 'glm-5.2', name: 'glm-5.2', capabilities: {reasoning: true, imageInput: true}, capabilitySource: 'runtime-model-table'},
-    {provider: 'drobotics', id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', capabilities: {reasoning: true, imageInput: false}, capabilitySource: 'runtime-model-table'},
+    {provider: 'drobotics', id: 'deepseek/deepseek-v4-flash', name: 'deepseek/deepseek-v4-flash', capabilities: {reasoning: true, imageInput: false}, capabilitySource: 'runtime-model-table'},
     {provider: 'drobotics', id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', capabilities: {reasoning: true, imageInput: false}, capabilitySource: 'runtime-model-table'},
   ],
   CheckModelHealth: async (_board: string, model: string): Promise<ModelHealth> => ({provider: model.split('/')[0], model: model.split('/').slice(1).join('/'), status: 'available', category: 'ok', message: 'The model gateway completed a minimal response successfully.', transport: 'sse', checkedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString(), firstByteMs: 326, latencyMs: 612, attempts: 1, cached: false}),

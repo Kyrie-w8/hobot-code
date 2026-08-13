@@ -118,10 +118,10 @@ EOF
 
 validate_setup_model() {
   case "$1" in
-    kimi-k3|qwen3.8-max|glm-5.2|deepseek-v4-flash|deepseek-v4-pro) ;;
+    kimi-k3|qwen3.8-max|glm-5.2|deepseek/deepseek-v4-flash|deepseek-v4-pro) ;;
     *)
       printf 'Unsupported D-Robotics model: %s\n' "$1" >&2
-      printf 'Choose kimi-k3, qwen3.8-max, glm-5.2, deepseek-v4-flash, or deepseek-v4-pro.\n' >&2
+      printf 'Choose kimi-k3, qwen3.8-max, glm-5.2, deepseek/deepseek-v4-flash, or deepseek-v4-pro.\n' >&2
       exit 2
       ;;
   esac
@@ -182,7 +182,8 @@ handle_setup_command() {
   setup_model=${ANTHROPIC_MODEL:-kimi-k3}
   setup_model=${setup_model#drobotics/}
   case "$setup_model" in
-    kimi-k3|qwen3.8-max|glm-5.2|deepseek-v4-flash|deepseek-v4-pro) ;;
+    deepseek-v4-flash) setup_model=deepseek/deepseek-v4-flash ;;
+    kimi-k3|qwen3.8-max|glm-5.2|deepseek/deepseek-v4-flash|deepseek-v4-pro) ;;
     *) setup_model=kimi-k3 ;;
   esac
   setup_base_url=${ANTHROPIC_BASE_URL:-https://ai-api.d-robotics.cc}

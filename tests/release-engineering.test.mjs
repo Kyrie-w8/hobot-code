@@ -468,6 +468,11 @@ test("launcher setup normalizes legacy model defaults and bounds token input", a
   await execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "new-token\n", { env: environment });
   assert.match(await readFile(config, "utf8"), /^ANTHROPIC_MODEL=glm-5\.2$/m);
 
+  await writeFile(config, "ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc\nANTHROPIC_AUTH_TOKEN=old-token\nANTHROPIC_MODEL=deepseek-v4-flash\n");
+  await chmod(config, 0o600);
+  await execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "new-flash-token\n", { env: environment });
+  assert.match(await readFile(config, "utf8"), /^ANTHROPIC_MODEL=deepseek\/deepseek-v4-flash$/m);
+
   await writeFile(config, "ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc\nANTHROPIC_AUTH_TOKEN=old-token\nANTHROPIC_MODEL=legacy-unknown\n");
   await chmod(config, 0o600);
   await execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "newer-token\n", { env: environment });
@@ -652,6 +657,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /package_dir\/agentd/);
   assert.match(installer, /new_runtime\/agentd/);
   assert.match(installer, /package_dir\/docs\/\." "\$new_runtime\/docs/);
+  assert.match(installer, /ANTHROPIC_MODEL=deepseek\/deepseek-v4-flash/);
+  assert.match(installer, /drobotics\/deepseek\/deepseek-v4-flash/);
   assert.match(installer, /Installed component version mismatch/);
   assert.match(installer, /Configure your model first: hobot setup/);
   assert.match(installer, /ANTHROPIC_AUTH_TOKEN=/);

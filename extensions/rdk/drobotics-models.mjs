@@ -1,4 +1,8 @@
-const DEEPSEEK_V4_PATTERN = /^deepseek-v4-(flash|pro)$/u;
+const DEEPSEEK_V4_MODELS = new Set([
+  "deepseek/deepseek-v4-flash",
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+]);
 
 function openAIBaseUrl(baseUrl) {
   const normalized = String(baseUrl).replace(/\/+$/u, "");
@@ -6,7 +10,7 @@ function openAIBaseUrl(baseUrl) {
 }
 
 export function isDeepSeekV4Model(id) {
-  return DEEPSEEK_V4_PATTERN.test(id);
+  return DEEPSEEK_V4_MODELS.has(id);
 }
 
 export function createDroboticsModelConfig(id, { baseUrl, contextWindow, maxTokens }) {

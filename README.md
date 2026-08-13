@@ -24,7 +24,7 @@
 |---|---:|---:|
 | Kimi K3 | **94.58%** | **99.46%** |
 | GLM 5.2 | **91.98%** | **99.76%** |
-| DeepSeek V4 Flash | **76.93%** | **98.98%** |
+| DeepSeek V4 Flash | **95.10%** | **99.68%** |
 
 数据来自 RDK S100 实机连续多轮请求。命中率受会话长度、工具变化、上下文压缩和网关路由影响，不是服务等级承诺；测量口径与适用边界见[缓存效率](docs/cache-efficiency.md)。
 
@@ -149,7 +149,7 @@ ANTHROPIC_MODEL=kimi-k3
 API_TIMEOUT_MS=3000000
 ```
 
-内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
+内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
 
 配置完成后可先验证模型的真实流式路由：
 

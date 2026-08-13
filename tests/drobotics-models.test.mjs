@@ -14,7 +14,7 @@ const options = {
 
 test("routes only DeepSeek V4 through the cache-capable OpenAI endpoint", () => {
   const kimi = createDroboticsModelConfig("kimi-k3", options);
-  const flash = createDroboticsModelConfig("deepseek-v4-flash", options);
+  const flash = createDroboticsModelConfig("deepseek/deepseek-v4-flash", options);
   const pro = createDroboticsModelConfig("deepseek-v4-pro", {
     ...options,
     baseUrl: "https://ai-api.d-robotics.cc/v1",
@@ -39,7 +39,9 @@ test("routes only DeepSeek V4 through the cache-capable OpenAI endpoint", () => 
 
 test("does not route similarly named models as DeepSeek V4", () => {
   assert.equal(isDeepSeekV4Model("deepseek-v4-flash"), true);
+  assert.equal(isDeepSeekV4Model("deepseek/deepseek-v4-flash"), true);
   assert.equal(isDeepSeekV4Model("deepseek-v4-pro"), true);
+  assert.equal(isDeepSeekV4Model("deepseek/deepseek-v4-pro"), false);
   assert.equal(isDeepSeekV4Model("deepseek-v4"), false);
   assert.equal(isDeepSeekV4Model("deepseek-v4-flash-preview"), false);
   assert.equal(isDeepSeekV4Model("kimi-k3"), false);

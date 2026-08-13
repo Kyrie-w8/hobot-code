@@ -34,9 +34,9 @@ hitRate   = cacheRead / totalInput
 |---|---:|---:|---:|---:|
 | Kimi K3 | 14 | 49,408 / 52,238 | **94.58%** | 91.05%-97.41% |
 | GLM 5.2 | 5 | 7,680 / 8,350 | **91.98%** | 88.33%-95.40% |
-| DeepSeek V4 Flash | 5 | 6,912 / 8,985 | **76.93%** | 57.53%-97.87% |
+| DeepSeek V4 Flash | 15 | 28,928 / 30,417 | **95.10%** | 92.13%-98.36% |
 
-GLM 5.2 的独立第二组六轮会话全部返回 cache-read usage，单轮命中率为 90.78%-96.66%，验证了结果的可重复性。DeepSeek V4 Flash 的命中比例随短会话前缀增长而提升，第六轮达到 97.87%。
+GLM 5.2 的独立第二组六轮会话全部返回 cache-read usage，单轮命中率为 90.78%-96.66%。DeepSeek V4 Flash 的三组独立六轮会话共 15 个热轮，全部返回 cache-read usage。
 
 ### 稳定长前缀
 
@@ -46,9 +46,9 @@ GLM 5.2 的独立第二组六轮会话全部返回 cache-read usage，单轮命�
 |---|---:|---:|---:|---:|
 | Kimi K3 | 约 50K token | 2 | 101,376 / 101,926 | **99.46%** |
 | GLM 5.2 | 约 33K token | 2 | 67,072 / 67,233 | **99.76%** |
-| DeepSeek V4 Flash | 约 25K token | 1 | 24,576 / 24,830 | **98.98%** |
+| DeepSeek V4 Flash | 约 27K token | 4 | 110,080 / 110,430 | **99.68%** |
 
-Kimi K3 和 GLM 5.2 在 D-Robotics Anthropic-compatible 路径上均达到 99%+；DeepSeek V4 Flash 在 OpenAI-compatible 路径上达到 98.98%。DeepSeek 的独立五轮稳定性验证中有四轮返回约 98.93% 命中、一轮未命中，因此该模型仍应按网关实际 usage 观察，而不能把单轮结果当作保证。
+Kimi K3 和 GLM 5.2 在 D-Robotics Anthropic-compatible 路径上均达到 99%+；DeepSeek V4 Flash 在 OpenAI-compatible 路径上达到 99.68%。
 
 ## 产品行为
 
@@ -56,7 +56,7 @@ Kimi K3 和 GLM 5.2 在 D-Robotics Anthropic-compatible 路径上均达到 99%+�
 - 相邻请求的模型、系统 Prompt 或有序工具契约发生变化时，前缀稳定性会明确标记变化。
 - 指标状态只保存 SHA-256 指纹和 token 计数，不保存 Prompt、工具说明、会话正文或凭据。
 - 当前进程累计值覆盖完整请求历史；最近明细最多保留 32 条，避免长会话无界增长。
-- Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Anthropic-compatible 路径；DeepSeek V4 Flash 和 Pro 使用 OpenAI-compatible 路径。两种路径统一映射为 `input`、`cacheRead` 和 `cacheWrite`。
+- Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Anthropic-compatible 路径；DeepSeek V4 Flash 使用网关模型组 `deepseek/deepseek-v4-flash`，与 Pro 一同通过 OpenAI-compatible 路径接入。两种路径统一映射为 `input`、`cacheRead` 和 `cacheWrite`。
 
 ## 适用边界
 

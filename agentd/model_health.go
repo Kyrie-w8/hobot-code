@@ -162,7 +162,7 @@ func probeDroboticsModel(ctx context.Context, model modelOption) modelHealthResu
 	if baseURL == "" {
 		baseURL = defaultDroboticsBaseURL
 	}
-	deepSeekV4 := model.ID == "deepseek-v4-flash" || model.ID == "deepseek-v4-pro"
+	deepSeekV4 := model.ID == "deepseek/deepseek-v4-flash" || model.ID == "deepseek-v4-flash" || model.ID == "deepseek-v4-pro"
 	endpoint, err := modelHealthEndpoint(baseURL, deepSeekV4)
 	if err != nil {
 		result.Message = modelHealthMessage(result.Category)

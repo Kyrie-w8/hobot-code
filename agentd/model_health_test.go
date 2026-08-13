@@ -69,6 +69,9 @@ func TestProbeDroboticsDeepSeekUsesOpenAIStreamingRoute(t *testing.T) {
 		}
 		requestBody, _ := io.ReadAll(io.LimitReader(request.Body, 4096))
 		body := string(requestBody)
+		if !strings.Contains(body, `"model":"deepseek/deepseek-v4-flash"`) {
+			t.Fatalf("DeepSeek health payload used the wrong model group: %s", body)
+		}
 		if !strings.Contains(body, `"chat_template_kwargs":{"enable_thinking":false}`) {
 			t.Fatalf("DeepSeek health payload did not disable thinking: %s", body)
 		}
@@ -81,7 +84,7 @@ func TestProbeDroboticsDeepSeekUsesOpenAIStreamingRoute(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
 
-	health := probeDroboticsModel(context.Background(), modelOption{Provider: "drobotics", ID: "deepseek-v4-flash"})
+	health := probeDroboticsModel(context.Background(), modelOption{Provider: "drobotics", ID: "deepseek/deepseek-v4-flash"})
 	if health.Status != "available" || health.Transport != "sse" || health.Attempts != 1 {
 		t.Fatalf("DeepSeek streaming health = %+v", health)
 	}

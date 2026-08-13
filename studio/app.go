@@ -544,11 +544,11 @@ func (app *App) CheckModelHealth(boardID, model string, force bool) (hobot.Model
 
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
 	allowed := map[string]int{
-		"kimi-k3":           0,
-		"qwen3.8-max":       1,
-		"glm-5.2":           2,
-		"deepseek-v4-flash": 3,
-		"deepseek-v4-pro":   4,
+		"kimi-k3":                    0,
+		"qwen3.8-max":                1,
+		"glm-5.2":                    2,
+		"deepseek/deepseek-v4-flash": 3,
+		"deepseek-v4-pro":            4,
 	}
 	filtered := make([]hobot.ModelOption, 0, len(models))
 	for _, model := range models {
