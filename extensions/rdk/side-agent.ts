@@ -33,6 +33,7 @@ import { acquireSideAgentLease } from "./side-agent-lease.mjs";
 import {
   applySideAgentEvent,
   buildSideAgentArgs,
+  buildSideAgentParentContext,
   buildSideSessionSnapshot,
   createSideAgentEventState,
   enqueueSideAgentUiRequest,
@@ -42,6 +43,7 @@ import {
   resolveSideAgentUiTimeout,
   selectSideAgentParentEntries,
   sideAgentCommandResponseMatches,
+  sideAgentFocusSwitchAllowed,
   sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
   sideAgentPhaseAfterEvent,
@@ -53,6 +55,7 @@ const MAX_STDERR_CHARS = 16_000;
 const MAX_JSON_LINE_CHARS = 2_000_000;
 const MAX_TRANSCRIPT_CHARS = 240_000;
 const MAX_TRANSCRIPT_MESSAGES = 120;
+const MAX_PARENT_CONTEXT_CHARS = 24_000;
 const MAX_SIDE_UI_WAIT_MS = 120_000;
 const SIDE_AGENT_TERM_GRACE_MS = 5_000;
 const SIDE_AGENT_EXIT_TIMEOUT_MS = 8_000;
@@ -170,6 +173,7 @@ class SideAgentRun {
   private readonly args: string[];
   private readonly cwd: string;
   private readonly parentSession: string | undefined;
+  private readonly parentContext: string;
 
   constructor(
     id: string,
@@ -179,6 +183,7 @@ class SideAgentRun {
     args: string[],
     cwd: string,
     parentSession: string | undefined,
+    parentContext: string,
   ) {
     this.id = id;
     this.initialQuestion = initialQuestion;
@@ -187,6 +192,7 @@ class SideAgentRun {
     this.args = args;
     this.cwd = cwd;
     this.parentSession = parentSession;
+    this.parentContext = parentContext;
     this.finished = new Promise((resolve) => {
       this.finish = resolve;
     });
@@ -327,7 +333,7 @@ class SideAgentRun {
       });
       this.phase = "idle";
       this.changed();
-      this.sendPrompt(this.initialQuestion);
+      this.sendPrompt(this.initialQuestion, this.parentContext);
     } catch (error) {
       this.phase = "failed";
       this.addNotice(error instanceof Error ? error.message : String(error));
@@ -336,14 +342,17 @@ class SideAgentRun {
     }
   }
 
-  sendPrompt(question: string): boolean {
+  sendPrompt(question: string, parentContext = ""): boolean {
     const trimmed = question.trim();
     if (!trimmed || trimmed.length > MAX_QUESTION_CHARS || !this.canPrompt) return false;
     this.resetTurnState();
     this.appendTranscript({ role: "user", text: trimmed });
     this.turnStartedAt = Date.now();
     this.phase = "running";
-    this.pendingPromptId = this.sendCommand("prompt", { message: trimmed });
+    const message = parentContext
+      ? `Parent task snapshot (${parentContext.length} characters; read-only):\n${parentContext}\n\nSide task request (${trimmed.length} characters):\n${trimmed}`
+      : trimmed;
+    this.pendingPromptId = this.sendCommand("prompt", { message });
     this.changed();
     return Boolean(this.pendingPromptId);
   }
@@ -610,6 +619,7 @@ class SideAgentSplitWorkspace {
     if (
       !isViewportTUI(tui)
       || tui.mode !== "fullscreen"
+      || typeof (tui as SplitViewportTui).getFocusedComponent !== "function"
       || tui.terminal.columns < 80
       || tui.terminal.rows < 7
     ) return undefined;
@@ -626,6 +636,7 @@ class SideAgentSplitWorkspace {
     ]);
     const workspace = new SideAgentSplitWorkspace(viewport, originalRoot, splitRoot, mainFocus, sidePane);
     workspace.unsubscribePointerFocus = prependTuiInputListener(viewport, (data) => {
+      if (!workspace.canSwitchFocus()) return undefined;
       const target = sideAgentPointerFocusTarget(data, viewport.terminal.columns);
       if (target === "side") workspace.focusSide();
       else if (target === "main") workspace.focusMain();
@@ -637,14 +648,19 @@ class SideAgentSplitWorkspace {
     return workspace;
   }
 
+  private canSwitchFocus(): boolean {
+    const focused = this.tui.getFocusedComponent?.() ?? null;
+    return sideAgentFocusSwitchAllowed(focused, this.mainFocus, this.sidePane);
+  }
+
   focusSide(): void {
-    if (this.restored) return;
+    if (this.restored || !this.canSwitchFocus()) return;
     this.tui.setFocus(this.sidePane);
     this.tui.requestRender();
   }
 
   focusMain(): void {
-    if (this.restored) return;
+    if (this.restored || !this.canSwitchFocus()) return;
     this.tui.setFocus(this.mainFocus);
     this.tui.requestRender();
   }
@@ -656,7 +672,7 @@ class SideAgentSplitWorkspace {
     this.unsubscribePointerFocus = undefined;
     this.sidePane.setSplitMounted(false);
     if (this.tui.layoutRoot === this.splitRoot) this.tui.setLayoutRoot(this.originalRoot);
-    this.tui.setFocus(this.mainFocus);
+    if (this.canSwitchFocus()) this.tui.setFocus(this.mainFocus);
     this.tui.requestRender(true);
   }
 }
@@ -1036,6 +1052,7 @@ async function createSideAgentRun(
   args: string,
   ctx: ExtensionCommandContext,
   parentEntries: unknown[],
+  parentContext: string,
 ): Promise<SideAgentRun> {
   const question = args.trim();
   if (!question) throw new Error("Usage: /btw <task>");
@@ -1072,7 +1089,7 @@ async function createSideAgentRun(
       tools: pi.getActiveTools(),
       projectTrusted: ctx.isProjectTrusted(),
     });
-    return new SideAgentRun(id, question, tempDir, sessionPath, childArgs, ctx.cwd, parentSession);
+    return new SideAgentRun(id, question, tempDir, sessionPath, childArgs, ctx.cwd, parentSession, parentContext);
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true });
     throw error;
@@ -1146,23 +1163,37 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
       let pane: SideAgentPane | undefined;
       let workspace: SideAgentSplitWorkspace | undefined;
       let overlayHandle: { focus: () => void; unfocus: () => void } | undefined;
+      let overlayTui: SplitViewportTui | undefined;
+      let overlayMainFocus: Component | null = null;
+      const overlayFocusCanSwitch = () => {
+        if (!overlayTui || typeof overlayTui.getFocusedComponent !== "function") return false;
+        return sideAgentFocusSwitchAllowed(overlayTui.getFocusedComponent(), overlayMainFocus, pane);
+      };
       try {
+        const currentEntries = ctx.sessionManager.getBranch();
         const parentEntries = selectSideAgentParentEntries({
-          currentEntries: ctx.sessionManager.getBranch(),
+          currentEntries,
           settledEntries: lastSettledLeafId ? ctx.sessionManager.getBranch(lastSettledLeafId) : [],
           parentRunActive,
           runtimeIdle: ctx.isIdle(),
         });
+        const parentContext = redactSensitiveText(buildSideAgentParentContext({
+          currentEntries,
+          inheritedEntries: parentEntries,
+          maximumChars: MAX_PARENT_CONTEXT_CHARS,
+        }), MAX_PARENT_CONTEXT_CHARS);
         lease = await acquireSideAgentLease() as SideAgentLease;
         activeLease = lease;
         if (disposed) return;
-        run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries);
+        run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries, parentContext);
         active = run;
         if (disposed) return;
         ctx.ui.setStatus("hobot-btw", `btw: open ${lease.activeCount}/${lease.limit}`);
         run.start();
         await ctx.ui.custom<"close">(
           (tui, theme, _keybindings, done) => {
+            overlayTui = tui as SplitViewportTui;
+            overlayMainFocus = overlayTui.getFocusedComponent?.() ?? null;
             pane = new SideAgentPane(
               tui,
               theme,
@@ -1173,7 +1204,7 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
               },
               () => {
                 if (workspace) workspace.focusMain();
-                else overlayHandle?.unfocus();
+                else if (overlayFocusCanSwitch()) overlayHandle?.unfocus();
               },
             );
             workspace = SideAgentSplitWorkspace.mount(tui, pane);
@@ -1181,11 +1212,11 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
             activeFocus = {
               focusSide: () => {
                 if (workspace) workspace.focusSide();
-                else overlayHandle?.focus();
+                else if (overlayFocusCanSwitch()) overlayHandle?.focus();
               },
               focusMain: () => {
                 if (workspace) workspace.focusMain();
-                else overlayHandle?.unfocus();
+                else if (overlayFocusCanSwitch()) overlayHandle?.unfocus();
               },
             };
             return workspace ? new SideAgentCustomHost(pane) : pane;
@@ -1203,7 +1234,7 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
                 },
             onHandle: (handle) => {
               overlayHandle = handle;
-              if (!workspace) handle.unfocus();
+              if (!workspace && overlayFocusCanSwitch()) handle.unfocus();
             },
           },
         );

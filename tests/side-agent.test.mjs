@@ -8,6 +8,7 @@ import { acquireSideAgentLease } from "../extensions/rdk/side-agent-lease.mjs";
 import {
   applySideAgentEvent,
   buildSideAgentArgs,
+  buildSideAgentParentContext,
   buildSideSessionSnapshot,
   createSideAgentEventState,
   enqueueSideAgentUiRequest,
@@ -18,6 +19,7 @@ import {
   resolveSideAgentUiTimeout,
   selectSideAgentParentEntries,
   sideAgentCommandResponseMatches,
+  sideAgentFocusSwitchAllowed,
   sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
   sideAgentPhaseAfterEvent,
@@ -101,6 +103,38 @@ test("side agent keeps the full current branch while the parent is idle", () => 
     parentRunActive: false,
     runtimeIdle: true,
   }), currentEntries);
+});
+
+test("side agent receives bounded read-only context for the unfinished parent turn", () => {
+  const inheritedEntries = [
+    { id: "assistant-1", parentId: "user-1", type: "message", message: { role: "assistant", content: [{ type: "text", text: "settled" }] } },
+  ];
+  const currentEntries = [
+    ...inheritedEntries,
+    { id: "user-2", parentId: "assistant-1", type: "message", message: { role: "user", content: [{ type: "text", text: "deploy the current model" }, { type: "image", data: "secret-image", mimeType: "image/jpeg" }] } },
+    { id: "assistant-2", parentId: "user-2", type: "message", message: { role: "assistant", content: [
+      { type: "thinking", thinking: "private chain of thought" },
+      { type: "text", text: "I found the model." },
+      { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "ls models" } },
+      { type: "toolCall", id: "call-2", name: "read", arguments: { path: "/workspace/model.json" } },
+    ], stopReason: "toolUse" } },
+    { id: "tool-1", parentId: "assistant-2", type: "message", message: { role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: "model.hbm" }], isError: false } },
+  ];
+  const context = buildSideAgentParentContext({ currentEntries, inheritedEntries });
+  assert.match(context, /Current user request:\ndeploy the current model/);
+  assert.match(context, /Main Agent visible progress:\nI found the model\./);
+  assert.match(context, /Tool bash \(completed\): ls models/);
+  assert.match(context, /Result summary: model\.hbm/);
+  assert.match(context, /Tool read \(pending or running; it may be awaiting approval\): \/workspace\/model\.json/);
+  assert.doesNotMatch(context, /settled|private chain of thought|secret-image/);
+});
+
+test("side parent context is bounded and rejects unsafe limits", () => {
+  const entries = [{ id: "user", parentId: null, type: "message", message: { role: "user", content: "x".repeat(2_000) } }];
+  const context = buildSideAgentParentContext({ currentEntries: entries, inheritedEntries: [], maximumChars: 512 });
+  assert.ok(context.length <= 512);
+  assert.match(context, /Content truncated/);
+  assert.throws(() => buildSideAgentParentContext({ currentEntries: entries, inheritedEntries: [], maximumChars: 128 }), /at least 256/);
 });
 
 test("side agent captures the leaf before a newly started user or custom turn", () => {
@@ -339,6 +373,11 @@ test("side agent keeps main input active and exposes pointer-routed scrolling", 
   assert.match(source, /registerShortcut\("ctrl\+shift\+right"/, "main-to-side focus switching must remain available");
   assert.match(source, /matchesKey\(data, "ctrl\+shift\+left"\)/, "side-to-main focus switching must remain available");
   assert.match(source, /prependTuiInputListener\(viewport/, "pointer focus must run before Pi consumes mouse input");
+  assert.match(source, /if \(!workspace\.canSwitchFocus\(\)\) return undefined/, "modal focus must win before pointer routing");
+  assert.match(source, /if \(this\.canSwitchFocus\(\)\) this\.tui\.setFocus\(this\.mainFocus\)/, "closing the side pane must preserve a modal focus owner");
+  assert.match(source, /typeof \(tui as SplitViewportTui\)\.getFocusedComponent !== "function"/, "runtimes without focus ownership must fall back to the non-capturing overlay");
+  assert.match(source, /if \(!overlayTui \|\| typeof overlayTui\.getFocusedComponent !== "function"\) return false/, "compatibility overlays must fail closed when focus ownership is unknown");
+  assert.match(source, /redactSensitiveText\([\s\S]*MAX_PARENT_CONTEXT_CHARS\)/, "parent context redaction must preserve the bounded snapshot instead of applying the short UI default");
   assert.match(source, /Reflect\.ownKeys\(tui\)/, "bundled runtimes may minify Pi's private listener field");
   assert.match(source, /value instanceof Set && value\.has\(listener\)/, "listener discovery must identify its owning set by identity");
   assert.doesNotMatch(source, /onHandle:\s*\(handle\)\s*=>\s*handle\.focus\(\)/);
@@ -355,6 +394,16 @@ test("primary pointer presses focus the clicked half without intercepting other 
   assert.equal(sideAgentPointerFocusTarget("\x1b[<32;61;20M", 120), undefined, "drag does not refocus");
   assert.equal(sideAgentPointerFocusTarget("\x1b[<64;61;20M", 120), undefined, "wheel does not refocus");
   assert.equal(sideAgentPointerFocusTarget("\x1b[<0;121;20M", 120), undefined, "stale coordinates are ignored");
+});
+
+test("side focus switching preserves modal approvals", () => {
+  const main = {};
+  const side = {};
+  const approval = {};
+  assert.equal(sideAgentFocusSwitchAllowed(main, main, side), true);
+  assert.equal(sideAgentFocusSwitchAllowed(side, main, side), true);
+  assert.equal(sideAgentFocusSwitchAllowed(approval, main, side), false);
+  assert.equal(sideAgentFocusSwitchAllowed(null, main, side), true);
 });
 
 test("side agent leases reject excess agents and release capacity", async (t) => {
