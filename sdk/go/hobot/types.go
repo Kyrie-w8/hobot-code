@@ -62,12 +62,20 @@ type SandboxCapability struct {
 }
 
 type ExtensionCatalog struct {
-	SchemaVersion  int              `json:"schemaVersion"`
-	APIVersion     string           `json:"apiVersion"`
-	ProductVersion string           `json:"productVersion"`
-	HostVersion    string           `json:"hostVersion"`
-	Entries        []ExtensionEntry `json:"entries"`
-	Policy         ExtensionPolicy  `json:"policy"`
+	SchemaVersion  int                   `json:"schemaVersion"`
+	APIVersion     string                `json:"apiVersion"`
+	ProductVersion string                `json:"productVersion"`
+	HostVersion    string                `json:"hostVersion"`
+	CapturedAt     string                `json:"capturedAt,omitempty"`
+	Entries        []ExtensionEntry      `json:"entries"`
+	Diagnostics    []ExtensionDiagnostic `json:"diagnostics,omitempty"`
+	Policy         ExtensionPolicy       `json:"policy"`
+}
+
+type ExtensionDiagnostic struct {
+	Source  string `json:"source"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 type ExtensionEntry struct {
@@ -87,6 +95,8 @@ type ExtensionEntry struct {
 	Requires       []string `json:"requires"`
 	Permissions    []string `json:"permissions"`
 	Targets        []string `json:"targets"`
+	Status         string   `json:"status,omitempty"`
+	StatusDetail   string   `json:"statusDetail,omitempty"`
 }
 
 type ExtensionPolicy struct {

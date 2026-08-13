@@ -17,8 +17,9 @@ export type Capabilities = {
   sandbox?: {available: boolean; backend?: string; profiles?: string[]; filesystemWritesRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
 };
 
-export type ExtensionEntry = {id: string; name: string; version: string; kind: 'extension' | 'skill' | 'provider' | 'integration'; description: string; origin: string; scope: string; runtime: string; entrypoint: string; trust: string; defaultEnabled: boolean; required: boolean; provides: string[]; requires: string[]; permissions: string[]; targets: string[]};
-export type ExtensionCatalog = {schemaVersion: number; apiVersion: string; productVersion: string; hostVersion: string; entries: ExtensionEntry[]; policy: {inventoryOnly: boolean; executionAuthority: string; permissionAuthority: string; thirdPartyRuntime: string; hotReload: boolean}};
+export type ExtensionEntry = {id: string; name: string; version: string; kind: 'extension' | 'skill' | 'provider' | 'integration'; description: string; origin: string; scope: string; runtime: string; entrypoint: string; trust: string; defaultEnabled: boolean; required: boolean; provides: string[]; requires: string[]; permissions: string[]; targets: string[]; status?: 'included' | 'configured' | 'available' | 'missing' | 'disabled'; statusDetail?: string};
+export type ExtensionDiagnostic = {source: string; status: string; message: string};
+export type ExtensionCatalog = {schemaVersion: number; apiVersion: string; productVersion: string; hostVersion: string; capturedAt?: string; entries: ExtensionEntry[]; diagnostics?: ExtensionDiagnostic[]; policy: {inventoryOnly: boolean; executionAuthority: string; permissionAuthority: string; thirdPartyRuntime: string; hotReload: boolean}};
 
 export type DaemonInfo = {
   version: string;

@@ -8,7 +8,7 @@ Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 
 
 Hobot Code 遵循“小核心、强扩展、板端裁决”的原则。Agent 循环、会话、任务恢复、权限、资源租约和审计属于稳定核心；模型 Provider、RDK 工具、Skills、MCP、Hook 与 LSP 通过明确能力边界接入。只有需要共享生命周期、权限或持久状态的能力才进入核心，单一工作流优先保留为 Skill 或扩展，避免把每项新功能都固化为守护进程接口。
 
-`extensions/catalog.json` 是与产品版本绑定的 `hobot.extensions/v1` 清单。`agentd` 启动时严格校验 schema、版本、重复 ID、入口路径和随包文件，随后通过 `extensions.list` 只读暴露给 CLI、SDK 和 Studio。清单不加载代码、不改变启用状态，也不授予权限；真正的扩展执行由固定 Pi 运行时负责，工具权限与系统安全边界仍由板端判定。
+`extensions/catalog.json` 是与产品版本绑定的 `hobot.extensions/v1` 清单。`agentd` 启动时严格校验 schema、版本、重复 ID、入口路径和随包文件；每次 `extensions.list` 再以独立的只读适配器汇总私有用户 Provider、Hook 与 LSP 配置，并只返回脱敏状态。CLI、SDK 和 Studio 消费同一契约，不扫描未知目录。清单不加载代码、不改变启用状态，也不授予权限；真正的扩展执行由固定 Pi 运行时负责，工具权限与系统安全边界仍由板端判定。后续来源通过有界适配器扩展该目录，而不是进入任务执行主链路。
 
 扩展演进分三步进行：先完成内置能力发现和兼容性；再聚合 Pi packages、Skills、MCP、Hook、LSP 与 Provider 的状态；最后才引入经过签名、版本约束和隔离的第三方插件宿主。插件崩溃不得拖垮 `agentd`，客户端不得绕过板端安装、权限和审计。热加载在有独立宿主、撤销语义和故障隔离前保持关闭。
 

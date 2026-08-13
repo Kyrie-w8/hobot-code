@@ -26,8 +26,9 @@ import {taskAttention} from './task-notifications.js';
 import {taskRecovery, taskRecoveryActionAvailable} from './task-recovery.js';
 import {compatibilityPresentation, compatibilityTargetLabel} from './compatibility-presentation.js';
 import {workspaceChangeLabel, workspaceChangeSummary, workspaceDeliverySummary, workspaceDiffLines} from './workspace-changes.js';
+import {extensionCatalogHealth, extensionCatalogSummary, extensionKindLabel, extensionTargetState, filterExtensions} from './extension-center.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelConformance, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ExtensionCatalog, ImageContent, ModelConformance, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -74,6 +75,7 @@ function App() {
   const [showBoard, setShowBoard] = useState(false);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showExtensions, setShowExtensions] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
 	const [workspaceInspection, setWorkspaceInspection] = useState<{taskId: string; loading: boolean; result?: WorkspaceIsolation} | null>(null);
   const [appVersion, setAppVersion] = useState('');
@@ -910,6 +912,7 @@ function App() {
         <div className="titlebar-spacer" />
         {isMock() && <span className="preview-label">Preview</span>}
         <button className="version-button" title="Version and updates" onClick={() => setShowAbout(true)}>{appVersion ? `v${appVersion}` : <LoaderCircle size={12} className="spin" />}</button>
+        {connection?.capabilities?.capabilities.includes('extensions.catalog.v1') && <button className="icon-button" title="Capabilities" disabled={connectionState !== 'online'} onClick={() => setShowExtensions(true)}><Box size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
@@ -1018,6 +1021,7 @@ function App() {
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);}} onRemove={async (board) => {await api.removeBoard(board.id); if (activeBoardId.current === board.id) {activeBoardId.current = ''; setConnection(null); setConnectionState('offline'); setTasks([]); setSelectedTask(null);} setBoards(await api.listBoards());}} />}
 	  {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.projectCwd ?? selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
       {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onClose={() => setShowAbout(false)} />}
+      {showExtensions && connection && <ExtensionCenterDialog boardId={connection.board.id} boardName={connection.board.name} boardTarget={snapshot?.boardId || connection.compatibility?.boardId || ''} onClose={() => setShowExtensions(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
 	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
@@ -1247,6 +1251,74 @@ function AboutDialog({appVersion, connection, onClose}: {appVersion: string; con
     ? `${build.commit?.slice(0, 12) ?? build.binarySha256?.slice(0, 12) ?? 'verified'}${build.dirty ? ' (modified)' : ''}`
     : build?.status ?? 'Not reported';
   return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className="update-guidance"><Info size={15} /><span><strong>Updates are installed on the board.</strong><small>Hobot Code prevents downgrades and blocks updates while agents or Studio bridges are active.</small></span></div><div className="command-list"><div><code>hobot update --check</code><CopyButton value="hobot update --check" /></div><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose}>Done</button></div></div></div></div>;
+}
+
+function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boardId: string; boardName: string; boardTarget: string; onClose: () => void}) {
+  const [catalog, setCatalog] = useState<ExtensionCatalog | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failure, setFailure] = useState('');
+  const [query, setQuery] = useState('');
+  const [kind, setKind] = useState('all');
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setFailure('');
+    api.extensions(boardId).then((result) => {
+      if (!cancelled) setCatalog(result);
+    }).catch((reason) => {
+      if (!cancelled) setFailure(friendlyError(String(reason)));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => {cancelled = true;};
+  }, [boardId, revision]);
+
+  const target = boardTarget.trim().toLowerCase();
+  const health = catalog ? extensionCatalogHealth(catalog) : null;
+  const summary = catalog ? extensionCatalogSummary(catalog, target) : null;
+  const entries = catalog ? filterExtensions(catalog.entries, query, kind) : [];
+  const kinds = catalog ? ['all', ...Array.from(new Set(catalog.entries.map((entry) => entry.kind)))] : ['all'];
+
+  return <div className="modal-backdrop"><section className="modal extension-center-modal" role="dialog" aria-modal="true" aria-labelledby="extension-center-title"><div className="modal-header"><div><span className="modal-eyebrow">{boardName}</span><h2 id="extension-center-title">Capabilities</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh capabilities" onClick={() => setRevision((value) => value + 1)} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div></div>
+    {loading && !catalog ? <div className="extension-center-loading"><LoaderCircle size={18} className="spin" /><span>Reading the board catalog</span></div> : failure && !catalog ? <div className="extension-center-failure"><AlertTriangle size={18} /><span><strong>Catalog unavailable</strong><small>{failure}</small></span><button className="secondary-button" onClick={() => setRevision((value) => value + 1)}>Retry</button></div> : catalog && summary && health ? <>
+      <div className="extension-overview"><div className={`extension-health ${health.healthy ? 'healthy' : 'warning'}`}>{health.healthy ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}<span><strong>{health.healthy ? 'Board-enforced catalog' : 'Catalog needs review'}</strong><small>{health.healthy ? `v${catalog.productVersion} · read-only inventory · ${target ? target.toUpperCase() : 'target unknown'}` : health.issues.join(' · ')}</small></span></div><div className="extension-stats"><span><strong>{summary.supported}</strong><small>For this board</small></span><span><strong>{summary.required}</strong><small>Required</small></span><span><strong>{summary.skills}</strong><small>Skills</small></span><span><strong>{summary.total}</strong><small>Total</small></span></div></div>
+      {catalog.diagnostics && catalog.diagnostics.length > 0 && <div className="extension-sources" aria-label="Configured capability sources">{catalog.diagnostics.map((diagnostic) => <span key={diagnostic.source} className={`source-${diagnostic.status}`} title={diagnostic.message}>{extensionSourceIcon(diagnostic.status)}<strong>{extensionSourceLabel(diagnostic.source)}</strong><small>{extensionSourceStatus(diagnostic.status)}</small></span>)}</div>}
+      <div className="extension-controls"><label className="extension-search"><Search size={14} /><input aria-label="Search capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search capabilities" /></label><div className="extension-kind-tabs" role="tablist" aria-label="Capability type">{kinds.map((value) => <button key={value} type="button" role="tab" aria-selected={kind === value} className={kind === value ? 'selected' : ''} onClick={() => setKind(value)}>{value === 'all' ? 'All' : extensionKindLabel(value)}</button>)}</div></div>
+      <div className="extension-list">{entries.map((entry) => {
+        const targetState = extensionTargetState(entry, target);
+        const Icon = entry.kind === 'skill' ? Brain : entry.kind === 'provider' ? Bot : entry.kind === 'integration' ? Wrench : Box;
+        const permissions = entry.permissions ?? [];
+        const targets = entry.targets ?? [];
+        const provides = entry.provides ?? [];
+        const requires = entry.requires ?? [];
+        return <article className={`extension-row extension-${entry.kind} extension-${targetState.state}`} key={entry.id}><div className="extension-row-icon"><Icon size={17} /></div><div className="extension-row-main"><div className="extension-row-heading"><strong>{entry.name}</strong><span className={`extension-state state-${targetState.state}`}>{targetState.label}</span></div><p>{entry.description}</p><div className="extension-meta"><span>{extensionKindLabel(entry.kind)}</span><code>{entry.version === 'configured' ? 'Configured' : `v${entry.version}`}</code><span>{entry.origin}</span><span>{entry.scope}</span></div>{permissions.length > 0 && <div className="extension-permissions"><ShieldCheck size={12} /><span>{permissions.map(extensionPermissionLabel).join(' · ')}</span></div>}<details className="extension-details"><summary>Technical details<ChevronRight className="details-chevron" size={12} /></summary><div><InfoRow label="ID" value={entry.id} mono copy={entry.id} /><InfoRow label="Runtime" value={entry.runtime} /><InfoRow label="Targets" value={targets.length ? targets.map((value) => value.toUpperCase()).join(', ') : 'All'} />{provides.length > 0 && <InfoRow label="Provides" value={provides.join(', ')} />}{requires.length > 0 && <InfoRow label="Requires" value={requires.join(', ')} />}</div></details></div></article>;
+      })}{entries.length === 0 && <div className="extension-empty"><Search size={19} /><span>No matching capabilities</span></div>}</div>
+      <footer className="extension-footer"><span><ShieldCheck size={13} />Execution: {catalog.policy.executionAuthority} · permissions: {catalog.policy.permissionAuthority}{catalog.capturedAt ? ` · ${relativeTime(catalog.capturedAt)}` : ''}</span><button className="primary-button" onClick={onClose}>Done</button></footer>
+    </> : null}
+  </section></div>;
+}
+
+function extensionPermissionLabel(permission: string) {
+  const labels: Record<string, string> = {'model-network': 'Model network', workspace: 'Workspace', subprocess: 'Commands', 'rdk-devices': 'RDK devices', 'user-state': 'User state'};
+  return labels[permission] ?? permission;
+}
+
+function extensionSourceLabel(source: string) {
+  const labels: Record<string, string> = {providers: 'Providers', hooks: 'Hooks', lsp: 'LSP'};
+  return labels[source] ?? source;
+}
+
+function extensionSourceStatus(status: string) {
+  const labels: Record<string, string> = {ok: 'Inspected', missing: 'Not configured', invalid: 'Invalid', unsafe: 'Unsafe file', unreadable: 'Unreadable', truncated: 'Limited'};
+  return labels[status] ?? status;
+}
+
+function extensionSourceIcon(status: string) {
+  if (status === 'ok') return <Check size={11} />;
+  if (status === 'missing') return <Info size={11} />;
+  return <AlertTriangle size={11} />;
 }
 
 function DeploymentDialog({boardId, cwd, snapshot, models, busy, onClose, onStart}: {boardId: string; cwd: string; snapshot: SystemSnapshot; models: ModelOption[]; busy: boolean; onClose: () => void; onStart: (request: StartDeploymentRequest) => void}) {

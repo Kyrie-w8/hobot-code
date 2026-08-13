@@ -93,7 +93,9 @@ hobot config
 hobot update --extensions
 ```
 
-`hobot extensions` 显示发行包内置扩展与 Skills 的版本化清单；`hobot extensions --json` 供 Studio 和自动化读取。清单只用于发现和兼容性判断，不执行扩展、不改变启用状态，也不授予权限。第三方 package 的安装、更新和加载继续由 Pi 负责，工具调用仍由 Hobot Code 的板端策略判定。
+`hobot extensions` 显示发行包内置扩展与 Skills，以及当前私有配置中 Provider、Hook 和 LSP 的脱敏状态；`hobot extensions --json` 供 Studio 和自动化读取。Studio 标题栏的 Capabilities 入口提供搜索、类型筛选、板型适配、依赖和声明权限检查。清单每次读取都会刷新，不要求重启 agentd，但它只用于发现和兼容性判断，不执行扩展、不改变启用状态，也不授予权限。
+
+用户配置只有在属于当前用户、不是符号链接、未向组或其他用户开放且大小受限时才会进入清单。返回内容不会包含 Provider 地址或 token、Hook 命令、LSP 参数和本地配置路径。某个来源无效时只跳过该来源并显示诊断，不影响内置能力。第三方 package 的安装、更新和加载继续由 Pi 负责，MCP 与 package 在形成稳定的本地清单契约前不会由 Hobot Code 猜测扫描；工具调用仍由板端策略判定。
 
 第三方扩展与 Skills 不是沙箱内容，它们拥有当前用户权限。安装前应审查来源和代码；root 会话尤其不应加载来源不明的 package。
 

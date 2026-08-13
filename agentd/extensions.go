@@ -20,12 +20,14 @@ const (
 )
 
 type extensionCatalog struct {
-	SchemaVersion  int              `json:"schemaVersion"`
-	APIVersion     string           `json:"apiVersion"`
-	ProductVersion string           `json:"productVersion"`
-	HostVersion    string           `json:"hostVersion"`
-	Entries        []extensionEntry `json:"entries"`
-	Policy         extensionPolicy  `json:"policy"`
+	SchemaVersion  int                   `json:"schemaVersion"`
+	APIVersion     string                `json:"apiVersion"`
+	ProductVersion string                `json:"productVersion"`
+	HostVersion    string                `json:"hostVersion"`
+	CapturedAt     string                `json:"capturedAt,omitempty"`
+	Entries        []extensionEntry      `json:"entries"`
+	Diagnostics    []extensionDiagnostic `json:"diagnostics,omitempty"`
+	Policy         extensionPolicy       `json:"policy"`
 }
 
 type extensionEntry struct {
@@ -45,6 +47,14 @@ type extensionEntry struct {
 	Requires       []string `json:"requires"`
 	Permissions    []string `json:"permissions"`
 	Targets        []string `json:"targets"`
+	Status         string   `json:"status,omitempty"`
+	StatusDetail   string   `json:"statusDetail,omitempty"`
+}
+
+type extensionDiagnostic struct {
+	Source  string `json:"source"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 type extensionPolicy struct {
@@ -105,6 +115,9 @@ func loadExtensionCatalog(path, hostVersion string) (extensionCatalog, error) {
 		}
 	}
 	catalog.HostVersion = hostVersion
+	for index := range catalog.Entries {
+		catalog.Entries[index].Status = "included"
+	}
 	catalog.Policy = extensionPolicy{
 		InventoryOnly:       true,
 		ExecutionAuthority:  "pi-runtime",
@@ -122,6 +135,9 @@ func pathIsWithinProductRoot(root, candidate string) bool {
 }
 
 func validateExtensionCatalog(catalog extensionCatalog, hostVersion string) error {
+	if catalog.HostVersion != "" || catalog.CapturedAt != "" || len(catalog.Diagnostics) != 0 || catalog.Policy != (extensionPolicy{}) {
+		return fmt.Errorf("extension catalog contains runtime-only fields")
+	}
 	if catalog.SchemaVersion != extensionCatalogSchema || catalog.APIVersion != extensionCatalogAPI {
 		return fmt.Errorf("unsupported extension catalog schema %d or API %q", catalog.SchemaVersion, catalog.APIVersion)
 	}
@@ -134,6 +150,9 @@ func validateExtensionCatalog(catalog extensionCatalog, hostVersion string) erro
 	seen := make(map[string]struct{}, len(catalog.Entries))
 	for index := range catalog.Entries {
 		entry := &catalog.Entries[index]
+		if entry.Status != "" || entry.StatusDetail != "" {
+			return fmt.Errorf("extension %s contains runtime-only status fields", entry.ID)
+		}
 		if !validExtensionIdentifier(entry.ID) || entry.Name == "" || entry.Version == "" || entry.Description == "" {
 			return fmt.Errorf("extension catalog entry %d has incomplete or invalid identity", index+1)
 		}

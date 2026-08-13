@@ -52,7 +52,7 @@
 |---|---|---|
 | `ping` | `{}` | 版本、PID、协议版本、任务数、路径和可验证构建身份 |
 | `capabilities` | `{}` | 协议范围、事件 schema、功能标识和资源上限 |
-| `extensions.list` | `{}` | 版本化的内置扩展与 Skills 清单，包括来源、能力、声明权限、适用板型和只读策略 |
+| `extensions.list` | `{}` | 版本化的能力清单，包括内置扩展与 Skills、私有用户 Provider/Hook/LSP 的脱敏状态、声明权限、适用板型、来源诊断和只读策略 |
 | `system.snapshot` | `{}` | 板卡身份、RDK OS、负载、内存、磁盘、温度、逐核 BPU 负载与频率、Hbmem/DDR 和运行时工具的只读实时状态 |
 | `support.bundle` | `{includeContent?: boolean}` | 生成私有、脱敏的 schema-v1 支持文件；返回 ID、板端路径、大小、SHA-256、排除项，并可选择返回不超过 4 MiB 的内容 |
 | `deployment.inspect` | `{path}` | 有界扫描工作区内的 ONNX、PyTorch、TFLite、HBM 等模型产物，并按当前板型标注兼容性 |
@@ -89,6 +89,8 @@
 | `task.subscribe` | `{taskId, after?, follow?}` | 先重放 `sequence > after` 的事件，再按需跟随 |
 
 终端 `hobot deploy inspect/start/status` 是上述部署方法的薄客户端，不另设权限或状态体系。`start` 返回普通持久任务 ID，可继续使用 `hobot task attach/stop`；SSH 断开不会终止任务。
+
+`extensions.list` 每次调用都会重新检查 Provider、Hook 和 LSP 配置，不要求重启 agentd。用户配置必须是当前用户拥有、仅当前用户可读写的普通文件，符号链接、过大文件、无效结构和不安全权限会按来源 fail closed。返回值只包含名称、能力类别、数量、可用状态和声明权限，不包含模型端点、token、Hook 命令、LSP 参数或本地路径。该方法不扫描未知目录、不安装 package、不加载代码，也不改变任何权限；Pi package 与 MCP 的统一目录要等其稳定、可验证的本地契约后再接入。
 
 `workspace.changes` 不接受客户端路径，只能解析服务端任务元数据中已经持久化的工作目录。服务只调用受信的系统 Git，移除 `GIT_*` 环境变量，禁用 hooks、fsmonitor、external diff、textconv、pager 和 submodule 内容；状态最多返回 200 个文件，文本 Diff 最多 512 KiB，未跟踪文件和二进制内容不会通过该方法返回。路径和 Diff 中的控制字符会被替换。该结果是共享工作区的当前快照，不证明某个文件由当前 Agent 修改，也不提供写入、暂存、提交或回滚能力。
 

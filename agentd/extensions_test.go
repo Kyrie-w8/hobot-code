@@ -116,3 +116,127 @@ func TestExtensionCatalogRejectsEntrypointsThroughSymlinkedDirectories(t *testin
 		t.Fatalf("symlinked directory escape was accepted: %v", err)
 	}
 }
+
+func TestConfiguredExtensionInventoryIsPrivateBoundedAndNonSecret(t *testing.T) {
+	configRoot := filepath.Join(t.TempDir(), "agent")
+	if err := os.Mkdir(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", configRoot)
+	t.Setenv("HOBOT_CODE_HOOK_CONFIG", filepath.Join(configRoot, "hooks.json"))
+	t.Setenv("HOBOT_CODE_LSP_CONFIG", filepath.Join(configRoot, "lsp.json"))
+	paths := configuredExtensionPaths()
+	writePrivateJSON(t, paths.models, `{"providers":{"acme":{"baseUrl":"https://secret.example/token","apiKey":"sk-do-not-return","models":[{"id":"one"}]}}}`)
+	writePrivateJSON(t, paths.hooks, `{"schemaVersion":1,"enabled":true,"hooks":[{"name":"guard","event":"PreToolUse","tool":"bash","command":["/secret/guard","--token","private"]}]}`)
+	writePrivateJSON(t, paths.lsp, `{"schemaVersion":1,"enabled":true,"servers":[{"id":"missing-lsp","languageId":"demo","extensions":[".demo"],"command":["hobot-code-missing-lsp","--secret"]}]}`)
+
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn)
+	encoded, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `"requires":[]`) || !strings.Contains(text, `"targets":[]`) {
+		t.Fatalf("dynamic extension fields must remain JSON arrays: %s", text)
+	}
+	for _, secret := range []string{"secret.example", "sk-do-not-return", "/secret/guard", "--token", "private", "--secret"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("extension inventory leaked private configuration %q: %s", secret, text)
+		}
+	}
+	wantStatus := map[string]string{"user.provider.acme": "configured", "user.hook.guard": "configured", "user.lsp.missing-lsp": "missing"}
+	for _, entry := range catalog.Entries {
+		if expected, ok := wantStatus[entry.ID]; ok {
+			if entry.Status != expected {
+				t.Fatalf("entry %s status = %q, want %q", entry.ID, entry.Status, expected)
+			}
+			delete(wantStatus, entry.ID)
+		}
+	}
+	if len(wantStatus) != 0 {
+		t.Fatalf("configured entries missing: %+v", wantStatus)
+	}
+}
+
+func TestConfiguredExtensionInventoryFailsClosedPerSource(t *testing.T) {
+	configRoot := filepath.Join(t.TempDir(), "agent")
+	if err := os.Mkdir(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", configRoot)
+	t.Setenv("HOBOT_CODE_HOOK_CONFIG", filepath.Join(configRoot, "hooks.json"))
+	t.Setenv("HOBOT_CODE_LSP_CONFIG", filepath.Join(configRoot, "lsp.json"))
+	paths := configuredExtensionPaths()
+	writePrivateJSON(t, paths.models, `{"providers":{}}`)
+	if err := os.Chmod(paths.models, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writePrivateJSON(t, paths.hooks, `{"schemaVersion":1,"enabled":true,"hooks":"invalid"}`)
+	linkTarget := filepath.Join(configRoot, "lsp-target.json")
+	writePrivateJSON(t, linkTarget, `{"schemaVersion":1,"enabled":false,"servers":[]}`)
+	if err := os.Symlink(linkTarget, paths.lsp); err != nil {
+		t.Fatal(err)
+	}
+
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn)
+	statuses := make(map[string]string)
+	for _, diagnostic := range catalog.Diagnostics {
+		statuses[diagnostic.Source] = diagnostic.Status
+		if strings.Contains(diagnostic.Message, configRoot) {
+			t.Fatalf("diagnostic leaked config path: %+v", diagnostic)
+		}
+	}
+	if statuses["providers"] != "unsafe" || statuses["hooks"] != "invalid" || statuses["lsp"] != "unsafe" {
+		t.Fatalf("unexpected source diagnostics: %+v", statuses)
+	}
+	if len(catalog.Entries) != len(builtIn.Entries) {
+		t.Fatalf("unsafe sources changed built-in catalog: got %d entries, want %d", len(catalog.Entries), len(builtIn.Entries))
+	}
+}
+
+func TestConfiguredExtensionInventoryRefreshesWithoutDaemonRestart(t *testing.T) {
+	configRoot := filepath.Join(t.TempDir(), "agent")
+	if err := os.Mkdir(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", configRoot)
+	paths := configuredExtensionPaths()
+	writePrivateJSON(t, paths.models, `{"providers":{"first":{"models":[]}}}`)
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := discoverConfiguredExtensions(builtIn)
+	writePrivateJSON(t, paths.models, `{"providers":{"second":{"models":[]}}}`)
+	second := discoverConfiguredExtensions(builtIn)
+	if hasExtensionEntry(first, "user.provider.second") || !hasExtensionEntry(second, "user.provider.second") || hasExtensionEntry(second, "user.provider.first") {
+		t.Fatalf("configured provider inventory was not refreshed: first=%+v second=%+v", first.Entries, second.Entries)
+	}
+	if second.CapturedAt == "" {
+		t.Fatal("extension inventory did not record its capture time")
+	}
+}
+
+func hasExtensionEntry(catalog extensionCatalog, id string) bool {
+	for _, entry := range catalog.Entries {
+		if entry.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func writePrivateJSON(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

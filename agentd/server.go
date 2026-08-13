@@ -212,7 +212,7 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
 			return
 		}
-		_ = writeJSON(connection, success(req.ID, server.extensions))
+		_ = writeJSON(connection, success(req.ID, discoverConfiguredExtensions(server.extensions)))
 	case "models.list":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
