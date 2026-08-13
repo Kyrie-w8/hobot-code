@@ -44,6 +44,7 @@ func TestSandboxCommandBoundsWorkerStateAndDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "unrelated-xdg-config"))
 	cfg := config{
 		ConfigRoot: filepath.Join(home, ".config", "hobot-code"),
 		StateRoot: filepath.Join(root, "state"), AgentdRoot: filepath.Join(root, "state", "agentd"),

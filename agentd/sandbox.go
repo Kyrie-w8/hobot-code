@@ -515,8 +515,11 @@ func (manager *taskManager) sandboxReadOnlyPaths() []string {
 	paths := []string{}
 	home := strings.TrimSpace(os.Getenv("HOME"))
 	if filepath.IsAbs(home) {
-		configRoot := strings.TrimSpace(os.Getenv("HOBOT_CODE_CONFIG_DIR"))
-		if configRoot == "" {
+		configRoot := strings.TrimSpace(manager.cfg.ConfigRoot)
+		if !filepath.IsAbs(configRoot) {
+			configRoot = strings.TrimSpace(os.Getenv("HOBOT_CODE_CONFIG_DIR"))
+		}
+		if !filepath.IsAbs(configRoot) {
 			configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
 			if !filepath.IsAbs(configHome) {
 				configHome = filepath.Join(home, ".config")
