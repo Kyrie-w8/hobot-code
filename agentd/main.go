@@ -33,12 +33,12 @@ Usage:
   hobot task show TASK_ID
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
   hobot task attach TASK_ID [--after SEQUENCE]
-  hobot task send TASK_ID PROMPT
+  hobot task send TASK_ID [--] PROMPT
   hobot task abort TASK_ID
   hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
   hobot task approvals TASK_ID
-  hobot task resume TASK_ID [PROMPT]
-  hobot task restart TASK_ID PROMPT
+  hobot task resume TASK_ID [-- PROMPT]
+  hobot task restart TASK_ID [--] PROMPT
   hobot task rename TASK_ID NAME
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
@@ -367,8 +367,11 @@ func runDaemonCLI(cfg config, args []string) error {
 
 func runTaskCLI(cfg config, args []string) error {
 	if len(args) == 0 {
-		usage()
+		printTaskUsage(os.Stderr)
 		return fmt.Errorf("a task command is required")
+	}
+	if handled := printRequestedTaskHelp(args, os.Stdout); handled {
+		return nil
 	}
 	client := daemonClient{cfg: cfg}
 	if err := client.ensureStarted(); err != nil {
@@ -400,9 +403,13 @@ func runTaskCLI(cfg config, args []string) error {
 		return runTaskLogs(client, args[0], args[1:])
 	case "send":
 		if len(args) < 3 {
-			return fmt.Errorf("usage: hobot task send TASK_ID PROMPT")
+			return fmt.Errorf("usage: hobot task send TASK_ID [--] PROMPT")
 		}
-		message := strings.Join(args[2:], " ")
+		messageArgs, err := taskTextArguments(args[2:], false, "usage: hobot task send TASK_ID [--] PROMPT")
+		if err != nil {
+			return err
+		}
+		message := strings.Join(messageArgs, " ")
 		if len(message) == 0 || len(message) > maxPromptBytes {
 			return fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
 		}
@@ -429,9 +436,13 @@ func runTaskCLI(cfg config, args []string) error {
 		return printJSON(approvals)
 	case "resume":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: hobot task resume TASK_ID [PROMPT]")
+			return fmt.Errorf("usage: hobot task resume TASK_ID [-- PROMPT]")
 		}
-		result, err := client.call("task.resume", resumeTaskParams{TaskID: args[1], Prompt: strings.Join(args[2:], " ")})
+		promptArgs, err := taskTextArguments(args[2:], true, "usage: hobot task resume TASK_ID [-- PROMPT]")
+		if err != nil {
+			return err
+		}
+		result, err := client.call("task.resume", resumeTaskParams{TaskID: args[1], Prompt: strings.Join(promptArgs, " ")})
 		if err != nil {
 			return err
 		}
@@ -443,9 +454,13 @@ func runTaskCLI(cfg config, args []string) error {
 		return nil
 	case "restart":
 		if len(args) < 3 {
-			return fmt.Errorf("usage: hobot task restart TASK_ID PROMPT")
+			return fmt.Errorf("usage: hobot task restart TASK_ID [--] PROMPT")
 		}
-		result, err := client.call("task.restart", resumeTaskParams{TaskID: args[1], Prompt: strings.Join(args[2:], " ")})
+		promptArgs, err := taskTextArguments(args[2:], false, "usage: hobot task restart TASK_ID [--] PROMPT")
+		if err != nil {
+			return err
+		}
+		result, err := client.call("task.restart", resumeTaskParams{TaskID: args[1], Prompt: strings.Join(promptArgs, " ")})
 		if err != nil {
 			return err
 		}
@@ -482,6 +497,123 @@ func runTaskCLI(cfg config, args []string) error {
 	default:
 		return fmt.Errorf("unknown task command: %s", args[0])
 	}
+}
+
+func printTaskUsage(output io.Writer) {
+	fmt.Fprintln(output, `Hobot Code background tasks
+
+Usage:
+  hobot task start [options] -- PROMPT
+  hobot task list [--all]
+  hobot task show TASK_ID
+  hobot task logs TASK_ID [--after SEQUENCE] [--follow]
+  hobot task attach TASK_ID [--after SEQUENCE]
+  hobot task send TASK_ID [--] PROMPT
+  hobot task abort TASK_ID
+  hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
+  hobot task approvals TASK_ID
+  hobot task resume TASK_ID [-- PROMPT]
+  hobot task restart TASK_ID [--] PROMPT
+  hobot task rename TASK_ID NAME
+  hobot task archive|unarchive TASK_ID
+  hobot task delete TASK_ID --yes
+  hobot task stop TASK_ID
+
+Run hobot task COMMAND --help for command-specific usage. Text beginning
+with a dash must follow --, so asking for help can never start or alter a task.`)
+}
+
+func printRequestedTaskHelp(args []string, output io.Writer) bool {
+	if len(args) == 0 {
+		return false
+	}
+	command := args[0]
+	if command == "help" || command == "-h" || command == "--help" {
+		printTaskUsage(output)
+		return true
+	}
+	if !taskHelpRequested(command, args[1:]) {
+		return false
+	}
+	usageByCommand := map[string]string{
+		"start": "hobot task start [--name NAME] [--cwd DIR] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--trust-project] -- PROMPT",
+		"list":  "hobot task list [--all]", "show": "hobot task show TASK_ID",
+		"logs": "hobot task logs TASK_ID [--after SEQUENCE] [--follow]", "attach": "hobot task attach TASK_ID [--after SEQUENCE]",
+		"send": "hobot task send TASK_ID [--] PROMPT", "abort": "hobot task abort TASK_ID",
+		"respond": "hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE", "approvals": "hobot task approvals TASK_ID",
+		"resume": "hobot task resume TASK_ID [-- PROMPT]", "restart": "hobot task restart TASK_ID [--] PROMPT",
+		"rename": "hobot task rename TASK_ID NAME", "archive": "hobot task archive TASK_ID",
+		"unarchive": "hobot task unarchive TASK_ID", "delete": "hobot task delete TASK_ID --yes", "stop": "hobot task stop TASK_ID",
+	}
+	commandUsage, ok := usageByCommand[command]
+	if !ok {
+		printTaskUsage(output)
+		return true
+	}
+	fmt.Fprintf(output, "Usage:\n  %s\n", commandUsage)
+	return true
+}
+
+func taskHelpRequested(command string, args []string) bool {
+	isHelp := func(value string) bool { return value == "-h" || value == "--help" }
+	if len(args) == 0 {
+		return false
+	}
+	if command == "start" {
+		for index := 0; index < len(args); index++ {
+			value := args[index]
+			if value == "--" {
+				return false
+			}
+			if isHelp(value) {
+				return true
+			}
+			switch value {
+			case "--name", "--cwd", "--model", "--permissions":
+				index++
+			case "--trust-project", "--approve":
+			default:
+				if !strings.HasPrefix(value, "-") {
+					return false
+				}
+			}
+		}
+		return false
+	}
+	if isHelp(args[0]) {
+		return true
+	}
+	promptPosition := map[string]int{"send": 1, "resume": 1, "restart": 1, "respond": 2}[command]
+	if promptPosition > 0 && len(args) > promptPosition {
+		return isHelp(args[promptPosition])
+	}
+	for _, value := range args[1:] {
+		if value == "--" {
+			return false
+		}
+		if isHelp(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskTextArguments(args []string, optional bool, commandUsage string) ([]string, error) {
+	if len(args) == 0 {
+		if optional {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s", commandUsage)
+	}
+	if args[0] == "--" {
+		args = args[1:]
+	} else if strings.HasPrefix(args[0], "-") {
+		return nil, fmt.Errorf("text beginning with a dash must follow --; %s", commandUsage)
+	}
+	if len(args) == 0 {
+		return nil, fmt.Errorf("%s", commandUsage)
+	}
+	return args, nil
 }
 
 func runTaskStart(client daemonClient, args []string) error {

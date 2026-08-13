@@ -3,9 +3,29 @@ set -eu
 
 repository=${HOBOT_CODE_REPOSITORY:-bryant-w/hobot-code}
 release_base=${HOBOT_CODE_RELEASE_BASE_URL:-https://github.com/$repository/releases}
+installed_runtime_root=/usr/local/lib/hobot-code
+installed_launcher=/usr/local/bin/hobot
+process_root=/proc
 action=install
 requested_version=
 force=0
+daemon_was_running=0
+daemon_stopped_for_update=0
+
+if [ "${HOBOT_CODE_TESTING:-0}" = 1 ] && [ -n "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" ]; then
+  case "$HOBOT_CODE_TEST_INSTALL_ROOT" in
+    /*) ;;
+    *) printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be absolute.\n' >&2; exit 2 ;;
+  esac
+  installed_runtime_root=$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot-code
+  installed_launcher=$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/bin/hobot
+fi
+if [ "${HOBOT_CODE_TESTING:-0}" = 1 ] && [ -n "${HOBOT_CODE_TEST_PROC_ROOT:-}" ]; then
+  case "$HOBOT_CODE_TEST_PROC_ROOT" in
+    /*) process_root=$HOBOT_CODE_TEST_PROC_ROOT ;;
+    *) printf 'HOBOT_CODE_TEST_PROC_ROOT must be absolute.\n' >&2; exit 2 ;;
+  esac
+fi
 
 usage() {
   cat <<'EOF'
@@ -163,10 +183,50 @@ download() {
   fi
 }
 
-temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/hobot-release.XXXXXX")
+temporary_directory=
+if temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/hobot-release.XXXXXX" 2>/dev/null); then
+  :
+else
+  if [ -z "${HOME:-}" ]; then
+    printf 'Cannot create a temporary update directory and HOME is not set.\n' >&2
+    exit 1
+  fi
+  release_cache_home=${XDG_CACHE_HOME:-$HOME/.cache}
+  case "$release_cache_home" in
+    /*) ;;
+    *) printf 'The Hobot Code update cache must be an absolute path: %s\n' "$release_cache_home" >&2; exit 1 ;;
+  esac
+  release_cache_directory=$release_cache_home/hobot-code
+  if [ -L "$release_cache_directory" ]; then
+    printf 'Refusing a symbolic-link update cache: %s\n' "$release_cache_directory" >&2
+    exit 1
+  fi
+  mkdir -p "$release_cache_directory"
+  chmod 0700 "$release_cache_directory"
+  if [ ! -d "$release_cache_directory" ] || [ ! -w "$release_cache_directory" ]; then
+    printf 'The Hobot Code update cache is not writable: %s\n' "$release_cache_directory" >&2
+    exit 1
+  fi
+  if release_cache_owner=$(stat -c %u "$release_cache_directory" 2>/dev/null); then :; else
+    release_cache_owner=$(stat -f %u "$release_cache_directory")
+  fi
+  if [ "$release_cache_owner" != "$(id -u)" ]; then
+    printf 'The Hobot Code update cache must be owned by the current user: %s\n' "$release_cache_directory" >&2
+    exit 1
+  fi
+  temporary_directory=$(mktemp -d "$release_cache_directory/update.XXXXXX")
+fi
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
+  if [ "$daemon_stopped_for_update" -eq 1 ]; then
+    if "$installed_launcher" daemon start >/dev/null 2>&1; then
+      printf 'Restored the Hobot Code background service after the interrupted update.\n' >&2
+      daemon_stopped_for_update=0
+    else
+      printf 'Warning: the update was interrupted and the background service could not be restarted. Run: hobot daemon start\n' >&2
+    fi
+  fi
   rm -rf "$temporary_directory"
   exit "$status"
 }
@@ -190,8 +250,8 @@ else
 fi
 
 installed_version=
-if [ -r /usr/local/lib/hobot-code/VERSION ]; then
-  installed_version=$(sed -n '1p' /usr/local/lib/hobot-code/VERSION | tr -d '\r')
+if [ -r "$installed_runtime_root/VERSION" ]; then
+  installed_version=$(sed -n '1p' "$installed_runtime_root/VERSION" | tr -d '\r')
 fi
 if [ "$check_only" -eq 1 ]; then
   if [ "$installed_version" = "$version" ]; then
@@ -206,6 +266,107 @@ fi
 if [ "$installed_version" = "$version" ] && [ "$force" -ne 1 ]; then
   printf 'Hobot Code %s is already installed. Use --force to reinstall.\n' "$version"
   exit 0
+fi
+
+inspect_installed_runtime() {
+  inspected_daemon_pids=
+  inspected_runtime_pids=
+  for inspected_process_path in "$process_root"/[0-9]*; do
+    [ -r "$inspected_process_path/exe" ] || continue
+    inspected_executable=$(readlink "$inspected_process_path/exe" 2>/dev/null || true)
+    inspected_executable=${inspected_executable% (deleted)}
+    inspected_pid=${inspected_process_path##*/}
+    case "$inspected_executable" in
+      "$installed_runtime_root/agentd")
+        inspected_daemon_pids="${inspected_daemon_pids}${inspected_daemon_pids:+ }$inspected_pid"
+        ;;
+      "$installed_runtime_root/hobot")
+        inspected_runtime_pids="${inspected_runtime_pids}${inspected_runtime_pids:+ }$inspected_pid"
+        ;;
+    esac
+  done
+
+  if [ -n "$inspected_daemon_pids" ]; then
+    if [ "$(printf '%s\n' "$inspected_daemon_pids" | awk '{ print NF }')" -ne 1 ]; then
+      printf 'Multiple Hobot Code background services are running (PIDs: %s); the update was not started.\n' "$inspected_daemon_pids" >&2
+      return 1
+    fi
+    if [ ! -x "$installed_launcher" ]; then
+      printf 'The Hobot Code background service is running but its launcher is unavailable; the update was not started.\n' >&2
+      return 1
+    fi
+    inspected_status=$("$installed_launcher" daemon status 2>/dev/null || true)
+    inspected_active_tasks=$(printf '%s\n' "$inspected_status" | tr -d '\r\n' | sed -n 's/^.*"activeTasks"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*$/\1/p')
+    case "$inspected_active_tasks" in
+      ''|*[!0-9]*)
+        printf 'The running Hobot Code service did not return a trustworthy task count; the update was not started.\n' >&2
+        printf 'Check it with: hobot daemon status\n' >&2
+        return 1
+        ;;
+    esac
+    if [ "$inspected_active_tasks" -gt 0 ]; then
+      printf 'Hobot Code has %s active board-side task(s); the update was not started.\n' "$inspected_active_tasks" >&2
+      printf 'Let them finish or stop them explicitly, then run hobot update again. Check: hobot task list\n' >&2
+      return 1
+    fi
+  fi
+
+  if [ -n "$inspected_runtime_pids" ]; then
+    inspected_runtime_count=$(printf '%s\n' "$inspected_runtime_pids" | awk '{ print NF }')
+    inspected_runtime_label='PID'
+    [ "$inspected_runtime_count" -eq 1 ] || inspected_runtime_label='PIDs'
+    printf 'Hobot Code is currently in use by a foreground, persistent, or automation session (%s: %s).\n' \
+      "$inspected_runtime_label" "$inspected_runtime_pids" >&2
+    printf 'Finish that work before updating. Useful checks: hobot persistent list; hobot task list\n' >&2
+    return 1
+  fi
+
+  if [ -z "$inspected_daemon_pids" ]; then
+    daemon_was_running=0
+    return 0
+  fi
+  daemon_was_running=1
+}
+
+prepare_installed_runtime_for_update() {
+  [ -n "$installed_version" ] || return 0
+  inspect_installed_runtime || return 1
+  [ "$daemon_was_running" -eq 1 ] || return 0
+  if ! "$installed_launcher" daemon stop; then
+    printf 'The idle background service could not be stopped safely; the update was not applied.\n' >&2
+    return 1
+  fi
+  daemon_stopped_for_update=1
+
+  # Close the race between inspection and installation while allowing the
+  # daemon process a bounded interval to finish exiting after its socket closes.
+  inspected_wait_attempt=0
+  while :; do
+    inspected_remaining=
+    for inspected_process_path in "$process_root"/[0-9]*; do
+      [ -r "$inspected_process_path/exe" ] || continue
+      inspected_executable=$(readlink "$inspected_process_path/exe" 2>/dev/null || true)
+      inspected_executable=${inspected_executable% (deleted)}
+      case "$inspected_executable" in
+        "$installed_runtime_root/hobot"|"$installed_runtime_root/agentd")
+          inspected_remaining="${inspected_remaining}${inspected_remaining:+ }${inspected_process_path##*/}"
+          ;;
+      esac
+    done
+    [ -z "$inspected_remaining" ] && break
+    inspected_wait_attempt=$((inspected_wait_attempt + 1))
+    [ "$inspected_wait_attempt" -ge 5 ] && break
+    sleep 1
+  done
+  if [ -n "$inspected_remaining" ]; then
+    printf 'Hobot Code became active while preparing the update (PIDs: %s); the update was not applied.\n' "$inspected_remaining" >&2
+    return 1
+  fi
+}
+
+# Avoid downloading a large release when current work already blocks an update.
+if [ -n "$installed_version" ]; then
+  inspect_installed_runtime
 fi
 
 archive_name="hobot-code-$version-linux-arm64.tar.gz"
@@ -283,6 +444,8 @@ if [ ! -x "$package_root/install.sh" ]; then
   exit 1
 fi
 
+prepare_installed_runtime_for_update
+
 if [ "$(id -u)" -eq 0 ]; then
   HOBOT_CODE_INSTALL_CHANNEL=stable "$package_root/install.sh"
 else
@@ -299,6 +462,18 @@ else
     "$package_root/install.sh"
 fi
 
+if [ "$daemon_was_running" -eq 1 ]; then
+  if ! "$installed_launcher" daemon start; then
+    printf 'Hobot Code %s was installed, but its background service did not restart. Run: hobot daemon start\n' "$version" >&2
+    exit 1
+  fi
+  daemon_stopped_for_update=0
+fi
+
 if [ "$action" = update ]; then
-  printf 'Updated Hobot Code to %s.\n' "$version"
+  if [ "$daemon_was_running" -eq 1 ]; then
+    printf 'Updated Hobot Code to %s and restarted its background service.\n' "$version"
+  else
+    printf 'Updated Hobot Code to %s. The background service remains stopped because it was not running before the update.\n' "$version"
+  fi
 fi

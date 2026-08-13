@@ -340,6 +340,82 @@ async function releaseFixture(t, responses) {
   return `file://${root}`;
 }
 
+async function updateRuntimeFixture(t, version = "9.8.7") {
+  const root = await mkdtemp(join(tmpdir(), "hobot-update-runtime-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const installRoot = join(root, "installed");
+  const runtimeRoot = join(installRoot, "usr/local/lib/hobot-code");
+  const launcher = join(installRoot, "usr/local/bin/hobot");
+  const processRoot = join(root, "proc");
+  const processDirectory = join(processRoot, "123");
+  const log = join(root, "launcher.log");
+  await mkdir(runtimeRoot, { recursive: true });
+  await mkdir(dirname(launcher), { recursive: true });
+  await mkdir(processDirectory, { recursive: true });
+  await writeFile(join(runtimeRoot, "VERSION"), "1.0.0\n");
+  await writeFile(join(runtimeRoot, "agentd"), "agentd fixture\n");
+  await writeFile(join(runtimeRoot, "hobot"), "runtime fixture\n");
+  await writeFile(launcher, `#!/bin/sh
+set -eu
+case "\${1:-}" in
+  daemon)
+    case "\${2:-}" in
+      status) printf '{"activeTasks":%s}\\n' "\${HOBOT_TEST_ACTIVE_TASKS:-0}" ;;
+      stop) printf 'stop\\n' >> "$HOBOT_TEST_UPDATE_LOG"; rm -f "$HOBOT_TEST_PROC_EXE" ;;
+      start) printf 'start\\n' >> "$HOBOT_TEST_UPDATE_LOG"; ln -s "$HOBOT_TEST_AGENTD" "$HOBOT_TEST_PROC_EXE" ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  await chmod(launcher, 0o755);
+  await symlink(join(runtimeRoot, "agentd"), join(processDirectory, "exe"));
+
+  const packageParent = join(root, "package");
+  const packageName = `hobot-code-${version}-linux-arm64`;
+  const packageRoot = join(packageParent, packageName);
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(join(packageRoot, "install.sh"), `#!/bin/sh
+set -eu
+if [ "\${HOBOT_TEST_INSTALL_FAIL:-0}" = 1 ]; then
+  printf 'simulated install failure\\n' >&2
+  exit 9
+fi
+printf '%s\\n' '${version}' > "$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot-code/VERSION"
+`);
+  await chmod(join(packageRoot, "install.sh"), 0o755);
+  const archiveName = `${packageName}.tar.gz`;
+  const archive = join(root, archiveName);
+  await execFileAsync("tar", ["-czf", archive, "-C", packageParent, packageName]);
+  const archiveContent = await readFile(archive);
+  const archiveDigest = createHash("sha256").update(archiveContent).digest("hex");
+  const releaseBase = await releaseFixture(t, new Map([
+    [`/releases/download/v${version}/${archiveName}`, archiveContent],
+    [`/releases/download/v${version}/${archiveName}.sha256`, `${archiveDigest}  ${archiveName}\n`],
+  ]));
+
+  const fakeBin = join(root, "bin");
+  await mkdir(fakeBin);
+  await writeFile(join(fakeBin, "sudo"), "#!/bin/sh\nexec \"$@\"\n");
+  await chmod(join(fakeBin, "sudo"), 0o755);
+  return {
+    root, installRoot, runtimeRoot, launcher, processRoot, processDirectory, log, releaseBase, version,
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      HOBOT_CODE_ALLOW_UNSUPPORTED: "1",
+      HOBOT_CODE_RELEASE_BASE_URL: releaseBase,
+      HOBOT_CODE_TESTING: "1",
+      HOBOT_CODE_TEST_INSTALL_ROOT: installRoot,
+      HOBOT_CODE_TEST_PROC_ROOT: processRoot,
+      HOBOT_TEST_UPDATE_LOG: log,
+      HOBOT_TEST_PROC_EXE: join(processDirectory, "exe"),
+      HOBOT_TEST_AGENTD: join(runtimeRoot, "agentd"),
+    },
+  };
+}
+
 test("release installer resolves the latest stable version without downloading the archive", async (t) => {
   const base = await releaseFixture(t, new Map([
     ["/releases/latest/download/hobot-code-version.txt", "9.8.7\n"],
@@ -354,6 +430,92 @@ test("release installer resolves the latest stable version without downloading t
     },
   });
   assert.match(stdout, /Hobot Code 9\.8\.7 is available/);
+});
+
+test("release installer falls back to a private user cache when TMPDIR is unavailable", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-update-cache-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const cache = join(root, "cache");
+  const base = await releaseFixture(t, new Map([
+    ["/releases/latest/download/hobot-code-version.txt", "9.8.7\n"],
+  ]));
+  const {stdout} = await execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--check"], {
+    env: {
+      ...process.env,
+      HOME: root,
+      TMPDIR: join(root, "missing-temporary-directory"),
+      XDG_CACHE_HOME: cache,
+      HOBOT_CODE_ALLOW_UNSUPPORTED: "1",
+      HOBOT_CODE_RELEASE_BASE_URL: base,
+      HOBOT_CODE_TESTING: "1",
+      HOBOT_CODE_TEST_INSTALL_ROOT: join(root, "no-installation"),
+      HOBOT_CODE_TEST_PROC_ROOT: join(root, "empty-proc"),
+    },
+  });
+  assert.match(stdout, /Hobot Code 9\.8\.7 is available/);
+  assert.equal((await stat(join(cache, "hobot-code"))).mode & 0o777, 0o700);
+});
+
+test("release installer rejects an active runtime before downloading the archive", async (t) => {
+  const fixture = await updateRuntimeFixture(t);
+  await rm(join(fixture.processDirectory, "exe"));
+  await symlink(join(fixture.runtimeRoot, "hobot"), join(fixture.processDirectory, "exe"));
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version], {env: fixture.env}),
+    (error) => {
+      assert.match(error.stderr, /foreground, persistent, or automation session/);
+      assert.doesNotMatch(error.stderr, /runtime fixture|command line/);
+      return true;
+    },
+  );
+  await assert.rejects(() => access(fixture.log));
+  assert.equal(await readFile(join(fixture.runtimeRoot, "VERSION"), "utf8"), "1.0.0\n");
+});
+
+test("release installer preserves active board-side tasks", async (t) => {
+  const fixture = await updateRuntimeFixture(t);
+  const workerDirectory = join(fixture.processRoot, "456");
+  await mkdir(workerDirectory);
+  await symlink(join(fixture.runtimeRoot, "hobot"), join(workerDirectory, "exe"));
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version], {
+      env: {...fixture.env, HOBOT_TEST_ACTIVE_TASKS: "2", HOBOT_CODE_RELEASE_BASE_URL: "file:///release-must-not-be-read"},
+    }),
+    (error) => {
+      assert.match(error.stderr, /2 active board-side task/);
+      return true;
+    },
+  );
+  await assert.rejects(() => access(fixture.log));
+  await access(join(fixture.processDirectory, "exe"));
+});
+
+test("release installer rolls an idle daemon through stop, install, and restart", async (t) => {
+  const fixture = await updateRuntimeFixture(t);
+  const {stdout} = await execFileAsync("/bin/sh", [
+    join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version,
+  ], {env: fixture.env});
+  assert.equal(await readFile(fixture.log, "utf8"), "stop\nstart\n");
+  assert.equal(await readFile(join(fixture.runtimeRoot, "VERSION"), "utf8"), `${fixture.version}\n`);
+  assert.match(stdout, /restarted its background service/);
+  await access(join(fixture.processDirectory, "exe"));
+});
+
+test("release installer restores an idle daemon after installation failure", async (t) => {
+  const fixture = await updateRuntimeFixture(t);
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version], {
+      env: {...fixture.env, HOBOT_TEST_INSTALL_FAIL: "1"},
+    }),
+    (error) => {
+      assert.match(error.stderr, /simulated install failure/);
+      assert.match(error.stderr, /Restored the Hobot Code background service/);
+      return true;
+    },
+  );
+  assert.equal(await readFile(fixture.log, "utf8"), "stop\nstart\n");
+  assert.equal(await readFile(join(fixture.runtimeRoot, "VERSION"), "utf8"), "1.0.0\n");
+  await access(join(fixture.processDirectory, "exe"));
 });
 
 test("release installer rejects non-strict versions, repositories, and checksum records", async (t) => {
@@ -694,6 +856,9 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(releaseInstaller, /--max-filesize/);
   assert.match(releaseInstaller, /checksum_target/);
   assert.match(releaseInstaller, /unsupported entry type/);
+  assert.match(releaseInstaller, /foreground, persistent, or automation session/);
+  assert.match(releaseInstaller, /daemon_stopped_for_update/);
+  assert.match(releaseInstaller, /release_cache_home/);
   assert.match(uninstaller, /--purge/);
   assert.match(uninstaller, /Stop active Hobot Code processes/);
   assert.match(uninstaller, /readlink "\$process_path\/exe"/);
