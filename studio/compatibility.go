@@ -34,14 +34,15 @@ type connectionCompatibility struct {
 }
 
 type validatedBoardTarget struct {
-	Major   int
-	Version string
+	Major             int
+	Baseline          string
+	ValidatedVersions []string
 }
 
 var validatedBoardTargets = map[string]validatedBoardTarget{
-	"x5":   {Major: 3, Version: "3.5.0"},
-	"s100": {Major: 4, Version: "4.0.5"},
-	"s600": {Major: 5, Version: "5.1.0"},
+	"x5":   {Major: 3, Baseline: "3.5.0", ValidatedVersions: []string{"3.5.0"}},
+	"s100": {Major: 4, Baseline: "4.0.5", ValidatedVersions: []string{"4.0.5", "4.0.5-Beta"}},
+	"s600": {Major: 5, Baseline: "5.1.0", ValidatedVersions: []string{"5.1.0"}},
 }
 
 var requiredStudioCapabilities = []string{"tasks.lifecycle", "tasks.page", "events.page"}
@@ -149,9 +150,9 @@ func assessConnectionCompatibility(info hobot.DaemonInfo, snapshot *hobot.System
 		addWarning("rdk-os-line-mismatch", fmt.Sprintf("%s expects the RDK OS %d.x release line, but the board reports %s.", strings.ToUpper(result.BoardID), target.Major, result.RDKOSVersion), "Install a board-matched RDK OS before running hardware-specific deployment workflows.")
 		return result, nil
 	}
-	result.ValidatedTarget = result.RDKOSVersion == target.Version
+	result.ValidatedTarget = containsFoldedValue(target.ValidatedVersions, result.RDKOSVersion)
 	if !result.ValidatedTarget {
-		addWarning("rdk-os-unvalidated-version", fmt.Sprintf("RDK OS %s is on the supported %d.x line but the current validated baseline is %s.", result.RDKOSVersion, target.Major, target.Version), "Run the compatibility diagnostics before production deployment.")
+		addWarning("rdk-os-unvalidated-version", fmt.Sprintf("RDK OS %s is on the supported %d.x line but is not one of the validated releases (%s; baseline %s).", result.RDKOSVersion, target.Major, strings.Join(target.ValidatedVersions, ", "), target.Baseline), "Save a support bundle and verify board-specific workflows before production deployment.")
 	}
 	return result, nil
 }
@@ -159,6 +160,16 @@ func assessConnectionCompatibility(info hobot.DaemonInfo, snapshot *hobot.System
 func containsValue(values []string, wanted string) bool {
 	for _, value := range values {
 		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func containsFoldedValue(values []string, wanted string) bool {
+	wanted = strings.TrimSpace(wanted)
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), wanted) {
 			return true
 		}
 	}

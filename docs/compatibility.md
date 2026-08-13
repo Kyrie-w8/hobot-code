@@ -20,12 +20,12 @@ Studio and agentd should use the same major and minor Hobot Code release line. A
 
 ## Validated board targets
 
-| Board | Expected RDK OS line | Current validation baseline |
-| --- | --- | --- |
-| RDK X5 | 3.x | 3.5.0 |
-| RDK S100 | 4.x | 4.0.5 |
-| RDK S600 | 5.x | 5.1.0 |
+| Board | Expected RDK OS line | Validation baseline | Validated releases |
+| --- | --- | --- | --- |
+| RDK X5 | 3.x | 3.5.0 | 3.5.0 |
+| RDK S100 | 4.x | 4.0.5 | 4.0.5, 4.0.5-Beta |
+| RDK S600 | 5.x | 5.1.0 | 5.1.0 |
 
-A different patch or minor RDK OS version on the expected major line is allowed but marked as not fully validated. A different major line or an unknown board also remains connectable for general development, while hardware-specific deployment workflows carry an explicit warning.
+Validation uses the reported release identifier, including pre-release suffixes. A known image such as S100 `4.0.5-Beta` is accepted only because it is listed explicitly; an unlisted beta, release candidate, patch, or minor release on the expected major line remains usable but is marked as not fully validated. The warning directs users to save a support bundle and verify board-specific workflows before production use. A different major line or an unknown board also remains connectable for general development, while hardware-specific deployment workflows carry an explicit warning.
 
 This matrix records Hobot Code validation scope. It does not replace D-Robotics release notes or prove that every peripheral, sensor, model, or third-party package is compatible.

@@ -45,6 +45,14 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 	if err != nil || compatible.Status != "supported" || !compatible.ValidatedTarget {
 		t.Fatalf("validated S100 was not supported: result=%+v err=%v", compatible, err)
 	}
+	beta, err := assessConnectionCompatibility(info, &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5-Beta"}, nil)
+	if err != nil || beta.Status != "supported" || !beta.ValidatedTarget || len(beta.Issues) != 0 {
+		t.Fatalf("validated S100 beta image was not supported: result=%+v err=%v", beta, err)
+	}
+	unknownPrerelease, err := assessConnectionCompatibility(info, &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5-RC1"}, nil)
+	if err != nil || unknownPrerelease.Status != "limited" || unknownPrerelease.ValidatedTarget || len(unknownPrerelease.Issues) != 1 || unknownPrerelease.Issues[0].Code != "rdk-os-unvalidated-version" {
+		t.Fatalf("unknown S100 prerelease was accepted: result=%+v err=%v", unknownPrerelease, err)
+	}
 
 	limitedInfo := info
 	limitedInfo.Capabilities.Capabilities = []string{"tasks.lifecycle", "tasks.page", "events.page", "system.snapshot"}
@@ -89,6 +97,9 @@ func TestVersionCompatibilityHelpers(t *testing.T) {
 	}
 	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {
 		t.Fatalf("RDK OS major parsing failed: major=%d ok=%v", major, ok)
+	}
+	if !containsFoldedValue([]string{"4.0.5", "4.0.5-Beta"}, " 4.0.5-beta ") {
+		t.Fatal("validated RDK OS comparison should ignore case and surrounding whitespace")
 	}
 }
 
