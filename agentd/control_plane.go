@@ -149,6 +149,15 @@ func markDefaultModel(models []modelOption) {
 			return
 		}
 	}
+	// Gateway model groups may contain a slash while still belonging to the
+	// D-Robotics provider, for example deepseek/deepseek-v4-flash.
+	droboticsSelection := joinModel("drobotics", model)
+	for index := range models {
+		if joinModel(models[index].Provider, models[index].ID) == droboticsSelection {
+			models[index].Default = true
+			return
+		}
+	}
 	for index := range models {
 		if models[index].Provider == "drobotics" && models[index].ID == "kimi-k3" {
 			models[index].Default = true

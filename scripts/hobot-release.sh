@@ -9,6 +9,7 @@ process_root=/proc
 action=install
 requested_version=
 force=0
+allow_downgrade=0
 daemon_was_running=0
 daemon_stopped_for_update=0
 
@@ -32,13 +33,14 @@ usage() {
 Hobot Code release installer
 
 Usage:
-  hobot-install.sh [--version <version>] [--force]
-  hobot-release update [--version <version>] [--check] [--force]
+  hobot-install.sh [--version <version>] [--force] [--allow-downgrade]
+  hobot-release update [--version <version>] [--check] [--force] [--allow-downgrade]
 
 Options:
   --version <version>  Install an exact released version.
   --check              Report whether an update is available without installing.
   --force              Reinstall when the requested version is already installed.
+  --allow-downgrade    Allow an explicitly requested older version.
   -h, --help           Show this help.
 
 Environment:
@@ -69,6 +71,10 @@ while [ "$#" -gt 0 ]; do
       force=1
       shift
       ;;
+    --allow-downgrade)
+      allow_downgrade=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -81,6 +87,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$allow_downgrade" -eq 1 ] && [ -z "$requested_version" ]; then
+  printf '%s\n' '--allow-downgrade requires an explicit --version.' >&2
+  exit 2
+fi
+
 validate_version() {
   candidate=$1
   if ! printf '%s\n' "$candidate" | awk '
@@ -91,6 +102,50 @@ validate_version() {
     printf 'Release version is not valid SemVer: %s\n' "$candidate" >&2
     exit 1
   fi
+}
+
+compare_versions() {
+  compare_left=$1
+  compare_right=$2
+  awk -v left="$compare_left" -v right="$compare_right" '
+    function numeric_compare(a, b, normalized_a, normalized_b) {
+      normalized_a=a; sub(/^0+/, "", normalized_a); if (normalized_a == "") normalized_a="0"
+      normalized_b=b; sub(/^0+/, "", normalized_b); if (normalized_b == "") normalized_b="0"
+      if (length(normalized_a) != length(normalized_b)) return length(normalized_a) < length(normalized_b) ? -1 : 1
+      if (normalized_a == normalized_b) return 0
+      return normalized_a < normalized_b ? -1 : 1
+    }
+    function compare_identifier(a, b, a_numeric, b_numeric) {
+      a_numeric = a ~ /^[0-9]+$/
+      b_numeric = b ~ /^[0-9]+$/
+      if (a_numeric && b_numeric) return numeric_compare(a, b)
+      if (a_numeric != b_numeric) return a_numeric ? -1 : 1
+      if (a == b) return 0
+      return a < b ? -1 : 1
+    }
+    function compare(version_a, version_b, build_at, dash_at, core_a, core_b, pre_a, pre_b, core_parts_a, core_parts_b, pre_parts_a, pre_parts_b, count_a, count_b, part_index, result) {
+      build_at=index(version_a, "+"); if (build_at) version_a=substr(version_a, 1, build_at - 1)
+      build_at=index(version_b, "+"); if (build_at) version_b=substr(version_b, 1, build_at - 1)
+      dash_at=index(version_a, "-"); core_a=dash_at ? substr(version_a, 1, dash_at - 1) : version_a; pre_a=dash_at ? substr(version_a, dash_at + 1) : ""
+      dash_at=index(version_b, "-"); core_b=dash_at ? substr(version_b, 1, dash_at - 1) : version_b; pre_b=dash_at ? substr(version_b, dash_at + 1) : ""
+      split(core_a, core_parts_a, "."); split(core_b, core_parts_b, ".")
+      for (part_index=1; part_index<=3; part_index++) {
+        result=numeric_compare(core_parts_a[part_index], core_parts_b[part_index])
+        if (result) return result
+      }
+      if (pre_a == pre_b) return 0
+      if (pre_a == "") return 1
+      if (pre_b == "") return -1
+      count_a=split(pre_a, pre_parts_a, "."); count_b=split(pre_b, pre_parts_b, ".")
+      for (part_index=1; part_index<=count_a && part_index<=count_b; part_index++) {
+        result=compare_identifier(pre_parts_a[part_index], pre_parts_b[part_index])
+        if (result) return result
+      }
+      if (count_a == count_b) return 0
+      return count_a < count_b ? -1 : 1
+    }
+    BEGIN { print compare(left, right) }
+  '
 }
 
 case "$repository" in
@@ -246,15 +301,25 @@ else
   fi
   version=$(sed -n '1p' "$version_file" | tr -d '\r')
   validate_version "$version"
-  release_path="$release_base/latest/download"
+  # Pin payload downloads to the version resolved above. The mutable latest
+  # pointer is metadata only and can move while an update is in progress.
+  release_path="$release_base/download/v$version"
 fi
 
 installed_version=
 if [ -r "$installed_runtime_root/VERSION" ]; then
   installed_version=$(sed -n '1p' "$installed_runtime_root/VERSION" | tr -d '\r')
 fi
+version_order=0
+if [ -n "$installed_version" ]; then
+  validate_version "$installed_version"
+  version_order=$(compare_versions "$version" "$installed_version")
+fi
 if [ "$check_only" -eq 1 ]; then
-  if [ "$installed_version" = "$version" ]; then
+  if [ "$version_order" -lt 0 ]; then
+    printf 'Hobot Code release metadata reports %s, older than installed version %s; no update will be applied.\n' "$version" "$installed_version"
+    printf 'The release source may be stale. Use an explicit --version only after verifying the release.\n'
+  elif [ -n "$installed_version" ] && [ "$version_order" -eq 0 ]; then
     printf 'Hobot Code %s is current.\n' "$version"
   elif [ -n "$installed_version" ]; then
     printf 'Hobot Code %s is available; installed version is %s.\n' "$version" "$installed_version"
@@ -263,7 +328,16 @@ if [ "$check_only" -eq 1 ]; then
   fi
   exit 0
 fi
-if [ "$installed_version" = "$version" ] && [ "$force" -ne 1 ]; then
+if [ "$version_order" -lt 0 ] && [ "$allow_downgrade" -ne 1 ]; then
+  printf 'Refusing to downgrade Hobot Code from %s to %s.\n' "$installed_version" "$version" >&2
+  if [ -z "$requested_version" ]; then
+    printf 'The latest release metadata appears stale; the installed version was left unchanged.\n' >&2
+  else
+    printf 'To intentionally downgrade, verify the release and add --allow-downgrade.\n' >&2
+  fi
+  exit 1
+fi
+if [ -n "$installed_version" ] && [ "$version_order" -eq 0 ] && [ "$force" -ne 1 ]; then
   printf 'Hobot Code %s is already installed. Use --force to reinstall.\n' "$version"
   exit 0
 fi
@@ -447,17 +521,16 @@ if [ -n "$unsupported_type" ]; then
   exit 1
 fi
 
-tar -xzf "$archive" -C "$temporary_directory"
-package_root="$temporary_directory/$expected_root"
-if [ ! -x "$package_root/install.sh" ]; then
-  printf 'Release archive does not contain an executable installer.\n' >&2
-  exit 1
-fi
-
 prepare_installed_runtime_for_update
 
+if [ "${HOBOT_CODE_TESTING:-0}" = 1 ] && [ -n "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" ]; then
+  privileged_staging_template=$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot-code.package.XXXXXX
+else
+  privileged_staging_template=/usr/local/lib/hobot-code.package.XXXXXX
+fi
 if [ "$(id -u)" -eq 0 ]; then
-  HOBOT_CODE_INSTALL_CHANNEL=stable "$package_root/install.sh"
+  install_user=${HOBOT_CODE_INSTALL_USER:-${SUDO_USER:-root}}
+  install_home=${HOBOT_CODE_INSTALL_HOME:-}
 else
   if ! command -v sudo >/dev/null 2>&1; then
     printf 'Installing Hobot Code requires root privileges; sudo is not installed.\n' >&2
@@ -465,11 +538,48 @@ else
   fi
   install_user=${HOBOT_CODE_INSTALL_USER:-$(id -un)}
   install_home=${HOBOT_CODE_INSTALL_HOME:-$HOME}
-  sudo env \
-    "HOBOT_CODE_INSTALL_USER=$install_user" \
-    "HOBOT_CODE_INSTALL_HOME=$install_home" \
-    HOBOT_CODE_INSTALL_CHANNEL=stable \
-    "$package_root/install.sh"
+fi
+
+privileged_installer='set -eu
+source_archive=$1
+archive_name=$2
+expected_root=$3
+expected_digest=$4
+staging_template=$5
+install_user=$6
+install_home=$7
+testing=$8
+test_install_root=$9
+stage=$(mktemp -d "$staging_template")
+cleanup_stage() { status=$?; trap - EXIT HUP INT TERM; rm -rf "$stage"; exit "$status"; }
+trap cleanup_stage EXIT
+trap "exit 130" HUP INT TERM
+chmod 0700 "$stage"
+install -m 0600 "$source_archive" "$stage/$archive_name"
+if command -v sha256sum >/dev/null 2>&1; then
+  printf "%s  %s\n" "$expected_digest" "$archive_name" | (cd "$stage" && sha256sum -c - >/dev/null)
+elif command -v shasum >/dev/null 2>&1; then
+  printf "%s  %s\n" "$expected_digest" "$archive_name" | (cd "$stage" && shasum -a 256 -c - >/dev/null)
+else
+  printf "sha256sum or shasum is required to verify the privileged staging copy.\n" >&2
+  exit 127
+fi
+tar -xzf "$stage/$archive_name" -C "$stage"
+package_root=$stage/$expected_root
+if [ ! -x "$package_root/install.sh" ]; then
+  printf "Release archive does not contain an executable installer.\n" >&2
+  exit 1
+fi
+if [ -n "$install_home" ]; then
+  env HOBOT_CODE_INSTALL_USER="$install_user" HOBOT_CODE_INSTALL_HOME="$install_home" HOBOT_CODE_INSTALL_CHANNEL=stable HOBOT_CODE_TESTING="$testing" HOBOT_CODE_TEST_INSTALL_ROOT="$test_install_root" "$package_root/install.sh"
+else
+  env HOBOT_CODE_INSTALL_USER="$install_user" HOBOT_CODE_INSTALL_CHANNEL=stable HOBOT_CODE_TESTING="$testing" HOBOT_CODE_TEST_INSTALL_ROOT="$test_install_root" "$package_root/install.sh"
+fi'
+
+if [ "$(id -u)" -eq 0 ]; then
+  /bin/sh -c "$privileged_installer" hobot-installer "$archive" "$archive_name" "$expected_root" "$checksum_digest" "$privileged_staging_template" "$install_user" "$install_home" "${HOBOT_CODE_TESTING:-0}" "${HOBOT_CODE_TEST_INSTALL_ROOT:-}"
+else
+  sudo /bin/sh -c "$privileged_installer" hobot-installer "$archive" "$archive_name" "$expected_root" "$checksum_digest" "$privileged_staging_template" "$install_user" "$install_home" "${HOBOT_CODE_TESTING:-0}" "${HOBOT_CODE_TEST_INSTALL_ROOT:-}"
 fi
 
 if [ "$daemon_was_running" -eq 1 ]; then

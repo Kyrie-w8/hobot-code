@@ -547,6 +547,14 @@ if [ ! -e "$state_root/.legacy-sessions-archived" ]; then
   chown "$install_user:$install_group" "$state_root/.legacy-sessions-archived"
 fi
 
+# The launcher blocks cooperative starts while the install lock exists. Scan
+# again immediately before the directory swap to catch direct binary starts.
+active_pids=$(active_hobot_pids)
+if [ -n "$active_pids" ]; then
+  printf 'Hobot Code became active during installation; no runtime was replaced: %s\n' "$active_pids" >&2
+  exit 1
+fi
+
 if [ -d /usr/local/lib/hobot-code ]; then
   had_previous_runtime=1
   runtime_swapped=1

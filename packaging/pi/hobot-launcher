@@ -378,6 +378,17 @@ handle_product_command() {
   return 1
 }
 
+refuse_during_install() {
+  install_lock=/usr/local/lib/hobot-code.install.lock
+  if [ "${HOBOT_CODE_TESTING:-0}" = 1 ] && [ -n "${HOBOT_CODE_TEST_INSTALL_LOCK:-}" ]; then
+    require_absolute_path HOBOT_CODE_TEST_INSTALL_LOCK "$HOBOT_CODE_TEST_INSTALL_LOCK"
+    install_lock=$HOBOT_CODE_TEST_INSTALL_LOCK
+  fi
+  if [ ! -d "$install_lock" ]; then return; fi
+  printf 'A Hobot Code install or rollback is in progress. Try again after it finishes.\n' >&2
+  exit 75
+}
+
 require_tmux() {
   if ! command -v tmux >/dev/null 2>&1; then
     printf 'Persistent Hobot Code sessions require tmux. Install it with: sudo apt-get install tmux\n' >&2
@@ -534,6 +545,7 @@ require_absolute_path XDG_STATE_HOME "$hobot_state_home"
 require_absolute_path HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
 
 handle_product_command "$@" || :
+refuse_during_install "$@"
 
 reject_symlink "$hobot_config_root"
 reject_symlink "$hobot_config_root/agent"

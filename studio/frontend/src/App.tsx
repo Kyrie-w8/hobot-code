@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, Gauge, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Download, Gauge, Info, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
@@ -22,8 +22,9 @@ import {rdkWorkflows} from './rdk-workflows.js';
 import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 import {shouldToggleMaximise} from './titlebar-policy.js';
 import {isCurrentRequest, isCurrentTarget, watchRetryDelay, watchStatusLabel} from './async-policy.js';
+import {taskAttention} from './task-notifications.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent} from './types';
+import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -56,6 +57,7 @@ function App() {
   const [modelHealth, setModelHealth] = useState<ModelHealth | null>(null);
   const [checkingModel, setCheckingModel] = useState(false);
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
+  const [editingNeedsImages, setEditingNeedsImages] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
   const [showSideTask, setShowSideTask] = useState(false);
   const [showDeployment, setShowDeployment] = useState(false);
@@ -66,6 +68,10 @@ function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showBoard, setShowBoard] = useState(false);
+  const [showWorkspace, setShowWorkspace] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
+  const [unreadTasks, setUnreadTasks] = useState<Set<string>>(new Set());
   const [showInspector, setShowInspector] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState('');
@@ -79,7 +85,7 @@ function App() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const followsOutput = useRef(true);
-  const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null; attachments: ImageContent[]}>());
+  const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null; attachments: ImageContent[]; editingNeedsImages: boolean}>());
   const previousTaskId = useRef('');
   const activeBoardId = useRef('');
   const selectedTaskId = useRef('');
@@ -89,6 +95,7 @@ function App() {
   const connectionTarget = useRef('');
   const watchRetryAttempt = useRef(0);
   const watchRetryTimer = useRef<number | null>(null);
+  const taskStatusHistory = useRef(new Map<string, string>());
 
   const boardId = connection?.board.id ?? '';
 
@@ -98,6 +105,22 @@ function App() {
     try {
       const page = await api.tasks(targetBoard);
       if (targetBoard !== activeBoardId.current) return;
+      let latestAttention = '';
+      const attentionTaskIds: string[] = [];
+      for (const task of page.tasks ?? []) {
+        const attention = taskAttention(taskStatusHistory.current.get(task.id) ?? '', task.status, task.id === selectedTaskId.current);
+        if (attention) {
+          attentionTaskIds.push(task.id);
+          latestAttention ||= `${attention}: ${task.name}`;
+        }
+        taskStatusHistory.current.set(task.id, task.status);
+      }
+      setUnreadTasks((current) => {
+        const next = new Set(current);
+        for (const taskId of attentionTaskIds) next.add(taskId);
+        return next;
+      });
+      if (latestAttention) setNotice(latestAttention);
       setTasks(page.tasks ?? []);
       if (expectedTask.startsWith('draft:') || selectedTaskId.current !== expectedTask) return;
       const summary = page.tasks?.find((task) => task.id === expectedTask) ?? page.tasks?.[0] ?? null;
@@ -149,6 +172,8 @@ function App() {
       setConnectionState('online');
       setModels(pageModels ?? []);
       setTasks(page.tasks ?? []);
+      taskStatusHistory.current = new Map((page.tasks ?? []).map((task) => [task.id, task.status]));
+      setUnreadTasks(new Set());
       selectedTaskId.current = initialTask?.id ?? '';
       setSelectedTask(initialDetail ?? initialTask);
       setSnapshot(nextSnapshot);
@@ -179,7 +204,8 @@ function App() {
   useEffect(() => {
     if (startupStarted.current) return;
     startupStarted.current = true;
-    api.listBoards().then((saved) => {
+    Promise.all([api.listBoards(), api.appVersion()]).then(([saved, version]) => {
+      setAppVersion(version);
       setBoards(saved);
       if (saved.length > 0) void connect(saved[0]);
       else setShowBoard(true);
@@ -274,7 +300,7 @@ function App() {
     const nextTaskId = selectedTask?.id ?? '';
     const previous = previousTaskId.current;
     if (previous && previous !== nextTaskId) {
-      if (composer || attachments.length) taskDrafts.current.set(previous, {text: composer, editingMessage, attachments});
+      if (composer || attachments.length) taskDrafts.current.set(previous, {text: composer, editingMessage, attachments, editingNeedsImages});
       else taskDrafts.current.delete(previous);
     }
     if (previous !== nextTaskId) {
@@ -282,6 +308,7 @@ function App() {
       setComposer(draft?.text ?? '');
       setEditingMessage(draft?.editingMessage ?? null);
       setAttachments(draft?.attachments ?? []);
+      setEditingNeedsImages(draft?.editingNeedsImages ?? false);
       previousTaskId.current = nextTaskId;
     }
   }, [selectedTask?.id]);
@@ -372,7 +399,7 @@ function App() {
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
   const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
-  const composerBlocked = busy || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
+  const composerBlocked = busy || connectionState !== 'online' || (editingNeedsImages && attachments.length === 0) || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
@@ -381,7 +408,7 @@ function App() {
   const currentModelHealth = resolveCurrentModelHealth(modelHealth, effectiveModel);
   const imageInputSupported = modelAcceptsImages(models, selectedModel);
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
-  const canChangeModel = Boolean(selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
+  const canChangeModel = Boolean(connectionState === 'online' && selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const canChangePermissions = canChangeModel;
   const canStopTask = Boolean(selectedTask && ['starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
   const latestConversationItem = conversation[conversation.length - 1];
@@ -434,7 +461,10 @@ function App() {
       else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
       else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt, submittedImages);
       else await api.sendPrompt(boardId, selectedTask.id, prompt, submittedImages);
-      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setEditingMessage(null);
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) {
+        setEditingMessage(null);
+        setEditingNeedsImages(false);
+      }
       taskDrafts.current.delete(selectedTask.id);
       await refreshTasks();
       if (nextTask && isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) {
@@ -492,6 +522,7 @@ function App() {
     setComposer(item.text);
     setAttachments([]);
     setEditingMessage(item.sequence);
+    setEditingNeedsImages(item.attachments.length > 0);
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
       composerRef.current?.setSelectionRange(item.text.length, item.text.length);
@@ -728,6 +759,11 @@ function App() {
       taskDrafts.current.delete(selectedTask.id);
     }
     selectedTaskId.current = task.id;
+    setUnreadTasks((current) => {
+      const next = new Set(current);
+      next.delete(task.id);
+      return next;
+    });
     if (selectedTask?.id === task.id) setWatchRevision((revision) => revision + 1);
     else setSelectedTask(task);
   }
@@ -770,6 +806,7 @@ function App() {
         </button>
         <div className="titlebar-spacer" />
         {isMock() && <span className="preview-label">Preview</span>}
+        <button className="version-button" title="Version and updates" onClick={() => setShowAbout(true)}>{appVersion ? `v${appVersion}` : <LoaderCircle size={12} className="spin" />}</button>
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
@@ -778,7 +815,7 @@ function App() {
       <aside className="task-sidebar">
         <div className="sidebar-heading">
           <div><span className="section-label">Projects</span><span className="task-count">{projects.length}</span></div>
-          <button className="icon-button compact" title="New conversation" onClick={() => openNewTask()} disabled={!connection}><Plus size={17} /></button>
+          <button className="icon-button compact" title="New conversation" onClick={() => setShowWorkspace(true)} disabled={!connection || connectionState !== 'online'}><Plus size={17} /></button>
         </div>
         <label className="search-field"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects and tasks" /></label>
         <div className="task-list">
@@ -793,7 +830,7 @@ function App() {
               <button className={`task-row ${selectedTask?.id === task.id ? 'selected' : ''}`} onClick={() => {selectTask(task); setOpenMenu('');}}>
                 {depth ? <CornerDownRight className="branch-mark" size={13} /> : <span className={`task-state-dot dot-${task.status}`} />}
                 <span className="task-row-main"><span className="task-row-name">{task.name}</span>{depth > 0 && <span className="task-row-path">{branchKind === 'side' ? 'Side Agent' : 'Branch'}</span>}</span>
-                <span className="task-row-time">{relativeTime(task.updatedAt)}</span>
+                <span className={`task-row-time ${unreadTasks.has(task.id) ? 'unread' : ''}`}>{unreadTasks.has(task.id) && <i />}{relativeTime(task.updatedAt)}</span>
               </button>
               <button className="row-more task-more" title="Conversation actions" onClick={() => setOpenMenu((current) => current === `task:${task.id}` ? '' : `task:${task.id}`)}><MoreHorizontal size={15} /></button>
               {openMenu === `task:${task.id}` && <div className="row-menu task-menu"><button onClick={() => beginRename(task)}><FilePenLine size={14} />Rename conversation</button>{!task.id.startsWith('draft:') && <button className="destructive" onClick={() => setDeleteTarget({kind: 'conversation', label: task.name, taskIds: [task.id]})}><Trash2 size={14} />Delete conversation</button>}</div>}
@@ -832,7 +869,7 @@ function App() {
           <div className="composer-dock">
             {activeApproval && <ApprovalBar key={activeApproval.id} approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
             <form className="composer" onSubmit={submitPrompt}>
-              {editingMessage !== null && <div className="editing-banner"><FilePenLine size={14} /><span>Editing this message. Later messages will be replaced.</span><button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setComposer('');}}><X size={14} /></button></div>}
+              {editingMessage !== null && <div className="editing-banner"><FilePenLine size={14} /><span>{editingNeedsImages ? attachments.length ? 'Current attachments will replace the original images.' : 'Reattach the original images, or continue without them.' : 'Editing this message. Later messages will be replaced.'}</span>{editingNeedsImages && attachments.length === 0 && <button type="button" className="text-button" onClick={() => setEditingNeedsImages(false)}>Continue without images</button>}<button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setEditingNeedsImages(false); setComposer('');}}><X size={14} /></button></div>}
               {attachments.length > 0 && <div className="attachment-tray">{attachments.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}><img src={imageDataURL(image)} alt="" /><span>{image.name || `Image ${index + 1}`}</span><button type="button" title="Remove image" onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={13} /></button></div>)}</div>}
               <textarea
                 ref={composerRef}
@@ -849,12 +886,12 @@ function App() {
                 rows={1}
               />
               <div className="composer-footer">
-                <ImagePickerButton disabled={composerBlocked || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
+                <ImagePickerButton disabled={busy || (composerBlocked && !editingNeedsImages) || connectionState !== 'online' || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
                 {connection?.capabilities?.capabilities.includes('models.health.v1') && <button className={`model-health-button ${currentModelHealth?.status ?? ''}`} type="button" title={currentModelHealth ? `${currentModelHealth.message} Click to check again.${currentModelHealth.cached ? ' Cached result.' : ''}` : 'Check model availability'} onClick={() => void checkModelHealth()} disabled={checkingModel || !effectiveModel}>{checkingModel ? <LoaderCircle size={12} className="spin" /> : currentModelHealth?.status === 'available' ? <Check size={12} /> : currentModelHealth?.status === 'unavailable' ? <XCircle size={12} /> : <Activity size={12} />}<span>{checkingModel ? 'Checking' : currentModelHealth?.status === 'available' ? `${currentModelHealth.latencyMs ?? 0} ms` : currentModelHealth?.status === 'unavailable' ? modelHealthLabel(currentModelHealth.category) : 'Check'}</span></button>}
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
-                <span className="composer-state">{draftSelected ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
-                {canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
+                <span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : draftSelected ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
+                {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
             </form>
           </div>
@@ -869,7 +906,9 @@ function App() {
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
       {notice && <div className="success-toast"><Check size={17} /><span>{notice}</span><button title="Dismiss" onClick={() => setNotice('')}><X size={15} /></button></div>}
-      {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {setBusy(true); setError(''); try {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
+      {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);}} onRemove={async (board) => {await api.removeBoard(board.id); if (activeBoardId.current === board.id) {activeBoardId.current = ''; setConnection(null); setConnectionState('offline'); setTasks([]); setSelectedTask(null);} setBoards(await api.listBoards());}} />}
+      {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
+      {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onClose={() => setShowAbout(false)} />}
       {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
@@ -1000,10 +1039,48 @@ function ApprovalBar({approval, busy, respond}: {approval: Approval; busy: boole
   return <form className="approval-bar" role="alert" aria-label={view.title} onSubmit={(event) => {event.preventDefault(); if (textRequest) respond(approvalResponse(approval.method, 'submit', value));}}><div className="approval-heading"><div className="approval-icon"><ShieldCheck size={17} /></div><strong>{view.title}</strong></div><pre className="approval-detail">{view.detail}</pre>{view.remembersExactCall && <div className="approval-scope"><ShieldCheck size={13} />Remembering applies only to this exact tool call in this task.</div>}{approval.method === 'input' && <input className="approval-input" value={value} placeholder={approval.placeholder} autoFocus onChange={(event) => setValue(event.target.value)} disabled={busy} />}{approval.method === 'editor' && <textarea className="approval-input approval-editor" value={value} placeholder={approval.placeholder} rows={5} autoFocus onChange={(event) => setValue(event.target.value)} disabled={busy} />}<div className="approval-actions">{approval.method === 'select' && <>{approval.options?.map((option) => <button type="button" key={option} className={option === 'Allow once' ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'select', option))}>{option}</button>)}<button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'cancel'))}>Cancel</button></>}{approval.method === 'confirm' && <><button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'deny'))}>Deny</button><button type="button" className="primary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'confirm'))}>Allow once</button></>}{textRequest && <><button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'cancel'))}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Submit</button></>}</div></form>;
 }
 
-function BoardDialog({boards, busy, onClose, onConnect, onSave}: {boards: Board[]; busy: boolean; onClose: () => void; onConnect: (board: Board) => void; onSave: (board: Board) => Promise<void>}) {
+function BoardDialog({boards, busy, onClose, onConnect, onSave, onRemove}: {boards: Board[]; busy: boolean; onClose: () => void; onConnect: (board: Board) => void; onSave: (board: Board) => Promise<void>; onRemove: (board: Board) => Promise<void>}) {
   const [editing, setEditing] = useState(boards.length === 0);
   const [form, setForm] = useState<Board>({id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''});
-  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? 'Add board' : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <button key={board.id} className="saved-board" onClick={() => onConnect(board)} disabled={busy}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button>)}</div><button className="add-board-row" onClick={() => setEditing(true)}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void onSave(form);}} className="form-grid"><div className="board-presets">{boardPresets.map((preset) => <button type="button" key={preset.name} className={form.name === preset.name ? 'selected' : ''} onClick={() => setForm({...form, ...preset})}><Server size={14} /><span>{preset.name}</span></button>)}</div><label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} placeholder="Board IP or hostname" autoFocus required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label><div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Save & connect</button></div></form>}</div></div>;
+  const [working, setWorking] = useState(false);
+  const [probe, setProbe] = useState<Connection | null>(null);
+  const [failure, setFailure] = useState('');
+  const [removing, setRemoving] = useState<Board | null>(null);
+  const beginEdit = (board?: Board) => {setForm(board ?? {id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''}); setProbe(null); setFailure(''); setEditing(true);};
+  const submit = async () => {
+    setWorking(true); setFailure(''); setProbe(null);
+    try {
+      const result = await api.probeBoard(form);
+      setProbe(result);
+      if (!result.connected) {setFailure(result.error || result.compatibility?.summary || 'Could not connect to this board.'); return;}
+      const detected = result.snapshot?.boardId?.toUpperCase();
+      const candidate = detected && /^(RDK (S100|S600|X5))$/i.test(form.name) ? {...form, name: `RDK ${detected}`} : form;
+      await onSave(candidate);
+    } catch (reason) { setFailure(friendlyError(String(reason))); }
+    finally { setWorking(false); }
+  };
+  const remove = async () => {if (!removing) return; setWorking(true); setFailure(''); try {await onRemove(removing); setRemoving(null); if (boards.length <= 1) beginEdit();} catch (reason) {setFailure(friendlyError(String(reason)));} finally {setWorking(false);}};
+  const disabled = busy || working;
+  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? (form.id ? 'Edit board' : 'Add board') : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <div className="saved-board-row" key={board.id}><button className="saved-board" onClick={() => onConnect(board)} disabled={disabled}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button><button className="icon-button compact" title={`Edit ${board.name}`} onClick={() => beginEdit(board)}><FilePenLine size={14} /></button><button className="icon-button compact danger-icon" title={`Remove ${board.name}`} onClick={() => setRemoving(board)}><Trash2 size={14} /></button></div>)}</div><button className="add-board-row" onClick={() => beginEdit()}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void submit();}} className="form-grid"><div className="board-presets">{boardPresets.map((preset) => <button type="button" key={preset.name} className={form.name === preset.name ? 'selected' : ''} onClick={() => setForm({...form, ...preset})}><Server size={14} /><span>{preset.name}</span></button>)}</div><label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} placeholder="Board IP or hostname" autoFocus required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label>{failure && <ConnectionFailure result={probe} message={failure} />} {probe?.connected && probe.snapshot && <div className="probe-success"><Check size={14} /><span>Detected {probe.snapshot.board} · RDK OS {probe.snapshot.rdkOsVersion}</span></div>}<div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={disabled}>{disabled ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Verify, save & connect</button></div></form>}{removing && <div className="inline-confirm"><AlertTriangle size={16} /><span><strong>Remove {removing.name}?</strong><small>Board tasks keep running; only this saved connection is removed.</small></span><button className="secondary-button" onClick={() => setRemoving(null)} disabled={disabled}>Cancel</button><button className="danger-button" onClick={() => void remove()} disabled={disabled}>Remove</button></div>}</div></div>;
+}
+
+function ConnectionFailure({result, message}: {result: Connection | null; message: string}) {
+  return <div className="connection-failure" role="alert"><AlertTriangle size={15} /><span><strong>{message}</strong>{result?.compatibility?.issues.map((issue) => <small key={issue.code}>{issue.action || issue.message}</small>)}<small>Check the VPN, SSH access, and that `hobot daemon start` is running.</small></span></div>;
+}
+
+function WorkspaceDialog({boardId, initialPath, onClose, onChoose}: {boardId: string; initialPath: string; onClose: () => void; onChoose: (path: string) => void}) {
+  const [listing, setListing] = useState<WorkspaceListing | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failure, setFailure] = useState('');
+  const [folderName, setFolderName] = useState('');
+  const load = useCallback((path: string) => {setLoading(true); setFailure(''); api.browseWorkspace(boardId, path).then(setListing).catch((reason) => setFailure(friendlyError(String(reason)))).finally(() => setLoading(false));}, [boardId]);
+  useEffect(() => {load(initialPath);}, [initialPath, load]);
+  const create = async () => {if (!listing || !folderName.trim()) return; setLoading(true); setFailure(''); try {const next = await api.createWorkspace(boardId, listing.path, folderName.trim()); setFolderName(''); setListing(next);} catch (reason) {setFailure(friendlyError(String(reason)));} finally {setLoading(false);}};
+  return <div className="modal-backdrop"><div className="modal workspace-modal"><div className="modal-header"><div><span className="modal-eyebrow">Project workspace</span><h2>Choose a folder</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="workspace-browser"><div className="workspace-path-bar"><button className="icon-button compact" title="Parent folder" onClick={() => listing?.parent && load(listing.parent)} disabled={loading || !listing?.parent}><ChevronDown className="up-icon" size={15} /></button><span>{listing?.path || initialPath || '/root'}</span></div>{loading && !listing ? <div className="deployment-loading"><LoaderCircle size={16} className="spin" />Loading folders</div> : <div className="workspace-folders">{listing?.directories.map((directory) => <button key={directory.path} onClick={() => load(directory.path)}><Folder size={16} /><span>{directory.name}</span><ChevronRight size={14} /></button>)}{listing && listing.directories.length === 0 && <div className="snapshot-empty">No subfolders</div>}</div>}{failure && <div className="connection-failure"><AlertTriangle size={14} /><span><strong>{failure}</strong></span></div>}<div className="workspace-create"><input value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="New folder name" onKeyDown={(event) => {if (event.key === 'Enter') {event.preventDefault(); void create();}}} /><button className="secondary-button" onClick={() => void create()} disabled={loading || !folderName.trim()}><Plus size={14} />Create</button></div><div className="modal-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={!listing || loading} onClick={() => listing && onChoose(listing.path)}><Folder size={15} />Use this folder</button></div></div></div></div>;
+}
+
+function AboutDialog({appVersion, connection, onClose}: {appVersion: string; connection: Connection | null; onClose: () => void}) {
+  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className="update-guidance"><Info size={15} /><span><strong>Updates are installed on the board.</strong><small>Hobot Code prevents downgrades and blocks updates while agents or Studio bridges are active.</small></span></div><div className="command-list"><div><code>hobot update --check</code><CopyButton value="hobot update --check" /></div><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose}>Done</button></div></div></div></div>;
 }
 
 function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: boolean; onClose: () => void; onCreate: (prompt: string, name: string) => void}) {

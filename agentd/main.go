@@ -40,6 +40,8 @@ Usage:
   hobot task resume TASK_ID [-- PROMPT]
   hobot task restart TASK_ID [--] PROMPT
   hobot task rename TASK_ID NAME
+  hobot task model TASK_ID PROVIDER/MODEL
+  hobot task permissions TASK_ID review|ask|developer
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
   hobot task stop TASK_ID`)
@@ -476,6 +478,42 @@ func runTaskCLI(cfg config, args []string) error {
 		}
 		_, err := client.call("task.rename", renameTaskParams{TaskID: args[1], Name: args[2]})
 		return err
+	case "model":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task model TASK_ID PROVIDER/MODEL")
+		}
+		provider, modelID, ok := strings.Cut(normalizeModelSelection(args[2]), "/")
+		if !ok || provider == "" || modelID == "" {
+			return fmt.Errorf("model must use provider/model format")
+		}
+		result, err := client.call("task.model", setTaskModelParams{TaskID: args[1], Provider: provider, ModelID: modelID})
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		fmt.Printf("Task %s model: %s\n", metadata.ID, metadata.Model)
+		return nil
+	case "permissions":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task permissions TASK_ID review|ask|developer")
+		}
+		mode, err := normalizePermissionMode(args[2])
+		if err != nil {
+			return err
+		}
+		result, err := client.call("task.permissions", setTaskPermissionParams{TaskID: args[1], Mode: mode})
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		fmt.Printf("Task %s permissions: %s\n", metadata.ID, metadata.PermissionMode)
+		return nil
 	case "archive", "unarchive":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: hobot task %s TASK_ID", args[0])
@@ -515,6 +553,8 @@ Usage:
   hobot task resume TASK_ID [-- PROMPT]
   hobot task restart TASK_ID [--] PROMPT
   hobot task rename TASK_ID NAME
+  hobot task model TASK_ID PROVIDER/MODEL
+  hobot task permissions TASK_ID review|ask|developer
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
   hobot task stop TASK_ID
@@ -543,6 +583,7 @@ func printRequestedTaskHelp(args []string, output io.Writer) bool {
 		"respond": "hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE", "approvals": "hobot task approvals TASK_ID",
 		"resume": "hobot task resume TASK_ID [-- PROMPT]", "restart": "hobot task restart TASK_ID [--] PROMPT",
 		"rename": "hobot task rename TASK_ID NAME", "archive": "hobot task archive TASK_ID",
+		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|developer",
 		"unarchive": "hobot task unarchive TASK_ID", "delete": "hobot task delete TASK_ID --yes", "stop": "hobot task stop TASK_ID",
 	}
 	commandUsage, ok := usageByCommand[command]

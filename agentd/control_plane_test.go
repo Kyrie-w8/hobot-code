@@ -37,6 +37,12 @@ func TestModelTableAndSelection(t *testing.T) {
 	if !models[0].Default {
 		t.Fatalf("missing configured default did not fall back to kimi-k3: %+v", models)
 	}
+	models = parseModelTable([]byte("provider model context max-out thinking images\ndrobotics kimi-k3 1M 8K yes yes\ndrobotics deepseek/deepseek-v4-flash 128K 8K yes no\n"))
+	t.Setenv("ANTHROPIC_MODEL", "deepseek/deepseek-v4-flash")
+	markDefaultModel(models)
+	if !models[1].Default || models[0].Default {
+		t.Fatalf("D-Robotics gateway model group was not marked as default: %+v", models)
+	}
 	if normalized := normalizeModelSelection("drobotics/kimi-k3"); normalized != "drobotics/kimi-k3" {
 		t.Fatalf("model selection was not preserved: %q", normalized)
 	}

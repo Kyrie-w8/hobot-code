@@ -329,6 +329,17 @@ test("launcher routes product lifecycle commands without taking Pi extension upd
   assert.match(extensions.stdout, /^args=update --extensions$/m);
 });
 
+test("launcher blocks runtime starts while install or rollback owns the transaction lock", async (t) => {
+  const fixture = await launcherFixture(t);
+  const lock = join(fixture.root, "hobot-code.install.lock");
+  await mkdir(lock);
+  const environment = {...process.env, HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin", HOBOT_CODE_TESTING: "1", HOBOT_CODE_TEST_INSTALL_LOCK: lock};
+  await assert.rejects(() => execFileAsync(fixture.launcher, [], {env: environment}), /install or rollback is in progress/);
+  await assert.rejects(() => execFileAsync(fixture.launcher, ["bridge", "--stdio"], {env: environment}), /install or rollback is in progress/);
+  const update = await execFileAsync(fixture.launcher, ["update", "--check"], {env: environment});
+  assert.equal(update.stdout.trim(), "release:update --check");
+});
+
 async function releaseFixture(t, responses) {
   const root = await mkdtemp(join(tmpdir(), "hobot-public-release-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -349,6 +360,7 @@ async function updateRuntimeFixture(t, version = "9.8.7") {
   const processRoot = join(root, "proc");
   const processDirectory = join(processRoot, "123");
   const log = join(root, "launcher.log");
+  const stagingLog = join(root, "staging.log");
   await mkdir(runtimeRoot, { recursive: true });
   await mkdir(dirname(launcher), { recursive: true });
   await mkdir(processDirectory, { recursive: true });
@@ -383,7 +395,8 @@ if [ "\${HOBOT_TEST_INSTALL_FAIL:-0}" = 1 ]; then
   printf 'simulated install failure\\n' >&2
   exit 9
 fi
-printf '%s\\n' '${version}' > "$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot-code/VERSION"
+	printf '%s\\n' "$0" > "$HOBOT_TEST_STAGE_LOG"
+	printf '%s\\n' '${version}' > "$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot-code/VERSION"
 `);
   await chmod(join(packageRoot, "install.sh"), 0o755);
   const archiveName = `${packageName}.tar.gz`;
@@ -401,7 +414,7 @@ printf '%s\\n' '${version}' > "$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot
   await writeFile(join(fakeBin, "sudo"), "#!/bin/sh\nexec \"$@\"\n");
   await chmod(join(fakeBin, "sudo"), 0o755);
   return {
-    root, installRoot, runtimeRoot, launcher, processRoot, processDirectory, log, releaseBase, version,
+    root, installRoot, runtimeRoot, launcher, processRoot, processDirectory, log, stagingLog, releaseBase, version,
     env: {
       ...process.env,
       PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
@@ -411,6 +424,7 @@ printf '%s\\n' '${version}' > "$HOBOT_CODE_TEST_INSTALL_ROOT/usr/local/lib/hobot
       HOBOT_CODE_TEST_INSTALL_ROOT: installRoot,
       HOBOT_CODE_TEST_PROC_ROOT: processRoot,
       HOBOT_TEST_UPDATE_LOG: log,
+      HOBOT_TEST_STAGE_LOG: stagingLog,
       HOBOT_TEST_PROC_EXE: join(processDirectory, "exe"),
       HOBOT_TEST_AGENTD: join(runtimeRoot, "agentd"),
     },
@@ -431,6 +445,81 @@ test("release installer resolves the latest stable version without downloading t
     },
   });
   assert.match(stdout, /Hobot Code 9\.8\.7 is available/);
+});
+
+test("release installer never treats stale latest metadata as an update", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-stale-release-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const installRoot = join(root, "installed");
+  await mkdir(join(installRoot, "usr/local/lib/hobot-code"), {recursive: true});
+  await mkdir(join(root, "empty-proc"));
+  await writeFile(join(installRoot, "usr/local/lib/hobot-code/VERSION"), "0.25.0\n");
+  const base = await releaseFixture(t, new Map([
+    ["/releases/latest/download/hobot-code-version.txt", "0.21.0\n"],
+  ]));
+  const environment = {
+    ...process.env,
+    HOBOT_CODE_ALLOW_UNSUPPORTED: "1",
+    HOBOT_CODE_RELEASE_BASE_URL: base,
+    HOBOT_CODE_TESTING: "1",
+    HOBOT_CODE_TEST_INSTALL_ROOT: installRoot,
+    HOBOT_CODE_TEST_PROC_ROOT: join(root, "empty-proc"),
+  };
+  const {stdout} = await execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--check"], {env: environment});
+  assert.match(stdout, /metadata reports 0\.21\.0, older than installed version 0\.25\.0/);
+  assert.doesNotMatch(stdout, /is available/);
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update"], {env: environment}),
+    /Refusing to downgrade Hobot Code from 0\.25\.0 to 0\.21\.0/,
+  );
+});
+
+test("release installer requires explicit consent for an intentional downgrade", async (t) => {
+  const fixture = await updateRuntimeFixture(t, "0.9.0");
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version], {env: fixture.env}),
+    /add --allow-downgrade/,
+  );
+  await execFileAsync("/bin/sh", [
+    join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version, "--allow-downgrade",
+  ], {env: fixture.env});
+  assert.equal(await readFile(join(fixture.runtimeRoot, "VERSION"), "utf8"), `${fixture.version}\n`);
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--allow-downgrade"], {env: fixture.env}),
+    /requires an explicit --version/,
+  );
+});
+
+test("release comparison follows SemVer precedence and ignores build metadata", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-semver-release-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const installRoot = join(root, "installed");
+  const runtime = join(installRoot, "usr/local/lib/hobot-code");
+  const emptyProc = join(root, "empty-proc");
+  await mkdir(runtime, {recursive: true});
+  await mkdir(emptyProc);
+  const environment = {...process.env, HOBOT_CODE_ALLOW_UNSUPPORTED: "1", HOBOT_CODE_TESTING: "1", HOBOT_CODE_TEST_INSTALL_ROOT: installRoot, HOBOT_CODE_TEST_PROC_ROOT: emptyProc};
+  const cases = [
+    ["1.0.0", "1.0.0+build.7", /is current/],
+    ["1.0.0-rc.2", "1.0.0-rc.10", /is available/],
+    ["1.0.0", "1.0.0-rc.10", /older than installed/],
+    ["1.0.0-rc.10", "1.0.0", /is available/],
+  ];
+  for (const [installed, candidate, expected] of cases) {
+    await writeFile(join(runtime, "VERSION"), `${installed}\n`);
+    const {stdout} = await execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", candidate, "--check"], {env: environment});
+    assert.match(stdout, expected, `${installed} -> ${candidate}`);
+  }
+});
+
+test("latest metadata resolves to an immutable versioned payload in private staging", async (t) => {
+  const fixture = await updateRuntimeFixture(t, "9.8.7");
+  const latestDirectory = join(fileURLToPath(fixture.releaseBase), "latest/download");
+  await mkdir(latestDirectory, {recursive: true});
+  await writeFile(join(latestDirectory, "hobot-code-version.txt"), `${fixture.version}\n`);
+  await execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update"], {env: fixture.env});
+  assert.equal(await readFile(join(fixture.runtimeRoot, "VERSION"), "utf8"), `${fixture.version}\n`);
+  assert.match(await readFile(fixture.stagingLog, "utf8"), /hobot-code\.package\./);
 });
 
 test("release installer falls back to a private user cache when TMPDIR is unavailable", async (t) => {
@@ -843,6 +932,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /Configure your model first: hobot setup/);
   assert.match(installer, /ANTHROPIC_AUTH_TOKEN=/);
   assert.match(installer, /for process_path in \/proc\/\[0-9\]\*;/);
+  assert.equal((installer.match(/active_pids=\$\(active_hobot_pids\)/g) ?? []).length, 2);
   assert.doesNotMatch(installer, /pgrep -f/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
   assert.doesNotMatch(installer, /\/usr\/local\/bin\/hobot --version/);
@@ -863,6 +953,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.doesNotMatch(launcher, /^\s*\.\s+.*hobot\.env/m);
   assert.match(launcher, /umask "\$original_umask"/);
   assert.match(launcher, /release\.sh update/);
+  assert.match(launcher, /hobot-code\.install\.lock/);
   assert.match(launcher, /uninstall\.sh/);
   assert.match(launcher, /HOBOT_CODE_CONFIG_FINGERPRINT/);
   assert.match(launcher, /hobot setup --token-stdin/);

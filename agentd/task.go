@@ -1384,6 +1384,9 @@ func (current *task) setTerminal(status taskStatus, message string) {
 	if message != "" {
 		current.metadata.LastError = message
 	}
+	for index := range current.metadata.Approvals {
+		current.metadata.Approvals[index].Active = false
+	}
 	for id, subscriber := range current.subscribers {
 		close(subscriber)
 		delete(current.subscribers, id)

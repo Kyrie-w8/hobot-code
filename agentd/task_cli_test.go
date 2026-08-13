@@ -12,6 +12,7 @@ func TestTaskHelpIsHandledBeforeStartingDaemon(t *testing.T) {
 		{"logs", "task", "--help"}, {"attach", "task", "-h"}, {"send", "task", "--help"},
 		{"abort", "--help"}, {"respond", "task", "request", "--help"}, {"approvals", "--help"},
 		{"resume", "task", "--help"}, {"restart", "task", "--help"}, {"rename", "task", "--help"},
+		{"model", "task", "--help"}, {"permissions", "task", "--help"},
 		{"archive", "--help"}, {"unarchive", "--help"}, {"delete", "--help"}, {"stop", "--help"},
 	}
 	for _, args := range tests {

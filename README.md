@@ -92,7 +92,9 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 桌面应用连接时会协商协议、event schema、功能能力、产品版本、板型与 RDK OS。最低要求是 event schema 2、任务生命周期/分页能力和 `hobot bridge --stdio`；不满足硬条件时拒绝半兼容连接，可降级能力则在板卡详情中明确提示。升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.24.0 增加一键诊断与支持包下载。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。详细边界见[兼容矩阵](docs/compatibility.md)。
 
-消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。编辑历史用户消息会保留该消息之前的上下文，用修改后的内容替换原消息，并在同一主对话中隐藏后续旧时间线，不会创建可见的 Side Agent。左侧项目可以折叠，每个项目可创建多个对话；新对话会从首条指令生成可修改标题。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
+消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。网络中断时草稿保留但禁止误发送，按钮原位切换为重连。编辑历史用户消息会保留该消息之前的上下文，用修改后的内容替换原消息，并在同一主对话中隐藏后续旧时间线，不会创建可见的 Side Agent；原消息含图片时会明确要求重新附加或确认移除。左侧项目可以折叠，每个项目可创建多个对话；新对话先浏览板端目录、选择现有工作区或创建文件夹，再从首条指令生成可修改标题。后台任务完成、失败或等待审批时会显示未读标记和应用内提醒。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。标题栏版本入口显示 Studio、板端服务和兼容性；回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
+
+Studio 添加板卡时会先验证 SSH、协议、能力与实际板型，成功后才保存；错误地址不会污染板卡列表。已保存板卡可直接编辑或删除，删除连接不会停止板端任务。版本页提供检查更新、升级和回滚命令；执行升级时仍由板端拒绝活跃 Agent、Studio bridge、并发安装和隐式降级，桌面端不能绕过这些保护。
 
 输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 放行非 root 会话的日常 Shell 与工作区编辑。板卡以 root 连接时，变更工具仍要求确认。审批时可选择仅放行一次、仅在当前任务记住这一次完全相同的工具调用，或拒绝；危险 Shell 不提供记忆授权。工作区外写入和受保护系统路径仍需要单独处理。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
 
@@ -108,6 +110,13 @@ hobot deploy inspect
 hobot deploy start --goal deploy-and-validate model.onnx
 hobot task attach <task-id>
 hobot deploy status <task-id>
+```
+
+空闲或已停止的后台任务可直接调整下一轮使用的模型和权限，无需转到 Studio：
+
+```bash
+hobot task model <task-id> drobotics/kimi-k3
+hobot task permissions <task-id> review|ask|developer
 ```
 
 `inspect` 只扫描候选，不运行模型；`start` 创建可断线续跑的持久任务；`status` 读取经过板端复核的验收状态。未声明目标的编译产物会显示为待验证，明确属于另一块板或 march 的产物会被拒绝。
@@ -293,6 +302,8 @@ hobot update --check       # 只检查最新稳定版本
 hobot update               # 下载、校验并升级
 hobot update --version <version>
 ```
+
+更新器按 SemVer 比较版本，默认拒绝任何降级，包括发布源的 `latest` 元数据意外落后于板端版本时。确需回退到指定的已验证发行版，应优先使用下方的事务回滚；没有可用备份时，才显式执行 `hobot update --version <version> --allow-downgrade`。
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：
 

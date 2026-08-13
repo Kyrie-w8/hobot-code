@@ -2,6 +2,11 @@
 
 ## 0.25.0
 
+- Refuse implicit downgrades when cached or stale latest-release metadata is older than the installed version; intentional downgrades now require both an explicit version and explicit consent.
+- Pin resolved updates to immutable versioned assets, restage packages in a root-owned private directory, block runtime starts during install/rollback, and scan again immediately before swapping the runtime.
+- Make task command help side-effect free and protect active board tasks, foreground sessions, persistent clients, automations, and Studio bridges during transactional updates.
+- Invalidate pending approvals when a task reaches a terminal state, expose task model and permission changes in the board CLI, and preserve slash-containing D-Robotics gateway groups as configured defaults.
+- Verify Studio board connections before saving them; add saved-board editing/removal, board workspace browsing/creation, offline draft recovery, version guidance, background-task attention badges, and explicit image handling when editing history.
 - Add a private `hobot setup` flow for first-run D-Robotics model configuration, with hidden token input, atomic `0600` writes, non-interactive stdin support, and explicit daemon restart guidance.
 - Detect model configuration drift between the launcher and a running `agentd`, refusing model-dependent operations with a clear restart command instead of silently using stale credentials or routes.
 - Preserve bounded model failures as structured conversation events so Studio can show actionable inline recovery rather than dropping an empty failed response.

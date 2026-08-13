@@ -20,6 +20,17 @@ func TestBoardConnectionSerializesReconnectState(t *testing.T) {
 	}
 }
 
+func TestProbeBoardRejectsInvalidCandidateWithoutPersistingIt(t *testing.T) {
+	app := NewApp()
+	result := app.ProbeBoard(Board{Name: "Broken", Host: "-invalid", User: "root", Port: 22})
+	if result.Connected || result.Error == "" {
+		t.Fatalf("invalid candidate was not rejected: %+v", result)
+	}
+	if boards := app.ListBoards(); len(boards) != 0 {
+		t.Fatalf("probe persisted a failed board: %+v", boards)
+	}
+}
+
 func TestConnectionCompatibilityMatrix(t *testing.T) {
 	allCapabilities := []string{
 		"tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "system.snapshot",
@@ -66,8 +77,12 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 }
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
+	app := NewApp()
 	if currentStudioVersion() != "0.25.0" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
+	}
+	if app.GetAppVersion() != currentStudioVersion() {
+		t.Fatalf("exposed Studio version = %q, want %q", app.GetAppVersion(), currentStudioVersion())
 	}
 	if !differentReleaseLine("0.25.0", "0.24.9") || differentReleaseLine("0.25.0", "0.25.1") {
 		t.Fatal("release line comparison is incorrect")

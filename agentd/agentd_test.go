@@ -610,6 +610,24 @@ func TestLateWorkerEventsDoNotReviveStoppingOrTerminalTasks(t *testing.T) {
 	}
 }
 
+func TestTerminalStateInvalidatesPendingApprovals(t *testing.T) {
+	cfg := testConfig(t)
+	taskDir := filepath.Join(cfg.TasksRoot, "00112233445566778899aabb")
+	if err := os.Mkdir(taskDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{
+		manager: &taskManager{cfg: cfg}, dir: taskDir,
+		metadata:    taskMetadata{ID: "00112233445566778899aabb", Status: statusWaiting, Approvals: []pendingApproval{{ID: "approval", Active: true}}},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	current.setTerminal(statusStopped, "")
+	state := current.snapshot()
+	if state.Status != statusStopped || len(state.Approvals) != 1 || state.Approvals[0].Active {
+		t.Fatalf("terminal task retained an active approval: %+v", state)
+	}
+}
+
 func TestRecoveryRejectsSymlinkedState(t *testing.T) {
 	cfg := testConfig(t)
 	id := "00112233445566778899aabb"

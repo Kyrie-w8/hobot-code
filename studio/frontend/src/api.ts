@@ -36,7 +36,9 @@ const mockEvents = (taskId: string): EventPage => ({
 });
 
 const mockBackend: Backend = {
+  GetAppVersion: async () => '0.25.0',
   ListBoards: async () => [mockBoard],
+  ProbeBoard: async (board: Board): Promise<Connection> => ({board, connected: true, daemon: {version: '0.25.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'system.snapshot', 'tasks.lifecycle', 'tasks.page', 'events.page'], maximumActiveTasks: 3, maximumRetainedTasks: 100}, snapshot: {capturedAt: now.toISOString(), board: 'D-Robotics RDK S600', boardId: 's600', hostname: 'drobot', rdkOsVersion: '5.1.0', kernel: '6.1.158-rt58', architecture: 'arm64', cpuCores: 18, loadAverage: [], memory: {totalBytes: 0, availableBytes: 0}, disk: {path: '/root', totalBytes: 0, availableBytes: 0}, thermalZones: [], bpuDevices: [], rdkUtilities: {}, uptimeSeconds: 0}, compatibility: {status: 'supported', summary: 'Board and Studio capabilities are compatible.', appVersion: '0.25.0', agentdVersion: '0.25.0', protocol: 1, eventSchema: 3, boardId: 's600', rdkOsVersion: '5.1.0', validatedTarget: true, issues: []}}),
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
   ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.25.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 3, capabilities: ['events.normalized.v3', 'system.snapshot', 'support.bundle.v1', 'deployments.v1', 'tasks.lifecycle', 'tasks.page', 'events.page', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.models', 'tasks.permissions', 'tasks.images', 'models.capabilities.v1', 'models.health.v1', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumRetainedTasks: 100}, compatibility: {status: 'supported', summary: 'Board and Studio capabilities are compatible.', appVersion: '0.25.0', agentdVersion: '0.25.0', protocol: 1, eventSchema: 3, boardId: 's600', rdkOsVersion: '5.1.0', validatedTarget: true, issues: []}}),
@@ -80,7 +82,9 @@ const backend = (): Backend => window.go?.main?.App ?? mockBackend;
 
 export const isMock = () => !window.go?.main?.App;
 export const api = {
+  appVersion: (): Promise<string> => backend().GetAppVersion(),
   listBoards: (): Promise<Board[]> => backend().ListBoards(),
+  probeBoard: (board: Board): Promise<Connection> => backend().ProbeBoard(board),
   saveBoard: (board: Board): Promise<Board> => backend().SaveBoard(board),
   removeBoard: (id: string) => backend().RemoveBoard(id),
   connectBoard: (id: string): Promise<Connection> => backend().ConnectBoard(id),

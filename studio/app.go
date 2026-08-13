@@ -132,6 +132,61 @@ func (app *App) ListBoards() []Board {
 	return sortedBoards(app.boards)
 }
 
+func (app *App) GetAppVersion() string {
+	return currentStudioVersion()
+}
+
+// ProbeBoard verifies transport, protocol compatibility, and board identity
+// without persisting the candidate. The structured result lets Studio present
+// an actionable failure before a broken board entry reaches local storage.
+func (app *App) ProbeBoard(board Board) BoardConnection {
+	board.Name = strings.TrimSpace(board.Name)
+	if board.Port == 0 {
+		board.Port = 22
+	}
+	if board.User == "" {
+		board.User = "root"
+	}
+	result := BoardConnection{Board: board}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	defer client.Close()
+	baseContext := app.ctx
+	if baseContext == nil {
+		baseContext = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseContext, requestTimeout)
+	defer cancel()
+	info, err := client.Ping(ctx)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	result.Daemon = &info
+	capabilities := info.Capabilities
+	result.Capabilities = &capabilities
+	var snapshotErr error
+	if containsValue(capabilities.Capabilities, "system.snapshot") {
+		value, snapshotError := client.SystemSnapshot(ctx)
+		if snapshotError != nil {
+			snapshotErr = snapshotError
+		} else {
+			result.Snapshot = &value
+		}
+	}
+	compatibility, compatibilityErr := assessConnectionCompatibility(info, result.Snapshot, snapshotErr)
+	result.Compatibility = &compatibility
+	if compatibilityErr != nil {
+		result.Error = compatibilityErr.Error()
+		return result
+	}
+	result.Connected = true
+	return result
+}
+
 func (app *App) SaveBoard(board Board) (Board, error) {
 	board.Name = strings.TrimSpace(board.Name)
 	if board.Name == "" {
