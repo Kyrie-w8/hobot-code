@@ -371,6 +371,7 @@ esac
 `);
   await chmod(launcher, 0o755);
   await symlink(join(runtimeRoot, "agentd"), join(processDirectory, "exe"));
+  await writeFile(join(processDirectory, "cmdline"), Buffer.from(`${join(runtimeRoot, "agentd")}\0serve\0`));
 
   const packageParent = join(root, "package");
   const packageName = `hobot-code-${version}-linux-arm64`;
@@ -463,13 +464,30 @@ test("release installer rejects an active runtime before downloading the archive
   await assert.rejects(
     () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version], {env: fixture.env}),
     (error) => {
-      assert.match(error.stderr, /foreground, persistent, or automation session/);
+      assert.match(error.stderr, /foreground, persistent, automation, or Studio bridge session/);
       assert.doesNotMatch(error.stderr, /runtime fixture|command line/);
       return true;
     },
   );
   await assert.rejects(() => access(fixture.log));
   assert.equal(await readFile(join(fixture.runtimeRoot, "VERSION"), "utf8"), "1.0.0\n");
+});
+
+test("release installer treats Studio bridges as active clients, not extra daemons", async (t) => {
+  const fixture = await updateRuntimeFixture(t);
+  const bridgeDirectory = join(fixture.processRoot, "456");
+  await mkdir(bridgeDirectory);
+  await symlink(join(fixture.runtimeRoot, "agentd"), join(bridgeDirectory, "exe"));
+  await writeFile(join(bridgeDirectory, "cmdline"), Buffer.from(`${join(fixture.runtimeRoot, "agentd")}\0bridge\0--stdio\0`));
+  await assert.rejects(
+    () => execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--version", fixture.version], {env: fixture.env}),
+    (error) => {
+      assert.match(error.stderr, /Studio bridge session/);
+      assert.doesNotMatch(error.stderr, /Multiple Hobot Code background services/);
+      return true;
+    },
+  );
+  await assert.rejects(() => access(fixture.log));
 });
 
 test("release installer preserves active board-side tasks", async (t) => {
@@ -856,7 +874,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(releaseInstaller, /--max-filesize/);
   assert.match(releaseInstaller, /checksum_target/);
   assert.match(releaseInstaller, /unsupported entry type/);
-  assert.match(releaseInstaller, /foreground, persistent, or automation session/);
+  assert.match(releaseInstaller, /foreground, persistent, automation, or Studio bridge session/);
   assert.match(releaseInstaller, /daemon_stopped_for_update/);
   assert.match(releaseInstaller, /release_cache_home/);
   assert.match(uninstaller, /--purge/);

@@ -271,6 +271,7 @@ fi
 inspect_installed_runtime() {
   inspected_daemon_pids=
   inspected_runtime_pids=
+  inspected_bridge_pids=
   for inspected_process_path in "$process_root"/[0-9]*; do
     [ -r "$inspected_process_path/exe" ] || continue
     inspected_executable=$(readlink "$inspected_process_path/exe" 2>/dev/null || true)
@@ -278,13 +279,22 @@ inspect_installed_runtime() {
     inspected_pid=${inspected_process_path##*/}
     case "$inspected_executable" in
       "$installed_runtime_root/agentd")
-        inspected_daemon_pids="${inspected_daemon_pids}${inspected_daemon_pids:+ }$inspected_pid"
+        inspected_agentd_action=$(tr '\000' '\n' < "$inspected_process_path/cmdline" 2>/dev/null | sed -n '2p' || true)
+        if [ "$inspected_agentd_action" = serve ]; then
+          inspected_daemon_pids="${inspected_daemon_pids}${inspected_daemon_pids:+ }$inspected_pid"
+        else
+          inspected_bridge_pids="${inspected_bridge_pids}${inspected_bridge_pids:+ }$inspected_pid"
+        fi
         ;;
       "$installed_runtime_root/hobot")
         inspected_runtime_pids="${inspected_runtime_pids}${inspected_runtime_pids:+ }$inspected_pid"
         ;;
     esac
   done
+
+  if [ -n "$inspected_bridge_pids" ]; then
+    inspected_runtime_pids="${inspected_runtime_pids}${inspected_runtime_pids:+ }$inspected_bridge_pids"
+  fi
 
   if [ -n "$inspected_daemon_pids" ]; then
     if [ "$(printf '%s\n' "$inspected_daemon_pids" | awk '{ print NF }')" -ne 1 ]; then
@@ -315,7 +325,7 @@ inspect_installed_runtime() {
     inspected_runtime_count=$(printf '%s\n' "$inspected_runtime_pids" | awk '{ print NF }')
     inspected_runtime_label='PID'
     [ "$inspected_runtime_count" -eq 1 ] || inspected_runtime_label='PIDs'
-    printf 'Hobot Code is currently in use by a foreground, persistent, or automation session (%s: %s).\n' \
+    printf 'Hobot Code is currently in use by a foreground, persistent, automation, or Studio bridge session (%s: %s).\n' \
       "$inspected_runtime_label" "$inspected_runtime_pids" >&2
     printf 'Finish that work before updating. Useful checks: hobot persistent list; hobot task list\n' >&2
     return 1
