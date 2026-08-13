@@ -225,6 +225,30 @@ func TestConfiguredExtensionInventoryRefreshesWithoutDaemonRestart(t *testing.T)
 	}
 }
 
+func TestConfiguredExtensionInventoryReportsOneStatusWhenTruncated(t *testing.T) {
+	configRoot := filepath.Join(t.TempDir(), "agent")
+	if err := os.Mkdir(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", configRoot)
+	paths := configuredExtensionPaths()
+	writePrivateJSON(t, paths.models, `{"providers":{"extra":{"models":[]}}}`)
+	builtIn := extensionCatalog{Entries: make([]extensionEntry, maximumCatalogEntries)}
+	catalog := discoverConfiguredExtensions(builtIn)
+	providerDiagnostics := 0
+	for _, diagnostic := range catalog.Diagnostics {
+		if diagnostic.Source == "providers" {
+			providerDiagnostics++
+			if diagnostic.Status != "truncated" {
+				t.Fatalf("provider status = %q, want truncated", diagnostic.Status)
+			}
+		}
+	}
+	if providerDiagnostics != 1 {
+		t.Fatalf("provider diagnostics = %d, want 1: %+v", providerDiagnostics, catalog.Diagnostics)
+	}
+}
+
 func hasExtensionEntry(catalog extensionCatalog, id string) bool {
 	for _, entry := range catalog.Entries {
 		if entry.ID == id {

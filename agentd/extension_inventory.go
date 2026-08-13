@@ -51,16 +51,17 @@ func discoverConfiguredExtensions(catalog extensionCatalog) extensionCatalog {
 			diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: "invalid", Message: inventoryDiagnosticMessage(source.name, "invalid")})
 			continue
 		}
+		sourceStatus := "ok"
 		for _, entry := range discovered {
 			if len(entries) >= maximumCatalogEntries {
-				diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: "truncated", Message: inventoryDiagnosticMessage(source.name, "truncated")})
+				sourceStatus = "truncated"
 				break
 			}
 			entry.ID = uniqueInventoryID(entry.ID, seen)
 			seen[entry.ID] = struct{}{}
 			entries = append(entries, entry)
 		}
-		diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: "ok", Message: inventoryDiagnosticMessage(source.name, "ok")})
+		diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: sourceStatus, Message: inventoryDiagnosticMessage(source.name, sourceStatus)})
 	}
 
 	sort.Slice(entries, func(left, right int) bool { return entries[left].ID < entries[right].ID })
