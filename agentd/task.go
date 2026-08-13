@@ -59,6 +59,7 @@ type taskMetadata struct {
 	ParentTaskID   string            `json:"parentTaskId,omitempty"`
 	ForkSequence   uint64            `json:"forkSequence,omitempty"`
 	BranchKind     string            `json:"branchKind,omitempty"`
+	AwaitingPrompt bool              `json:"awaitingPrompt,omitempty"`
 	ArchivedAt     *time.Time        `json:"archivedAt,omitempty"`
 	Approvals      []pendingApproval `json:"pendingApprovals,omitempty"`
 	Deployment     *deploymentRecord `json:"deployment,omitempty"`
@@ -221,6 +222,10 @@ func newTaskManager(cfg config) (*taskManager, error) {
 				metadata.SessionID = ""
 				legacyMetadataCleared = true
 			}
+		}
+		if metadata.AwaitingPrompt && (metadata.Status != statusStopped || metadata.SessionFile == "") {
+			metadata.AwaitingPrompt = false
+			legacyMetadataCleared = true
 		}
 		if isLiveStatus(metadata.Status) {
 			metadata.Status = statusInterrupted
@@ -572,8 +577,8 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	manager.startMu.Lock()
 	defer manager.startMu.Unlock()
-	if len(params.Prompt) == 0 || len(params.Prompt) > maxPromptBytes {
-		return taskMetadata{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
+	if len(params.Prompt) > maxPromptBytes {
+		return taskMetadata{}, fmt.Errorf("task prompt must contain at most %d bytes", maxPromptBytes)
 	}
 	if err := validateImages(params.Images); err != nil {
 		return taskMetadata{}, err
@@ -584,8 +589,14 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if params.Kind != "side" && params.Kind != "edit" {
 		return taskMetadata{}, fmt.Errorf("task fork kind must be side or edit")
 	}
+	if params.Kind == "edit" && len(params.Prompt) == 0 {
+		return taskMetadata{}, fmt.Errorf("edited task fork requires a replacement prompt")
+	}
 	if params.Kind == "edit" && params.Sequence == 0 {
 		return taskMetadata{}, fmt.Errorf("edited task fork requires a user message sequence")
+	}
+	if len(params.Prompt) == 0 && len(params.Images) > 0 {
+		return taskMetadata{}, fmt.Errorf("images require a task prompt")
 	}
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
@@ -644,8 +655,10 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			return taskMetadata{}, fmt.Errorf("task must be idle or stopped before editing its history")
 		}
 	}
-	if err := manager.ensureActiveSlot(); err != nil {
-		return taskMetadata{}, err
+	if params.Kind == "edit" || params.Prompt != "" {
+		if err := manager.ensureActiveSlot(); err != nil {
+			return taskMetadata{}, err
+		}
 	}
 	id, err := newTaskID()
 	if err != nil {
@@ -690,16 +703,22 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if params.Kind == "side" {
 		parentTaskID = manager.rootTaskID(parent)
 	}
+	status := statusStarting
+	awaitingPrompt := false
+	if params.Kind == "side" && params.Prompt == "" {
+		status = statusStopped
+		awaitingPrompt = true
+	}
 	current := &task{
 		manager: manager,
 		dir:     dir,
 		events:  filepath.Join(dir, "events.jsonl"),
 		stderr:  filepath.Join(dir, "worker.stderr.log"),
 		metadata: taskMetadata{
-			ID: id, Name: name, Cwd: parent.Cwd, Status: statusStarting,
+			ID: id, Name: name, Cwd: parent.Cwd, Status: status,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
 			SessionFile: forkFile, Model: model, PermissionMode: permissionMode, ParentTaskID: parentTaskID,
-			ForkSequence: params.Sequence, BranchKind: params.Kind,
+			ForkSequence: params.Sequence, BranchKind: params.Kind, AwaitingPrompt: awaitingPrompt,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
@@ -724,9 +743,11 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	manager.mu.Unlock()
 	keepDirectory = true
 	keepSession = true
-	if err := current.launch(params.Prompt, params.Images, parent.Approved, forkFile); err != nil {
-		current.setTerminal(statusFailed, err.Error())
-		return current.snapshot(), err
+	if params.Prompt != "" {
+		if err := current.launch(params.Prompt, params.Images, parent.Approved, forkFile); err != nil {
+			current.setTerminal(statusFailed, err.Error())
+			return current.snapshot(), err
+		}
 	}
 	return current.snapshot(), nil
 }
@@ -1736,6 +1757,7 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	current.metadata.Status = statusStarting
 	current.metadata.PID = 0
 	current.metadata.LastError = ""
+	current.metadata.AwaitingPrompt = false
 	current.metadata.ResumeCount++
 	for index := range current.metadata.Approvals {
 		current.metadata.Approvals[index].Active = false
@@ -1781,6 +1803,7 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	current.metadata.LastError = ""
 	current.metadata.SessionFile = ""
 	current.metadata.SessionID = ""
+	current.metadata.AwaitingPrompt = false
 	current.pendingSessionFile = ""
 	current.pendingSessionID = ""
 	current.metadata.RestartCount++

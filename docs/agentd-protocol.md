@@ -65,7 +65,7 @@
 | `task.delete` | `{taskId}` | 删除已归档的终态任务及本地日志 |
 | `task.resume` | `{taskId, prompt?, images?}` | 重新打开已校验的 Pi session，可选发送新 Prompt 与图片 |
 | `task.restart` | `{taskId, prompt, images?}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
-| `task.fork` | `{taskId, sequence?, prompt, images?, name?, kind, model?, permissionMode?}` | `side` 从最新稳定上下文创建独立任务；`edit` 从指定用户消息之前创建替换时间线 |
+| `task.fork` | `{taskId, sequence?, prompt?, images?, name?, kind, model?, permissionMode?}` | `side` 从最新稳定上下文创建独立任务，Prompt 可省略并在首条消息时启动；`edit` 从指定用户消息之前创建替换时间线且必须提供 Prompt |
 | `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为终态任务持久化下次 Resume 使用的模型 |
 | `task.permissions` | `{taskId, mode}` | 为 idle 或终态任务设置独立的 `review`、`ask` 或 `developer` 权限策略 |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
@@ -90,7 +90,9 @@ starting -> running -> idle -> running
 agentd 停止或重启时的活动状态 -> interrupted
 ```
 
-`idle` 表示 worker 仍在等待下一轮输入，不是任务进程已经退出。`waiting` 表示 Agent 正在等待确认、选择或补充输入。`stopped`、`failed` 和 `interrupted` 为终态。它们不会自动重启 worker；具有安全 session 绑定的未归档任务可通过 `task.resume` 续接上下文，没有可用 session 或需要明确丢弃上下文时可通过 `task.restart` 启动新会话。`agentd` 只有在 worker 返回的 session 文件已经真实创建、位于配置的 session 目录内且通过私有文件检查后才持久化绑定；启动恢复时会清除已经失效的绑定，避免客户端展示一个必然失败的 Resume。
+`idle` 表示 worker 仍在等待下一轮输入，不是任务进程已经退出。`waiting` 表示 Agent 正在等待确认、选择或补充输入。`stopped`、`failed` 和 `interrupted` 为终态。它们不会自动重启 worker；具有安全 session 绑定的未归档任务可通过 `task.resume` 续接上下文，没有可用 session 或需要明确丢弃上下文时可通过 `task.restart` 启动新会话。空白 Side Agent 以 `stopped` 和 `awaitingPrompt: true` 持久化，不启动 worker、不占活跃任务槽；客户端发送首条消息时通过 `task.resume` 从私有分支 session 启动。`agentd` 只有在 worker 返回的 session 文件已经真实创建、位于配置的 session 目录内且通过私有文件检查后才持久化绑定；启动恢复时会清除已经失效的绑定，避免客户端展示一个必然失败的 Resume。
+
+支持空白 Side Agent 的服务声明 `tasks.fork.deferred-prompt.v1`。客户端不得仅凭 `tasks.fork` 推断 Prompt 可省略；连接旧服务时应提示升级，而不是发送必然失败的创建请求。
 
 ## 持久化与恢复
 
@@ -107,7 +109,7 @@ tasks/<task-id>/worker.stderr.log
 
 目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整；worker stderr 最多保留 1 MiB。达到上限后仍持续排空进程管道，避免 worker 因反压卡死。支持文件最多 4 MiB、只保留最近 5 份；每次生成都使用原子私有写入。
 
-客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源 session 文件：它根据 session 树的 `parentId` 链物化私有分支文件。`side` 取最新已稳定叶节点并作为独立 Agent 展示；`edit` 要求指定 `sequence`，停止被替代的空闲 worker，继承该条 `user.message` 之前的可见历史，并把修改后的 Prompt 作为同一会话的新时间线。旧时间线仍以内部任务记录保留，但 Studio 会折叠它，不会将编辑操作展示成 Side Agent。
+客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐持久事件再接收实时事件。daemon 自身停止、崩溃或板卡重启时，未完成任务标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源 session 文件：它根据 session 树的 `parentId` 链物化私有分支文件。`side` 取最新已稳定叶节点并作为独立 Agent 展示；省略 Prompt 时只创建私有分支，首条消息才启动 worker。`edit` 要求指定 `sequence` 和替换 Prompt，停止被替代的空闲 worker，继承该条 `user.message` 之前的可见历史，并把修改后的 Prompt 作为同一会话的新时间线。旧时间线仍以内部任务记录保留，但 Studio 会折叠它，不会将编辑操作展示成 Side Agent。
 
 ## SSH 标准输入桥接
 

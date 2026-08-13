@@ -127,6 +127,7 @@ export type Task = {
   parentTaskId?: string;
   forkSequence?: number;
   branchKind?: 'side' | 'edit';
+  awaitingPrompt?: boolean;
   archivedAt?: string;
   pendingApprovals?: Approval[];
   deployment?: DeploymentRecord;
@@ -177,4 +178,4 @@ export type ImageContent = {type: 'image'; data: string; mimeType: string; name?
 export type AttachmentSummary = {name?: string; mimeType: string};
 export type WorkspaceEntry = {name: string; path: string};
 export type WorkspaceListing = {path: string; parent?: string; home: string; directories: WorkspaceEntry[]};
-export type ForkTaskRequest = {taskId: string; sequence?: number; prompt: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string};
+export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string};

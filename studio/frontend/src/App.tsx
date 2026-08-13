@@ -59,7 +59,6 @@ function App() {
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
   const [editingNeedsImages, setEditingNeedsImages] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
-  const [showSideTask, setShowSideTask] = useState(false);
   const [showDeployment, setShowDeployment] = useState(false);
   const [deploymentStatus, setDeploymentStatus] = useState<DeploymentStatus | null>(null);
   const [activityClock, setActivityClock] = useState(Date.now());
@@ -399,6 +398,7 @@ function App() {
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
   const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
+  const awaitingFirstPrompt = Boolean(selectedTask?.awaitingPrompt);
   const composerBlocked = busy || connectionState !== 'online' || (editingNeedsImages && attachments.length === 0) || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
@@ -408,6 +408,7 @@ function App() {
   const currentModelHealth = resolveCurrentModelHealth(modelHealth, effectiveModel);
   const imageInputSupported = modelAcceptsImages(models, selectedModel);
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
+  const canCreateBlankSideTask = Boolean(connection?.capabilities?.capabilities.includes('tasks.fork.deferred-prompt.v1'));
   const canChangeModel = Boolean(connectionState === 'online' && selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const canChangePermissions = canChangeModel;
   const canStopTask = Boolean(selectedTask && ['starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
@@ -658,20 +659,21 @@ function App() {
     setOpenMenu('');
   }
 
-  async function createSideTask(prompt: string, name: string) {
+  async function createSideTask() {
     if (!selectedTask || !boardId) return;
     const sourceBoardId = boardId;
     const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
-      const task = await api.forkTask(boardId, {taskId: selectedTask.id, prompt, name, kind: 'side', model: selectedModel});
+      const task = await api.forkTask(boardId, {taskId: selectedTask.id, kind: 'side', model: selectedModel});
       await refreshTasks();
       if (!isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) return;
       selectedTaskId.current = task.id;
       setSelectedTask(task);
-      setOptimisticPrompt({taskId: task.id, text: prompt, time: new Date().toISOString(), attachments: []});
-      setShowSideTask(false);
+      setEvents([]);
+      setOptimisticPrompt(null);
+      window.requestAnimationFrame(() => composerRef.current?.focus());
     } catch (reason) {
       if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
@@ -828,7 +830,7 @@ function App() {
             </div>
             {!collapsedProjects.has(project.path) && <div className="project-conversations">{arrangeTasks(project.tasks).map(({task, depth, branchKind}) => <div key={task.id} className={`task-row-shell ${depth ? 'branch-task' : ''}`} style={{'--task-depth': depth} as any}>
               <button className={`task-row ${selectedTask?.id === task.id ? 'selected' : ''}`} onClick={() => {selectTask(task); setOpenMenu('');}}>
-                {depth ? <CornerDownRight className="branch-mark" size={13} /> : <span className={`task-state-dot dot-${task.status}`} />}
+                {depth ? <CornerDownRight className="branch-mark" size={13} /> : <span className={`task-state-dot dot-${task.awaitingPrompt ? 'idle' : task.status}`} />}
                 <span className="task-row-main"><span className="task-row-name">{task.name}</span>{depth > 0 && <span className="task-row-path">{branchKind === 'side' ? 'Side Agent' : 'Branch'}</span>}</span>
                 <span className={`task-row-time ${unreadTasks.has(task.id) ? 'unread' : ''}`}>{unreadTasks.has(task.id) && <i />}{relativeTime(task.updatedAt)}</span>
               </button>
@@ -846,10 +848,10 @@ function App() {
       <main className="task-main">
         {selectedTask ? <>
           <div className="task-header">
-            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${selectedTask.status}`}>{statusLabel[selectedTask.status] ?? selectedTask.status}</span>{watchStatus && <span className={`stream-status stream-${watchStatus.state}`} role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />{watchStatusLabel(watchStatus)}</span>}</div><span className="workspace-path">{selectedTask.cwd}</span></div>
+            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${awaitingFirstPrompt ? 'idle' : selectedTask.status}`}>{awaitingFirstPrompt ? 'Ready' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>{watchStatus && <span className={`stream-status stream-${watchStatus.state}`} role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />{watchStatusLabel(watchStatus)}</span>}</div><span className="workspace-path">{selectedTask.cwd}</span></div>
             <div className="task-actions">
-              {!draftSelected && <button className="secondary-button side-task-button" title={selectedTask.sessionFile ? 'Create an independent agent from this conversation' : 'Side Agent is available after the first response'} onClick={() => setShowSideTask(true)} disabled={busy || !selectedTask.sessionFile}><GitBranch size={15} />Side Agent</button>}
-              {terminalStatuses.has(selectedTask.status) && <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>}
+              {!draftSelected && <button className="secondary-button side-task-button" title={!selectedTask.sessionFile ? 'Side Agent is available after the first response' : !canCreateBlankSideTask ? 'Update Hobot Code on the board to open blank Side Agent conversations' : 'Open an independent conversation from this context'} onClick={() => void createSideTask()} disabled={busy || !selectedTask.sessionFile || !canCreateBlankSideTask}><GitBranch size={15} />Side Agent</button>}
+              {terminalStatuses.has(selectedTask.status) && !awaitingFirstPrompt && <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>}
             </div>
           </div>
 
@@ -882,7 +884,7 @@ function App() {
                   event.preventDefault();
                   if (!composerBlocked && composer.trim()) event.currentTarget.form?.requestSubmit();
                 }}
-                placeholder={selectedComposerMode === 'resume' ? 'Continue this task' : selectedComposerMode === 'restart' ? 'Start a new session' : 'Message Hobot Code'}
+                placeholder={awaitingFirstPrompt ? 'Message this Side Agent' : selectedComposerMode === 'resume' ? 'Continue this task' : selectedComposerMode === 'restart' ? 'Start a new session' : 'Message Hobot Code'}
                 rows={1}
               />
               <div className="composer-footer">
@@ -890,7 +892,7 @@ function App() {
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
                 {connection?.capabilities?.capabilities.includes('models.health.v1') && <button className={`model-health-button ${currentModelHealth?.status ?? ''}`} type="button" title={currentModelHealth ? `${currentModelHealth.message} Click to check again.${currentModelHealth.cached ? ' Cached result.' : ''}` : 'Check model availability'} onClick={() => void checkModelHealth()} disabled={checkingModel || !effectiveModel}>{checkingModel ? <LoaderCircle size={12} className="spin" /> : currentModelHealth?.status === 'available' ? <Check size={12} /> : currentModelHealth?.status === 'unavailable' ? <XCircle size={12} /> : <Activity size={12} />}<span>{checkingModel ? 'Checking' : currentModelHealth?.status === 'available' ? `${currentModelHealth.latencyMs ?? 0} ms` : currentModelHealth?.status === 'unavailable' ? modelHealthLabel(currentModelHealth.category) : 'Check'}</span></button>}
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
-                <span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : draftSelected ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
+                <span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
             </form>
@@ -909,7 +911,6 @@ function App() {
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);}} onRemove={async (board) => {await api.removeBoard(board.id); if (activeBoardId.current === board.id) {activeBoardId.current = ''; setConnection(null); setConnectionState('offline'); setTasks([]); setSelectedTask(null);} setBoards(await api.listBoards());}} />}
       {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
       {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onClose={() => setShowAbout(false)} />}
-      {showSideTask && selectedTask && <SideTaskDialog parent={selectedTask} busy={busy} onClose={() => setShowSideTask(false)} onCreate={createSideTask} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
     </div>
@@ -1081,12 +1082,6 @@ function WorkspaceDialog({boardId, initialPath, onClose, onChoose}: {boardId: st
 
 function AboutDialog({appVersion, connection, onClose}: {appVersion: string; connection: Connection | null; onClose: () => void}) {
   return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className="update-guidance"><Info size={15} /><span><strong>Updates are installed on the board.</strong><small>Hobot Code prevents downgrades and blocks updates while agents or Studio bridges are active.</small></span></div><div className="command-list"><div><code>hobot update --check</code><CopyButton value="hobot update --check" /></div><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose}>Done</button></div></div></div></div>;
-}
-
-function SideTaskDialog({parent, busy, onClose, onCreate}: {parent: Task; busy: boolean; onClose: () => void; onCreate: (prompt: string, name: string) => void}) {
-  const [prompt, setPrompt] = useState('');
-  const [name, setName] = useState('');
-  return <div className="modal-backdrop"><form className="modal side-task-modal" onSubmit={(event) => {event.preventDefault(); onCreate(prompt.trim(), name.trim());}}><div className="modal-header"><div><span className="modal-eyebrow">Parallel branch</span><h2>New side task</h2></div><button type="button" className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="fork-source"><GitBranch size={16} /><span><strong>Shares the settled context from {parent.name}</strong><small>The main task stays unchanged and both can continue independently.</small></span></div><div className="form-grid"><label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={`${parent.name}-side`} /></label><label><span>Instruction</span><textarea rows={6} value={prompt} onChange={(event) => setPrompt(event.target.value)} autoFocus required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy || !prompt.trim()}><GitBranch size={15} />Start side task</button></div></div></form></div>;
 }
 
 function DeploymentDialog({boardId, cwd, snapshot, models, busy, onClose, onStart}: {boardId: string; cwd: string; snapshot: SystemSnapshot; models: ModelOption[]; busy: boolean; onClose: () => void; onStart: (request: StartDeploymentRequest) => void}) {

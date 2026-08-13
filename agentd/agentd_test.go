@@ -38,6 +38,102 @@ func testConfig(t *testing.T) config {
 	return cfg
 }
 
+func addSettledSourceTask(t *testing.T, manager *taskManager, cfg config) *task {
+	t.Helper()
+	id := "00112233445566778899aabb"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	stderrPath := filepath.Join(dir, "worker.stderr.log")
+	if err := os.WriteFile(eventsPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stderrPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(cfg.SessionDir, "source.jsonl")
+	rows := []map[string]any{
+		{"type": "session", "version": 3, "id": "source", "cwd": cfg.StateRoot},
+		{"type": "model_change", "id": "model", "parentId": nil, "provider": "drobotics", "modelId": "kimi-k3"},
+		{"type": "message", "id": "user", "parentId": "model", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": "source prompt"}}}},
+		{"type": "message", "id": "assistant", "parentId": "user", "message": map[string]any{"role": "assistant", "stopReason": "stop", "content": []map[string]any{{"type": "text", "text": "source response"}}}},
+	}
+	var session bytes.Buffer
+	for _, row := range rows {
+		encoded, _ := json.Marshal(row)
+		session.Write(encoded)
+		session.WriteByte('\n')
+	}
+	if err := os.WriteFile(sessionPath, session.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	current := &task{
+		manager: manager, dir: dir, events: eventsPath, stderr: stderrPath,
+		metadata:    taskMetadata{ID: id, Name: "source", Cwd: cfg.StateRoot, Status: statusStopped, CreatedAt: now, UpdatedAt: now, SessionFile: sessionPath, Model: "drobotics/kimi-k3"},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := current.saveMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	manager.tasks[id] = current
+	return current
+}
+
+func TestBlankSideTaskStartsOnlyAfterItsFirstPrompt(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := addSettledSourceTask(t, manager, cfg)
+	metadata, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "side"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Status != statusStopped || !metadata.AwaitingPrompt || metadata.PID != 0 || manager.activeCount() != 0 {
+		t.Fatalf("blank side task started a worker or occupied a slot: %+v", metadata)
+	}
+	if metadata.SessionFile == "" || metadata.SessionFile == source.metadata.SessionFile {
+		t.Fatalf("blank side task did not receive a private session fork: %+v", metadata)
+	}
+	current, _ := manager.get(metadata.ID)
+	resumed, err := manager.resume(resumeTaskParams{TaskID: metadata.ID, Prompt: "first side prompt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.AwaitingPrompt {
+		t.Fatalf("first prompt did not clear awaitingPrompt: %+v", resumed)
+	}
+	waitForStatus(t, current, statusIdle)
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCapabilitiesAdvertiseDeferredSidePrompt(t *testing.T) {
+	for _, capability := range protocolCapabilities {
+		if capability == "tasks.fork.deferred-prompt.v1" {
+			return
+		}
+	}
+	t.Fatal("deferred side prompts are implemented but not advertised")
+}
+
+func TestEditForkStillRequiresAReplacementPrompt(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := addSettledSourceTask(t, manager, cfg)
+	if _, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "edit", Sequence: 1}); err == nil || !strings.Contains(err.Error(), "replacement prompt") {
+		t.Fatalf("empty edit fork was accepted: %v", err)
+	}
+}
+
 func TestImagePromptPersistsOnlyAttachmentMetadata(t *testing.T) {
 	cfg := testConfig(t)
 	manager, err := newTaskManager(cfg)

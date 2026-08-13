@@ -27,6 +27,7 @@ var protocolCapabilities = []string{
 	"tasks.resume",
 	"tasks.restart",
 	"tasks.fork",
+	"tasks.fork.deferred-prompt.v1",
 	"tasks.models",
 	"tasks.permissions",
 	"tasks.images",

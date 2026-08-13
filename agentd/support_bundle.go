@@ -82,6 +82,7 @@ type supportTaskSummary struct {
 	Model            string     `json:"model,omitempty"`
 	PermissionMode   string     `json:"permissionMode,omitempty"`
 	BranchKind       string     `json:"branchKind,omitempty"`
+	AwaitingPrompt   bool       `json:"awaitingPrompt,omitempty"`
 	ParentRef        string     `json:"parentRef,omitempty"`
 	Archived         bool       `json:"archived"`
 	ActiveApprovals  int        `json:"activeApprovals"`
@@ -214,7 +215,7 @@ func (server *daemonServer) supportTaskSummaries(fingerprintKey string) []suppor
 			Ref: supportRef(fingerprintKey, item.ID), Status: item.Status, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
 			LastSequence: item.LastSequence, LogTruncated: item.LogTruncated, ResumeCount: item.ResumeCount,
 			RestartCount: item.RestartCount, Model: item.Model, PermissionMode: item.PermissionMode,
-			BranchKind: item.BranchKind, Archived: item.ArchivedAt != nil, ActiveApprovals: activeApprovals,
+			BranchKind: item.BranchKind, AwaitingPrompt: item.AwaitingPrompt, Archived: item.ArchivedAt != nil, ActiveApprovals: activeApprovals,
 			HasSession: item.SessionFile != "", HasDeployment: item.Deployment != nil,
 		}
 		if item.ParentTaskID != "" {

@@ -358,6 +358,7 @@ type Task struct {
 	ParentTaskID     string            `json:"parentTaskId,omitempty"`
 	ForkSequence     uint64            `json:"forkSequence,omitempty"`
 	BranchKind       string            `json:"branchKind,omitempty"`
+	AwaitingPrompt   bool              `json:"awaitingPrompt,omitempty"`
 	ArchivedAt       *time.Time        `json:"archivedAt,omitempty"`
 	PendingApprovals []Approval        `json:"pendingApprovals,omitempty"`
 	Deployment       *DeploymentRecord `json:"deployment,omitempty"`
@@ -393,7 +394,7 @@ type EventPage struct {
 type StartTaskRequest struct {
 	Name           string         `json:"name,omitempty"`
 	Cwd            string         `json:"cwd"`
-	Prompt         string         `json:"prompt"`
+	Prompt         string         `json:"prompt,omitempty"`
 	Images         []ImageContent `json:"images,omitempty"`
 	Approve        bool           `json:"approve,omitempty"`
 	Model          string         `json:"model,omitempty"`

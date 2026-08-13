@@ -546,10 +546,6 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .command-list { display: grid; gap: 5px; }
 .command-list > div { display: grid; grid-template-columns: minmax(0, 1fr) 28px; min-height: 34px; align-items: center; gap: 5px; padding: 2px 4px 2px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--chrome); }
 .command-list code { color: var(--text-soft); font-size: 10px; }
-.fork-source { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 8px; margin: 14px 16px 0; padding: 10px; border-radius: var(--radius); background: rgba(119, 168, 216, 0.08); color: var(--blue); }
-.fork-source > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.fork-source strong { overflow: hidden; color: var(--text-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.fork-source small { overflow: hidden; color: var(--text-dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .deployment-target { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 8px; margin: 14px 16px 0; padding: 11px; border: 1px solid rgba(101, 191, 167, 0.16); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
 .deployment-target > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .deployment-target strong { color: var(--text-soft); font-size: 11px; }
