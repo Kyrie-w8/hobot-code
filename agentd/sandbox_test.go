@@ -45,6 +45,7 @@ func TestSandboxCommandBoundsWorkerStateAndDevices(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	cfg := config{
+		ConfigRoot: filepath.Join(home, ".config", "hobot-code"),
 		StateRoot: filepath.Join(root, "state"), AgentdRoot: filepath.Join(root, "state", "agentd"),
 		TasksRoot: filepath.Join(root, "state", "agentd", "tasks"), AttachCursorRoot: filepath.Join(root, "state", "agentd", "attach-cursors"),
 		SupportRoot: filepath.Join(root, "state", "agentd", "support"), SessionDir: filepath.Join(root, "state", "sessions"),
