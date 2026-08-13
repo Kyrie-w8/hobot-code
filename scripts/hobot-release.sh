@@ -206,11 +206,31 @@ download() {
   release_download_url=$1
   release_download_destination=$2
   release_download_maximum_bytes=$3
+  release_download_error=$temporary_directory/download-error.txt
+  : > "$release_download_error"
   case "$release_download_url" in
     https://*)
-      curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 \
+      if [ "$check_only" -eq 1 ]; then
+        if ! curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 5 --max-time 10 \
+          --max-filesize "$release_download_maximum_bytes" \
+          "$release_download_url" -o "$release_download_destination" 2>"$release_download_error"; then
+          printf '%s\n' 'Unable to check for Hobot Code updates within 10 seconds.' >&2
+          printf '%s\n' 'The installed version was not changed. Check the board network and try again.' >&2
+          if [ "${HOBOT_CODE_DEBUG:-0}" = 1 ]; then
+            sed -n '1,5p' "$release_download_error" >&2
+          fi
+          return 1
+        fi
+      elif ! curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 \
         --retry-all-errors --max-filesize "$release_download_maximum_bytes" \
-        "$release_download_url" -o "$release_download_destination"
+        "$release_download_url" -o "$release_download_destination" 2>"$release_download_error"; then
+        printf '%s\n' 'Unable to download the Hobot Code release.' >&2
+        printf '%s\n' 'The installed version was not changed. Check the board network and try again.' >&2
+        if [ "${HOBOT_CODE_DEBUG:-0}" = 1 ]; then
+          sed -n '1,5p' "$release_download_error" >&2
+        fi
+        return 1
+      fi
       ;;
     http://127.0.0.1:*|http://localhost:*)
       if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then

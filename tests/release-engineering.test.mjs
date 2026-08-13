@@ -447,6 +447,42 @@ test("release installer resolves the latest stable version without downloading t
   assert.match(stdout, /Hobot Code 9\.8\.7 is available/);
 });
 
+test("release update checks fail quickly without leaking curl diagnostics", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hobot-update-network-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const fakeBin = join(root, "bin");
+  const curlArguments = join(root, "curl-arguments.txt");
+  await mkdir(fakeBin);
+  await writeFile(join(fakeBin, "curl"), `#!/bin/sh
+printf '%s\\n' "$@" > "$HOBOT_TEST_CURL_ARGUMENTS"
+printf '%s\\n' 'curl: noisy transport failure' >&2
+exit 28
+`);
+  await chmod(join(fakeBin, "curl"), 0o755);
+  let error;
+  try {
+    await execFileAsync("/bin/sh", [join(repository, "scripts/hobot-release.sh"), "update", "--check"], {
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        HOBOT_CODE_ALLOW_UNSUPPORTED: "1",
+        HOBOT_CODE_RELEASE_BASE_URL: "https://example.invalid/releases",
+        HOBOT_TEST_CURL_ARGUMENTS: curlArguments,
+      },
+    });
+    assert.fail("update check should fail when curl fails");
+  } catch (caught) {
+    error = caught;
+  }
+  assert.match(error.stderr, /Unable to check for Hobot Code updates within 10 seconds/);
+  assert.match(error.stderr, /installed version was not changed/);
+  assert.doesNotMatch(error.stderr, /noisy transport failure/);
+  const argumentsText = await readFile(curlArguments, "utf8");
+  assert.match(argumentsText, /--connect-timeout\n5\n/);
+  assert.match(argumentsText, /--max-time\n10\n/);
+  assert.doesNotMatch(argumentsText, /--retry\n/);
+});
+
 test("release installer never treats stale latest metadata as an update", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hobot-stale-release-"));
   t.after(() => rm(root, {recursive: true, force: true}));

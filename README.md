@@ -303,6 +303,8 @@ hobot update               # 下载、校验并升级
 hobot update --version <version>
 ```
 
+在板端无法访问 GitHub 时，`hobot update --check` 会在 10 秒内结束并保留当前版本，不会因重试卡住终端或显示底层传输噪声。需要诊断网络问题时，可临时使用 `HOBOT_CODE_DEBUG=1 hobot update --check`。
+
 更新器按 SemVer 比较版本，默认拒绝任何降级，包括发布源的 `latest` 元数据意外落后于板端版本时。确需回退到指定的已验证发行版，应优先使用下方的事务回滚；没有可用备份时，才显式执行 `hobot update --version <version> --allow-downgrade`。
 
 `hobot update --extensions` 仍用于更新 Pi 扩展，不会触发 Hobot Code 自身升级。正常卸载保留用户配置、会话、记忆、目标和安装备份；彻底清理必须显式确认：

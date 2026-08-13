@@ -2,6 +2,7 @@
 
 ## 0.25.0
 
+- Bound update checks to ten seconds on disconnected boards, preserve the installed version, and replace raw curl failures with a concise recovery message while retaining opt-in debug details.
 - Refuse implicit downgrades when cached or stale latest-release metadata is older than the installed version; intentional downgrades now require both an explicit version and explicit consent.
 - Pin resolved updates to immutable versioned assets, restage packages in a root-owned private directory, block runtime starts during install/rollback, and scan again immediately before swapping the runtime.
 - Make task command help side-effect free and protect active board tasks, foreground sessions, persistent clients, automations, and Studio bridges during transactional updates.
