@@ -33,6 +33,33 @@ while IFS= read -r line; do
       printf '%s\n' '{"type":"agent_start"}'
       printf '%s\n' '{"type":"extension_ui_request","id":"approval-1","method":"confirm","title":"Run test?","message":"Confirm execution"}'
       ;;
+    *'"message":"sandbox-probe"'*)
+      workspace_write=blocked
+      if touch .hobot-sandbox-probe-write 2>/dev/null; then
+        workspace_write=allowed
+        rm -f .hobot-sandbox-probe-write
+      fi
+      system_write=blocked
+      if mkdir /etc/.hobot-sandbox-probe 2>/dev/null; then
+        system_write=allowed
+        rmdir /etc/.hobot-sandbox-probe
+      fi
+      policy_write=blocked
+      if touch "$(dirname "$HOBOT_CODE_PERMISSION_POLICY")/.probe" 2>/dev/null; then
+        policy_write=allowed
+        rm -f "$(dirname "$HOBOT_CODE_PERMISSION_POLICY")/.probe"
+      fi
+      devices=minimal
+      if [ -e /dev/bpu ]; then devices=rdk; fi
+      capabilities=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)
+      network=unavailable
+      if getent hosts ai-api.d-robotics.cc >/dev/null 2>&1; then network=available; fi
+      printf '%s\n' '{"type":"response","command":"prompt","success":true}'
+      printf '%s\n' '{"type":"agent_start"}'
+      printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"mode=%s workspace=%s system=%s policy=%s devices=%s capabilities=%s network=%s"}}\n' \
+        "${HOBOT_CODE_SANDBOX_MODE:-unknown}" "$workspace_write" "$system_write" "$policy_write" "$devices" "$capabilities" "$network"
+      printf '%s\n' '{"type":"agent_settled"}'
+      ;;
     *'"type":"prompt"'*)
       printf '%s\n' '{"type":"response","command":"prompt","success":true}'
       printf '%s\n' '{"type":"agent_start"}'

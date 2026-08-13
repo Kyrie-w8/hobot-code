@@ -1,0 +1,23 @@
+{
+  "info": {
+    "version": "0.25.0",
+    "protocol": 1,
+    "pid": 101,
+    "startedAt": "2026-08-12T00:00:00Z",
+    "activeTasks": 1,
+    "maximumTasks": 2,
+    "backgroundTasks": true,
+    "capabilities": {
+      "protocolMin": 1,
+      "protocolMax": 1,
+      "eventSchema": 3,
+      "capabilities": ["tasks.lifecycle", "tasks.page", "events.page", "system.snapshot"]
+    }
+  },
+  "snapshot": {"boardId": "s600", "rdkOsVersion": "5.1.0"},
+  "expected": {
+    "status": "limited",
+    "validatedTarget": true,
+    "issueCodes": ["missing-build.identity.v1", "version-line-mismatch"]
+  }
+}

@@ -1,6 +1,9 @@
 export function groupTasksByProject(tasks) {
   const groups = new Map();
-  for (const task of tasks) groups.set(task.cwd, [...(groups.get(task.cwd) ?? []), task]);
+  for (const task of tasks) {
+    const projectPath = task.projectCwd || task.cwd;
+    groups.set(projectPath, [...(groups.get(projectPath) ?? []), task]);
+  }
   return [...groups.entries()]
     .map(([path, projectTasks]) => ({path, name: path === '/root' ? 'General' : basename(path), tasks: projectTasks}))
     .sort((left, right) => left.name.localeCompare(right.name));

@@ -24,12 +24,16 @@ type config struct {
 	StateRoot         string
 	AgentdRoot        string
 	TasksRoot         string
+	WorktreesRoot     string
+	AttachCursorRoot  string
 	SupportRoot       string
 	SessionDir        string
 	SocketPath        string
 	PIDPath           string
 	LogPath           string
 	AgentBinary       string
+	ExtensionCatalog  string
+	SandboxBinary     string
 	ConfigFingerprint string
 	MaxTasks          int
 	MaxRetainedTasks  int
@@ -85,6 +89,17 @@ func loadConfig() (config, error) {
 	if !filepath.IsAbs(agentBinary) {
 		return config{}, fmt.Errorf("HOBOT_CODE_AGENT_BINARY must be an absolute path")
 	}
+	extensionCatalog := os.Getenv("HOBOT_CODE_EXTENSION_CATALOG")
+	if extensionCatalog == "" {
+		extensionCatalog = "/usr/local/lib/hobot-code/extensions/catalog.json"
+	}
+	if !filepath.IsAbs(extensionCatalog) {
+		return config{}, fmt.Errorf("HOBOT_CODE_EXTENSION_CATALOG must be an absolute path")
+	}
+	sandboxBinary, err := configuredSandboxBinary(os.Getenv("HOBOT_CODE_BWRAP"))
+	if err != nil {
+		return config{}, err
+	}
 	maxTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_BACKGROUND_TASKS"), defaultMaxTasks, 1, maximumMaxTasks)
 	maxRetainedTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_RETAINED_TASKS"), defaultRetainedTasks, 10, maximumRetainedTasks)
 	maxEventMiB := boundedInteger(os.Getenv("HOBOT_CODE_MAX_EVENT_MIB"), defaultMaxEventMiB, 1, maximumMaxEventMiB)
@@ -97,12 +112,16 @@ func loadConfig() (config, error) {
 		StateRoot:         filepath.Clean(stateRoot),
 		AgentdRoot:        filepath.Clean(agentdRoot),
 		TasksRoot:         filepath.Join(agentdRoot, "tasks"),
+		WorktreesRoot:     filepath.Join(agentdRoot, "worktrees"),
+		AttachCursorRoot:  filepath.Join(agentdRoot, "attach-cursors"),
 		SupportRoot:       filepath.Join(agentdRoot, "support"),
 		SessionDir:        filepath.Clean(sessionDir),
 		SocketPath:        filepath.Clean(socketPath),
 		PIDPath:           filepath.Join(agentdRoot, "agentd.pid"),
 		LogPath:           filepath.Join(agentdRoot, "agentd.log"),
 		AgentBinary:       filepath.Clean(agentBinary),
+		ExtensionCatalog:  filepath.Clean(extensionCatalog),
+		SandboxBinary:     sandboxBinary,
 		ConfigFingerprint: configFingerprint,
 		MaxTasks:          maxTasks,
 		MaxRetainedTasks:  maxRetainedTasks,
@@ -154,7 +173,7 @@ func ensurePrivateDir(path string) error {
 }
 
 func preparePaths(cfg config) error {
-	for _, path := range []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.SupportRoot, cfg.SessionDir, filepath.Dir(cfg.SocketPath)} {
+	for _, path := range []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.WorktreesRoot, cfg.AttachCursorRoot, cfg.SupportRoot, cfg.SessionDir, filepath.Dir(cfg.SocketPath)} {
 		if err := ensurePrivateDir(path); err != nil {
 			return err
 		}

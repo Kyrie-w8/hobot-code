@@ -58,16 +58,17 @@ type supportManifest struct {
 }
 
 type supportDaemonSnapshot struct {
-	Version              string    `json:"version"`
-	Protocol             int       `json:"protocol"`
-	StartedAt            time.Time `json:"startedAt"`
-	UptimeSeconds        uint64    `json:"uptimeSeconds"`
-	ActiveTasks          int       `json:"activeTasks"`
-	MaximumActiveTasks   int       `json:"maximumActiveTasks"`
-	RetainedTasks        int       `json:"retainedTasks"`
-	MaximumRetainedTasks int       `json:"maximumRetainedTasks"`
-	MaximumEventBytes    int64     `json:"maximumEventBytes"`
-	Capabilities         []string  `json:"capabilities"`
+	Version              string        `json:"version"`
+	Protocol             int           `json:"protocol"`
+	StartedAt            time.Time     `json:"startedAt"`
+	UptimeSeconds        uint64        `json:"uptimeSeconds"`
+	ActiveTasks          int           `json:"activeTasks"`
+	MaximumActiveTasks   int           `json:"maximumActiveTasks"`
+	RetainedTasks        int           `json:"retainedTasks"`
+	MaximumRetainedTasks int           `json:"maximumRetainedTasks"`
+	MaximumEventBytes    int64         `json:"maximumEventBytes"`
+	Capabilities         []string      `json:"capabilities"`
+	Build                buildIdentity `json:"build"`
 }
 
 type supportTaskSummary struct {
@@ -81,8 +82,12 @@ type supportTaskSummary struct {
 	RestartCount     int        `json:"restartCount"`
 	Model            string     `json:"model,omitempty"`
 	PermissionMode   string     `json:"permissionMode,omitempty"`
+	SandboxMode      string     `json:"sandboxMode,omitempty"`
+	SandboxBackend   string     `json:"sandboxBackend,omitempty"`
 	BranchKind       string     `json:"branchKind,omitempty"`
 	AwaitingPrompt   bool       `json:"awaitingPrompt,omitempty"`
+	QueuedAt         *time.Time `json:"queuedAt,omitempty"`
+	QueueOperation   string     `json:"queueOperation,omitempty"`
 	ParentRef        string     `json:"parentRef,omitempty"`
 	Archived         bool       `json:"archived"`
 	ActiveApprovals  int        `json:"activeApprovals"`
@@ -91,6 +96,10 @@ type supportTaskSummary struct {
 	DeploymentGoal   string     `json:"deploymentGoal,omitempty"`
 	ErrorCategory    string     `json:"errorCategory,omitempty"`
 	ErrorFingerprint string     `json:"errorFingerprint,omitempty"`
+	LastTurnStatus   string     `json:"lastTurnStatus,omitempty"`
+	TurnEvidence     string     `json:"turnEvidence,omitempty"`
+	OpenTools        int        `json:"openTools,omitempty"`
+	WorkspaceChanged *bool      `json:"workspaceChanged,omitempty"`
 }
 
 type supportCheck struct {
@@ -138,7 +147,7 @@ func (server *daemonServer) createSupportBundle(includeContent bool) (supportBun
 		Version: version, Protocol: protocolVersion, StartedAt: server.started,
 		UptimeSeconds: uint64(time.Since(server.started).Seconds()), ActiveTasks: server.manager.activeCount(),
 		MaximumActiveTasks: server.cfg.MaxTasks, RetainedTasks: len(tasks), MaximumRetainedTasks: server.cfg.MaxRetainedTasks,
-		MaximumEventBytes: server.cfg.MaxEventSize, Capabilities: append([]string(nil), protocolCapabilities...),
+		MaximumEventBytes: server.cfg.MaxEventSize, Capabilities: append([]string(nil), protocolCapabilities...), Build: server.build,
 	}
 	checks := server.supportChecks(snapshot)
 	document := supportBundleDocument{
@@ -174,6 +183,11 @@ func sanitizeSupportSnapshot(snapshot *systemSnapshot) {
 		snapshot.HardwareLeases[index].TaskID = ""
 		snapshot.HardwareLeases[index].PID = 0
 		snapshot.HardwareLeases[index].Cwd = ""
+	}
+	for index := range snapshot.WorkspaceWrites {
+		snapshot.WorkspaceWrites[index].TaskID = ""
+		snapshot.WorkspaceWrites[index].PID = 0
+		snapshot.WorkspaceWrites[index].Cwd = ""
 	}
 	for index, device := range snapshot.BPUDevices {
 		snapshot.BPUDevices[index] = filepath.Base(device)
@@ -215,7 +229,8 @@ func (server *daemonServer) supportTaskSummaries(fingerprintKey string) []suppor
 			Ref: supportRef(fingerprintKey, item.ID), Status: item.Status, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
 			LastSequence: item.LastSequence, LogTruncated: item.LogTruncated, ResumeCount: item.ResumeCount,
 			RestartCount: item.RestartCount, Model: item.Model, PermissionMode: item.PermissionMode,
-			BranchKind: item.BranchKind, AwaitingPrompt: item.AwaitingPrompt, Archived: item.ArchivedAt != nil, ActiveApprovals: activeApprovals,
+			SandboxMode: item.SandboxMode, SandboxBackend: item.Sandbox.Backend,
+			BranchKind: item.BranchKind, AwaitingPrompt: item.AwaitingPrompt, QueuedAt: item.QueuedAt, QueueOperation: item.QueueOperation, Archived: item.ArchivedAt != nil, ActiveApprovals: activeApprovals,
 			HasSession: item.SessionFile != "", HasDeployment: item.Deployment != nil,
 		}
 		if item.ParentTaskID != "" {
@@ -224,9 +239,19 @@ func (server *daemonServer) supportTaskSummaries(fingerprintKey string) []suppor
 		if item.Deployment != nil {
 			summary.DeploymentGoal = item.Deployment.Goal
 		}
-		if item.LastError != "" {
+		if item.Failure != nil {
+			summary.ErrorCategory = item.Failure.Code
+			summary.ErrorFingerprint = supportRef(fingerprintKey, item.Failure.Code)
+		} else if item.LastError != "" {
 			summary.ErrorCategory = supportErrorCategory(item.LastError)
 			summary.ErrorFingerprint = supportRef(fingerprintKey, item.LastError)
+		}
+		if len(item.TurnEvidence) > 0 {
+			last := item.TurnEvidence[len(item.TurnEvidence)-1]
+			summary.LastTurnStatus = last.Status
+			summary.TurnEvidence = last.Evidence
+			summary.OpenTools = last.OpenTools
+			summary.WorkspaceChanged = last.WorkspaceChanged
 		}
 		result = append(result, summary)
 	}
@@ -270,6 +295,7 @@ func (server *daemonServer) supportChecks(snapshot systemSnapshot) []supportChec
 		pathCheck("agent-binary", server.cfg.AgentBinary, false, false, false, true),
 		pathCheck("agentd-log", server.cfg.LogPath, false, true, true, false),
 	}
+	checks = append(checks, sandboxSupportCheck(server.cfg))
 	checks = append(checks, resourceChecks(snapshot)...)
 	utilities := make([]string, 0, len(snapshot.RDKUtilities))
 	for name := range snapshot.RDKUtilities {

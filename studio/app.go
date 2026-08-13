@@ -23,7 +23,9 @@ import (
 
 const (
 	requestTimeout          = 20 * time.Second
+	workspaceTaskTimeout    = 3 * time.Minute
 	modelHealthTimeout      = 18 * time.Second
+	modelVerifyTimeout      = 55 * time.Second
 	deploymentStatusTimeout = 10 * time.Minute
 	deleteTimeout           = 45 * time.Second
 	maximumBoards           = 64
@@ -501,7 +503,7 @@ func (app *App) StartTask(boardID string, request hobot.StartTaskRequest) (hobot
 	if err != nil {
 		return hobot.Task{}, err
 	}
-	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	ctx, cancel := context.WithTimeout(app.ctx, workspaceTaskTimeout)
 	defer cancel()
 	return client.StartTask(ctx, request)
 }
@@ -534,6 +536,16 @@ func (app *App) SetTaskPermissionMode(boardID, taskID, mode string) (hobot.Task,
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
 	return client.SetPermissionMode(ctx, taskID, mode)
+}
+
+func (app *App) SetTaskSandboxMode(boardID, taskID, mode string) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SetSandboxMode(ctx, taskID, mode)
 }
 
 func (app *App) RenameTask(boardID, taskID, name string) (hobot.Task, error) {
@@ -580,6 +592,16 @@ func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
 	return studioModels(models), nil
 }
 
+func (app *App) ListExtensions(boardID string) (hobot.ExtensionCatalog, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.ExtensionCatalog{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.Extensions(ctx)
+}
+
 func (app *App) CheckModelHealth(boardID, model string, force bool) (hobot.ModelHealth, error) {
 	app.mu.Lock()
 	board, ok := app.boards[boardID]
@@ -595,6 +617,23 @@ func (app *App) CheckModelHealth(boardID, model string, force bool) (hobot.Model
 	ctx, cancel := context.WithTimeout(app.ctx, modelHealthTimeout)
 	defer cancel()
 	return client.ModelHealth(ctx, model, force)
+}
+
+func (app *App) VerifyModel(boardID, model string, force bool) (hobot.ModelConformance, error) {
+	app.mu.Lock()
+	board, ok := app.boards[boardID]
+	app.mu.Unlock()
+	if !ok {
+		return hobot.ModelConformance{}, fmt.Errorf("board does not exist")
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return hobot.ModelConformance{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, modelVerifyTimeout)
+	defer cancel()
+	return client.ModelConformance(ctx, model, force)
 }
 
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
@@ -636,6 +675,61 @@ func (app *App) CreateWorkspace(boardID, parent, name string) (hobot.WorkspaceLi
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
 	return client.CreateWorkspace(ctx, parent, name)
+}
+
+func (app *App) GetWorkspaceChanges(boardID, taskID string) (hobot.WorkspaceChanges, error) {
+	if !taskIDPattern.MatchString(taskID) {
+		return hobot.WorkspaceChanges{}, fmt.Errorf("task id is invalid")
+	}
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.WorkspaceChanges{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.WorkspaceChanges(ctx, taskID)
+}
+
+func (app *App) InspectWorkspaceIsolation(boardID, path string) (hobot.WorkspaceIsolation, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.WorkspaceIsolation{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.InspectWorkspaceIsolation(ctx, path)
+}
+
+func (app *App) InspectWorkspaceDelivery(boardID, taskID string) (hobot.WorkspaceDelivery, error) {
+	if !taskIDPattern.MatchString(taskID) {
+		return hobot.WorkspaceDelivery{}, fmt.Errorf("task id is invalid")
+	}
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.WorkspaceDelivery{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, workspaceTaskTimeout)
+	defer cancel()
+	return client.InspectWorkspaceDelivery(ctx, taskID)
+}
+
+func (app *App) ApplyWorkspace(boardID, taskID, expectedDigest string) (hobot.WorkspaceApplyResult, error) {
+	if !taskIDPattern.MatchString(taskID) {
+		return hobot.WorkspaceApplyResult{}, fmt.Errorf("task id is invalid")
+	}
+	if len(expectedDigest) != sha256.Size*2 {
+		return hobot.WorkspaceApplyResult{}, fmt.Errorf("reviewed workspace digest is invalid")
+	}
+	if _, err := hex.DecodeString(expectedDigest); err != nil || strings.ToLower(expectedDigest) != expectedDigest {
+		return hobot.WorkspaceApplyResult{}, fmt.Errorf("reviewed workspace digest is invalid")
+	}
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.WorkspaceApplyResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, workspaceTaskTimeout)
+	defer cancel()
+	return client.ApplyWorkspace(ctx, taskID, expectedDigest)
 }
 
 func (app *App) ForkTask(boardID string, request hobot.ForkTaskRequest) (hobot.Task, error) {
@@ -716,7 +810,7 @@ func (app *App) DeleteTasks(boardID string, taskIDs []string) error {
 
 func studioTaskIsLive(status string) bool {
 	switch status {
-	case "starting", "idle", "running", "waiting", "stopping":
+	case "queued", "starting", "idle", "running", "waiting", "stopping":
 		return true
 	default:
 		return false

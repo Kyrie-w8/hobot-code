@@ -14,6 +14,8 @@ make studio-macos-release  # 仅在 macOS ARM64 构建机上
 
 `make release` 先以 `CGO_ENABLED=0` 从当前源码交叉编译 Go `agentd`，再生成版本化 Linux ARM64 归档及 SHA256 文件。包校验器要求 daemon 是小端 ARM64 ELF。归档包含 `BUILD_INFO.json` 和覆盖包内普通文件的 `MANIFEST.sha256`，并拒绝符号链接、特殊文件、路径逃逸和未登记内容。`make studio-macos-release` 可在本地生成开发用 DMG；GitHub 的 `production` 发布环境强制使用 Developer ID Application 签名、hardened runtime 和可信时间戳，依次公证并 staple App 与 DMG，最后执行 Gatekeeper 校验。缺少任一凭据时正式发布直接失败。
 
+`BUILD_INFO.json` schema 2 记录源码提交、清洁状态、构建时间、目标架构、Pi 来源和实际 `agentd` SHA-256。包校验和板端运行时都会拒绝元数据与二进制不一致的构建；产品版本相同不再被当作构建相同的充分证据。
+
 macOS 发布环境需要配置以下 GitHub Secrets：
 
 - `MACOS_CERTIFICATE_BASE64`：Developer ID Application 证书及私钥导出的 `.p12` 的 Base64。
@@ -25,6 +27,10 @@ macOS 发布环境需要配置以下 GitHub Secrets：
 仓库的 `production` environment 应启用 required reviewers，限制仅受保护 tag 可部署。证书与公证私钥只写入 runner 临时目录和临时 keychain，构建结束后无论成功或失败都会删除。
 
 至少在 X5、S100、S600 中受影响的板卡上验证安装、启动、模型连接、工具审批、会话恢复与卸载保留数据。涉及 `agentd` 时还要验证任务启动、多轮输入、事件重放、SSH 断线、重新连接与进程回收。无法完成的板卡验证必须写入发布说明，不能以本机构建通过代替实机结果。
+
+每次候选发行还应运行[三板稳定性验证](board-reliability.md)，保存脱敏的快速基线。重启和 24 小时续测只在专用或已确认空闲的板卡上进行。
+
+Studio 的 `testdata/handshakes` 保留脱敏的当前版、前一 minor 和最低 schema 握手样本。`studio-check` 必须重放这些样本，验证 SDK 解码、Studio 降级语义和用户警告代码；升级时不得只修改版本比较而忽略真实字段契约。
 
 ## 创建正式发行
 

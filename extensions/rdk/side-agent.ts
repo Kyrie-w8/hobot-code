@@ -30,6 +30,7 @@ import {
 
 import { redactSensitiveText } from "./control-plane.mjs";
 import { acquireSideAgentLease } from "./side-agent-lease.mjs";
+import { resolveUserPaths } from "./user-paths.mjs";
 import {
   applySideAgentEvent,
   buildSideAgentArgs,
@@ -1182,7 +1183,9 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
           inheritedEntries: parentEntries,
           maximumChars: MAX_PARENT_CONTEXT_CHARS,
         }), MAX_PARENT_CONTEXT_CHARS);
-        lease = await acquireSideAgentLease() as SideAgentLease;
+        lease = await acquireSideAgentLease({
+          registryDir: join(resolveUserPaths().stateRoot, "side-agent-leases"),
+        }) as SideAgentLease;
         activeLease = lease;
         if (disposed) return;
         run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries, parentContext);

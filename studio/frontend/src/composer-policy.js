@@ -2,11 +2,13 @@ export const terminalStatuses = new Set(['stopped', 'failed', 'interrupted']);
 
 export function composerMode(task) {
   if (!terminalStatuses.has(task.status)) return 'send';
+  if (task.failure?.recovery === 'restart') return 'restart';
+  if (task.failure?.recovery === 'resume' && task.sessionFile) return 'resume';
   return task.sessionFile ? 'resume' : 'restart';
 }
 
 export function composerIsBlocked(status) {
-  return ['starting', 'running', 'waiting', 'stopping'].includes(status);
+  return ['queued', 'starting', 'running', 'waiting', 'stopping'].includes(status);
 }
 
 export function shouldSubmitComposer(key, shiftKey, isComposing) {

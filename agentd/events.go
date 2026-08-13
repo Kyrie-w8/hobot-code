@@ -11,6 +11,7 @@ const (
 	maximumApprovalOptionText = 1024
 	maximumPendingApprovals   = 16
 	maximumAssistantErrorText = 8 * 1024
+	maximumEventPreviewText   = 12 * 1024
 )
 
 type pendingApproval struct {
@@ -43,6 +44,23 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 		normalizedType = "user.message"
 		data["text"] = message
 		copyEventFields(data, event, "attachments")
+	case "hobot_task_queued":
+		normalizedType = "task.queued"
+		copyEventFields(data, event, "queuedAt", "operation")
+	case "hobot_task_dequeued":
+		normalizedType = "task.starting"
+		copyEventFields(data, event, "queuedAt", "operation")
+	case "hobot_task_queue_cancelled":
+		normalizedType = "task.cancelled"
+		copyEventFields(data, event, "queuedAt", "operation")
+	case "hobot_task_failed":
+		normalizedType = "task.failed"
+		copyEventFields(data, event, "code", "message", "recovery")
+	case "hobot_task_interrupted":
+		normalizedType = "task.interrupted"
+		copyEventFields(data, event, "code", "message", "recovery")
+	case "hobot_task_stopped":
+		normalizedType = "task.stopped"
 	case "agent_start":
 		normalizedType = "task.running"
 	case "agent_settled":
@@ -72,12 +90,15 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 	case "tool_execution_start":
 		normalizedType = "tool.started"
 		copyEventFields(data, event, "toolCallId", "toolName")
+		copyToolEventDetails(data, event, false)
 	case "tool_execution_update":
 		normalizedType = "tool.progress"
 		copyEventFields(data, event, "toolCallId", "toolName")
+		copyToolEventDetails(data, event, true)
 	case "tool_execution_end":
 		normalizedType = "tool.completed"
 		copyEventFields(data, event, "toolCallId", "toolName", "isError")
+		copyToolEventDetails(data, event, true)
 	case "extension_ui_request":
 		method, _ := event["method"].(string)
 		if !isApprovalMethod(method) {
@@ -96,7 +117,93 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 	default:
 		return nil
 	}
-	return &normalizedEvent{Schema: eventSchemaVersion, Type: normalizedType, Data: data}
+	return &normalizedEvent{Schema: eventSchemaVersion, Type: normalizedType, Data: data, Item: normalizedItemFor(normalizedType, data)}
+}
+
+func normalizedItemFor(eventType string, data map[string]any) *normalizedItem {
+	item := &normalizedItem{}
+	switch eventType {
+	case "user.message":
+		item.Type, item.Status = "userMessage", "completed"
+	case "assistant.thinking.delta":
+		item.Type, item.Status = "reasoning", "inProgress"
+	case "assistant.text.delta":
+		item.Type, item.Status = "agentMessage", "inProgress"
+	case "assistant.message.completed":
+		item.Type, item.Status = "agentMessage", "completed"
+		if data["errorMessage"] != nil {
+			item.Status = "failed"
+		}
+	case "tool.started", "tool.progress", "tool.completed":
+		item.ID, _ = data["toolCallId"].(string)
+		item.Type = "toolCall"
+		if name, _ := data["toolName"].(string); name == "bash" {
+			item.Type = "commandExecution"
+		}
+		item.Status = "inProgress"
+		if eventType == "tool.completed" {
+			item.Status = "completed"
+			if failed, _ := data["isError"].(bool); failed {
+				item.Status = "failed"
+			}
+		}
+	case "approval.requested":
+		item.ID, _ = data["id"].(string)
+		item.Type, item.Status = "approval", "waiting"
+	case "approval.resolved":
+		item.ID, _ = data["id"].(string)
+		item.Type, item.Status = "approval", "completed"
+	case "task.queued":
+		item.Type, item.Status = "task", "queued"
+	case "task.starting", "task.running":
+		item.Type, item.Status = "task", "inProgress"
+	case "task.idle":
+		item.Type, item.Status = "task", "ready"
+	case "task.cancelled":
+		item.Type, item.Status = "task", "cancelled"
+	case "task.failed":
+		item.Type, item.Status = "task", "failed"
+	case "task.interrupted":
+		item.Type, item.Status = "task", "interrupted"
+	case "task.stopped":
+		item.Type, item.Status = "task", "stopped"
+	default:
+		return nil
+	}
+	return item
+}
+
+func copyToolEventDetails(target, source map[string]any, includeOutput bool) {
+	if args, ok := source["args"]; ok {
+		target["inputPreview"] = previewEventValue(args)
+		if values, ok := args.(map[string]any); ok {
+			for _, field := range []string{"command", "cwd", "path", "file_path"} {
+				if value, ok := values[field].(string); ok {
+					target[field] = boundedValue(value, maximumEventPreviewText)
+				}
+			}
+		}
+	}
+	if !includeOutput {
+		return
+	}
+	for _, field := range []string{"result", "output", "error"} {
+		if value, ok := source[field]; ok {
+			target["outputPreview"] = previewEventValue(value)
+			return
+		}
+	}
+}
+
+func previewEventValue(value any) string {
+	if text, ok := value.(string); ok {
+		return boundedValue(text, maximumEventPreviewText)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return boundedValue("[unavailable]", maximumEventPreviewText)
+	}
+	return boundedValue(string(encoded), maximumEventPreviewText)
 }
 
 func copyEventFields(target, source map[string]any, fields ...string) {

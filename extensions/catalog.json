@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "apiVersion": "hobot.extensions/v1",
+  "productVersion": "0.26.0",
+  "entries": [
+    {
+      "id": "hobot.rdk-core",
+      "name": "RDK development core",
+      "version": "0.26.0",
+      "kind": "extension",
+      "description": "D-Robotics model access, live board evidence, RDK knowledge, permissions, memory, goals, hooks, LSP, Side Agents, and resource coordination.",
+      "origin": "built-in",
+      "scope": "system",
+      "runtime": "pi-extension",
+      "entrypoint": "rdk/index.ts",
+      "trust": "product",
+      "defaultEnabled": true,
+      "required": true,
+      "provides": [
+        "provider.drobotics",
+        "tool.system-snapshot",
+        "tool.rdk-docs-search",
+        "policy.permissions",
+        "service.memory",
+        "service.goals",
+        "service.hooks",
+        "service.lsp",
+        "agent.side",
+        "lease.hardware",
+        "lease.workspace-write"
+      ],
+      "requires": [
+        "pi.extension-api"
+      ],
+      "permissions": [
+        "model-network",
+        "workspace",
+        "subprocess",
+        "rdk-devices",
+        "user-state"
+      ],
+      "targets": [
+        "x5",
+        "s100",
+        "s600"
+      ]
+    },
+    {
+      "id": "hobot.skill.rdk-board",
+      "name": "RDK board development",
+      "version": "1",
+      "kind": "skill",
+      "description": "Version-aware RDK diagnosis, conversion, multimedia, TROS, and deployment guidance.",
+      "origin": "built-in",
+      "scope": "system",
+      "runtime": "pi-skill",
+      "entrypoint": "../skills/rdk-board/SKILL.md",
+      "trust": "product",
+      "defaultEnabled": true,
+      "required": false,
+      "provides": [
+        "skill.rdk-board"
+      ],
+      "requires": [
+        "tool.system-snapshot",
+        "tool.rdk-docs-search"
+      ],
+      "permissions": [],
+      "targets": [
+        "x5",
+        "s100",
+        "s600"
+      ]
+    },
+    {
+      "id": "hobot.skill.system-info",
+      "name": "Board system information",
+      "version": "2",
+      "kind": "skill",
+      "description": "Live RDK resource and runtime-health inspection.",
+      "origin": "built-in",
+      "scope": "system",
+      "runtime": "pi-skill",
+      "entrypoint": "../skills/system-info/SKILL.md",
+      "trust": "product",
+      "defaultEnabled": true,
+      "required": false,
+      "provides": [
+        "skill.system-info"
+      ],
+      "requires": [
+        "tool.system-snapshot"
+      ],
+      "permissions": [],
+      "targets": [
+        "x5",
+        "s100",
+        "s600"
+      ]
+    },
+    {
+      "id": "hobot.skill.workspace-coding",
+      "name": "Workspace coding",
+      "version": "1",
+      "kind": "skill",
+      "description": "Repository-aware coding workflow with explicit verification and change reporting.",
+      "origin": "built-in",
+      "scope": "system",
+      "runtime": "pi-skill",
+      "entrypoint": "../skills/workspace-coding/SKILL.md",
+      "trust": "product",
+      "defaultEnabled": true,
+      "required": false,
+      "provides": [
+        "skill.workspace-coding"
+      ],
+      "requires": [
+        "tool.read",
+        "tool.bash",
+        "tool.edit",
+        "tool.write"
+      ],
+      "permissions": [
+        "workspace",
+        "subprocess"
+      ],
+      "targets": [
+        "x5",
+        "s100",
+        "s600"
+      ]
+    }
+  ]
+}

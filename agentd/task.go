@@ -26,6 +26,7 @@ import (
 type taskStatus string
 
 const (
+	statusQueued      taskStatus = "queued"
 	statusStarting    taskStatus = "starting"
 	statusIdle        taskStatus = "idle"
 	statusRunning     taskStatus = "running"
@@ -36,33 +37,54 @@ const (
 	statusInterrupted taskStatus = "interrupted"
 )
 
+var errTaskLaunchCancelled = errors.New("task launch was cancelled")
+
 var taskIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
 
+const maximumWorkerStderrBytes int64 = 1024 * 1024
+
 type taskMetadata struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Cwd            string            `json:"cwd"`
-	Status         taskStatus        `json:"status"`
-	PID            int               `json:"pid,omitempty"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	UpdatedAt      time.Time         `json:"updatedAt"`
-	LastSequence   uint64            `json:"lastSequence"`
-	LogTruncated   bool              `json:"logTruncated,omitempty"`
-	LastError      string            `json:"lastError,omitempty"`
-	SessionFile    string            `json:"sessionFile,omitempty"`
-	SessionID      string            `json:"sessionId,omitempty"`
-	Approved       bool              `json:"approved,omitempty"`
-	ResumeCount    int               `json:"resumeCount,omitempty"`
-	RestartCount   int               `json:"restartCount,omitempty"`
-	Model          string            `json:"model,omitempty"`
-	PermissionMode string            `json:"permissionMode,omitempty"`
-	ParentTaskID   string            `json:"parentTaskId,omitempty"`
-	ForkSequence   uint64            `json:"forkSequence,omitempty"`
-	BranchKind     string            `json:"branchKind,omitempty"`
-	AwaitingPrompt bool              `json:"awaitingPrompt,omitempty"`
-	ArchivedAt     *time.Time        `json:"archivedAt,omitempty"`
-	Approvals      []pendingApproval `json:"pendingApprovals,omitempty"`
-	Deployment     *deploymentRecord `json:"deployment,omitempty"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Cwd            string             `json:"cwd"`
+	ProjectCwd     string             `json:"projectCwd,omitempty"`
+	WorkspaceMode  string             `json:"workspaceMode"`
+	WorkspaceID    string             `json:"workspaceId,omitempty"`
+	WorktreePath   string             `json:"worktreePath,omitempty"`
+	WorktreeBase   string             `json:"worktreeBase,omitempty"`
+	Status         taskStatus         `json:"status"`
+	PID            int                `json:"pid,omitempty"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	UpdatedAt      time.Time          `json:"updatedAt"`
+	LastSequence   uint64             `json:"lastSequence"`
+	LogTruncated   bool               `json:"logTruncated,omitempty"`
+	LastError      string             `json:"lastError,omitempty"`
+	Failure        *taskFailure       `json:"failure,omitempty"`
+	SessionFile    string             `json:"sessionFile,omitempty"`
+	SessionID      string             `json:"sessionId,omitempty"`
+	Approved       bool               `json:"approved,omitempty"`
+	ResumeCount    int                `json:"resumeCount,omitempty"`
+	RestartCount   int                `json:"restartCount,omitempty"`
+	Model          string             `json:"model,omitempty"`
+	PermissionMode string             `json:"permissionMode,omitempty"`
+	SandboxMode    string             `json:"sandboxMode"`
+	Sandbox        taskSandboxStatus  `json:"sandbox"`
+	ParentTaskID   string             `json:"parentTaskId,omitempty"`
+	ForkSequence   uint64             `json:"forkSequence,omitempty"`
+	BranchKind     string             `json:"branchKind,omitempty"`
+	AwaitingPrompt bool               `json:"awaitingPrompt,omitempty"`
+	QueuedAt       *time.Time         `json:"queuedAt,omitempty"`
+	QueueOperation string             `json:"queueOperation,omitempty"`
+	ArchivedAt     *time.Time         `json:"archivedAt,omitempty"`
+	Approvals      []pendingApproval  `json:"pendingApprovals,omitempty"`
+	Deployment     *deploymentRecord  `json:"deployment,omitempty"`
+	TurnEvidence   []taskTurnEvidence `json:"turnEvidence,omitempty"`
+}
+
+type taskFailure struct {
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Recovery string `json:"recovery"`
 }
 
 type task struct {
@@ -71,20 +93,28 @@ type task struct {
 	events  string
 	stderr  string
 
-	mu                 sync.Mutex
-	metadata           taskMetadata
-	command            *exec.Cmd
-	stdin              io.WriteCloser
-	workerDone         chan struct{}
-	writeMu            sync.Mutex
-	streamWG           sync.WaitGroup
-	stopping           bool
-	interrupted        bool
-	eventBytes         int64
-	subscribers        map[uint64]chan taskEvent
-	nextSubID          uint64
-	pendingSessionFile string
-	pendingSessionID   string
+	mu                    sync.Mutex
+	metadata              taskMetadata
+	command               *exec.Cmd
+	stdin                 io.WriteCloser
+	workerDone            chan struct{}
+	writeMu               sync.Mutex
+	stderrMu              sync.Mutex
+	streamWG              sync.WaitGroup
+	persistMu             sync.Mutex
+	turnCaptureMu         sync.Mutex
+	stopping              bool
+	interrupted           bool
+	eventBytes            int64
+	subscribers           map[uint64]chan taskEvent
+	nextSubID             uint64
+	pendingSessionFile    string
+	pendingSessionID      string
+	pendingLaunch         *queuedLaunch
+	stderrBytes           int64
+	openToolCalls         map[string]struct{}
+	openAnonymousTools    int
+	terminalCaptureUnsafe bool
 }
 
 type taskManager struct {
@@ -97,6 +127,17 @@ type taskManager struct {
 	modelListErr error
 }
 
+type queuedLaunch struct {
+	Schema      int            `json:"schema"`
+	State       string         `json:"state"`
+	Operation   string         `json:"operation"`
+	Prompt      string         `json:"prompt"`
+	Images      []imageContent `json:"images,omitempty"`
+	Approve     bool           `json:"approve,omitempty"`
+	SessionFile string         `json:"sessionFile,omitempty"`
+	QueuedAt    time.Time      `json:"queuedAt"`
+}
+
 type startTaskParams struct {
 	Name           string            `json:"name,omitempty"`
 	Cwd            string            `json:"cwd"`
@@ -105,6 +146,8 @@ type startTaskParams struct {
 	Approve        bool              `json:"approve,omitempty"`
 	Model          string            `json:"model,omitempty"`
 	PermissionMode string            `json:"permissionMode,omitempty"`
+	WorkspaceMode  string            `json:"workspaceMode,omitempty"`
+	SandboxMode    string            `json:"sandboxMode,omitempty"`
 	Deployment     *deploymentRecord `json:"-"`
 }
 
@@ -117,6 +160,7 @@ type forkTaskParams struct {
 	Kind           string         `json:"kind,omitempty"`
 	Model          string         `json:"model,omitempty"`
 	PermissionMode string         `json:"permissionMode,omitempty"`
+	SandboxMode    string         `json:"sandboxMode,omitempty"`
 }
 
 type resumeTaskParams struct {
@@ -169,6 +213,11 @@ type setTaskPermissionParams struct {
 	Mode   string `json:"mode"`
 }
 
+type setTaskSandboxParams struct {
+	TaskID string `json:"taskId"`
+	Mode   string `json:"mode"`
+}
+
 type taskIDParams struct {
 	TaskID string `json:"taskId"`
 }
@@ -211,7 +260,40 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			continue
 		}
 		metadata.PermissionMode, _ = normalizePermissionMode(metadata.PermissionMode)
-		legacyMetadataCleared := false
+		previousSandboxMode, previousSandbox := metadata.SandboxMode, metadata.Sandbox
+		metadata.SandboxMode, metadata.Sandbox = normalizePersistedSandbox(metadata.SandboxMode, metadata.Sandbox, metadata.PermissionMode, metadata.Deployment != nil)
+		legacyMetadataCleared := previousSandboxMode != metadata.SandboxMode || previousSandbox != metadata.Sandbox
+		failureDetail := ""
+		workspaceMode, workspaceErr := normalizeWorkspaceMode(metadata.WorkspaceMode)
+		workspaceInvalid := workspaceErr != nil || (workspaceMode == workspaceModeWorktree && metadata.WorktreePath == "")
+		if workspaceErr == nil && metadata.WorkspaceMode != workspaceMode {
+			metadata.WorkspaceMode = workspaceMode
+			legacyMetadataCleared = true
+		}
+		if metadata.ProjectCwd == "" {
+			metadata.ProjectCwd = metadata.Cwd
+			legacyMetadataCleared = true
+		}
+		if workspaceInvalid {
+			failureDetail = "persisted task workspace metadata is invalid"
+		} else if workspaceMode == workspaceModeWorktree {
+			if err := manager.validateManagedTaskWorkspace(metadata); err != nil {
+				failureDetail = err.Error()
+			}
+		}
+		if failureDetail != "" {
+			metadata.Status = statusFailed
+			metadata.PID = 0
+			metadata.QueuedAt = nil
+			metadata.QueueOperation = ""
+			metadata.UpdatedAt = time.Now().UTC()
+			metadata.Failure = taskFailureFor("workspace-unavailable", metadata.SessionFile != "")
+			metadata.LastError = metadata.Failure.Message
+			for index := range metadata.Approvals {
+				metadata.Approvals[index].Active = false
+			}
+			legacyMetadataCleared = true
+		}
 		if metadata.Model != "" && validPersistedModel(metadata.Model) == "" {
 			metadata.Model = ""
 			legacyMetadataCleared = true
@@ -223,42 +305,99 @@ func newTaskManager(cfg config) (*taskManager, error) {
 				legacyMetadataCleared = true
 			}
 		}
+		previousEvidence, _ := json.Marshal(metadata.TurnEvidence)
+		metadata.TurnEvidence = normalizePersistedTurnEvidence(metadata.TurnEvidence, metadata.SessionFile != "")
+		normalizedEvidence, _ := json.Marshal(metadata.TurnEvidence)
+		legacyMetadataCleared = legacyMetadataCleared || !bytes.Equal(previousEvidence, normalizedEvidence)
 		if metadata.AwaitingPrompt && (metadata.Status != statusStopped || metadata.SessionFile == "") {
 			metadata.AwaitingPrompt = false
 			legacyMetadataCleared = true
 		}
-		if isLiveStatus(metadata.Status) {
+		if isTerminalStatus(metadata.Status) && metadata.Status != statusStopped && (metadata.LastError != "" || metadata.Failure != nil) {
+			if metadata.Failure == nil {
+				failureDetail = metadata.LastError
+			}
+			failure := normalizeTaskFailure(metadata.Status, metadata.Failure, metadata.LastError, metadata.SessionFile != "")
+			if metadata.Failure == nil || *metadata.Failure != *failure || metadata.LastError != failure.Message {
+				metadata.Failure = failure
+				metadata.LastError = failure.Message
+				legacyMetadataCleared = true
+			}
+		}
+		var pendingLaunch *queuedLaunch
+		discardRecoveredQueue := metadata.Status != statusQueued
+		if metadata.Status == statusQueued {
+			queued, queueErr := readQueuedLaunch(filepath.Join(dir, "queue.json"), cfg.SessionDir)
+			if queueErr != nil {
+				failureDetail = queueErr.Error()
+				metadata.Status = statusFailed
+				metadata.QueuedAt = nil
+				metadata.QueueOperation = ""
+				metadata.Failure = taskFailureFor("queue-recovery-failed", false)
+				metadata.LastError = metadata.Failure.Message
+				legacyMetadataCleared = true
+				discardRecoveredQueue = true
+			} else if queued.State == "launching" {
+				metadata.Status = statusInterrupted
+				metadata.PID = 0
+				metadata.QueuedAt = nil
+				metadata.QueueOperation = ""
+				metadata.Failure = taskFailureFor("handoff-uncertain", metadata.SessionFile != "")
+				metadata.LastError = metadata.Failure.Message
+				legacyMetadataCleared = true
+				discardRecoveredQueue = true
+			} else {
+				pendingLaunch = &queued
+				metadata.QueuedAt = &queued.QueuedAt
+				metadata.QueueOperation = queued.Operation
+			}
+		}
+		if occupiesActiveSlot(metadata.Status) {
 			metadata.Status = statusInterrupted
 			metadata.PID = 0
 			metadata.UpdatedAt = time.Now().UTC()
-			metadata.LastError = "agentd restarted; an in-flight worker was not replayed"
+			metadata.Failure = taskFailureFor("service-restarted", metadata.SessionFile != "")
+			metadata.LastError = metadata.Failure.Message
 			for index := range metadata.Approvals {
 				metadata.Approvals[index].Active = false
 			}
 		}
 		current := &task{
-			manager:     manager,
-			dir:         dir,
-			events:      filepath.Join(dir, "events.jsonl"),
-			stderr:      filepath.Join(dir, "worker.stderr.log"),
-			metadata:    metadata,
-			subscribers: make(map[uint64]chan taskEvent),
+			manager:       manager,
+			dir:           dir,
+			events:        filepath.Join(dir, "events.jsonl"),
+			stderr:        filepath.Join(dir, "worker.stderr.log"),
+			metadata:      metadata,
+			subscribers:   make(map[uint64]chan taskEvent),
+			pendingLaunch: pendingLaunch,
 		}
 		eventBytes, lastSequence, repaired, err := recoverEventLog(current.events, metadata.ID, cfg.MaxEventSize)
 		if err != nil {
 			continue
 		}
 		current.eventBytes = eventBytes
+		if info, statErr := os.Stat(current.stderr); statErr == nil && info.Mode().IsRegular() {
+			current.stderrBytes = info.Size()
+		}
+		current.appendFailureDetail(failureDetail)
 		sequenceRecovered := !metadata.LogTruncated && metadata.LastSequence != lastSequence
 		if !metadata.LogTruncated {
 			metadata.LastSequence = lastSequence
 			current.metadata.LastSequence = lastSequence
 		}
+		if isTerminalStatus(current.metadata.Status) && finalizeRunningTurnAfterRestart(&current.metadata, lastSequence) {
+			legacyMetadataCleared = true
+		}
 		manager.tasks[metadata.ID] = current
+		metadataSaved := true
 		if metadata.Status == statusInterrupted || repaired || sequenceRecovered || legacyMetadataCleared {
-			_ = current.saveMetadata()
+			metadataSaved = current.saveMetadata() == nil
+		}
+		if discardRecoveredQueue && metadataSaved {
+			_ = os.Remove(current.queuePath())
 		}
 	}
+	manager.scheduleQueued()
 	return manager, nil
 }
 
@@ -305,6 +444,15 @@ func (manager *taskManager) validateImagesForModel(selection string, images []im
 
 func isLiveStatus(status taskStatus) bool {
 	switch status {
+	case statusQueued, statusStarting, statusIdle, statusRunning, statusWaiting, statusStopping:
+		return true
+	default:
+		return false
+	}
+}
+
+func occupiesActiveSlot(status taskStatus) bool {
+	switch status {
 	case statusStarting, statusIdle, statusRunning, statusWaiting, statusStopping:
 		return true
 	default:
@@ -327,7 +475,7 @@ func (manager *taskManager) activeCount() int {
 	count := 0
 	for _, current := range manager.tasks {
 		current.mu.Lock()
-		live := isLiveStatus(current.metadata.Status)
+		live := occupiesActiveSlot(current.metadata.Status)
 		current.mu.Unlock()
 		if live {
 			count++
@@ -336,9 +484,32 @@ func (manager *taskManager) activeCount() int {
 	return count
 }
 
-func (manager *taskManager) ensureActiveSlot() error {
+func (manager *taskManager) hasQueuedTasks() bool {
+	return manager.queuedCount() > 0
+}
+
+func (manager *taskManager) queuedCount() int {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	count := 0
+	for _, current := range manager.tasks {
+		if current.snapshot().Status == statusQueued {
+			count++
+		}
+	}
+	return count
+}
+
+func (manager *taskManager) claimSubmissionSlot() (bool, error) {
+	if manager.hasQueuedTasks() {
+		return false, nil
+	}
+	return manager.claimActiveSlot()
+}
+
+func (manager *taskManager) claimActiveSlot() (bool, error) {
 	if manager.activeCount() < manager.cfg.MaxTasks {
-		return nil
+		return true, nil
 	}
 	manager.mu.RLock()
 	candidates := make([]*task, 0)
@@ -354,7 +525,7 @@ func (manager *taskManager) ensureActiveSlot() error {
 	for _, candidate := range candidates {
 		stopped, err := candidate.stopIfIdle()
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !stopped {
 			continue
@@ -362,13 +533,242 @@ func (manager *taskManager) ensureActiveSlot() error {
 		deadline := time.Now().Add(6 * time.Second)
 		for time.Now().Before(deadline) {
 			if isTerminalStatus(candidate.snapshot().Status) && manager.activeCount() < manager.cfg.MaxTasks {
-				return nil
+				return true, nil
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		return fmt.Errorf("timed out while suspending an idle background task")
+		return false, fmt.Errorf("timed out while suspending an idle background task")
 	}
-	return fmt.Errorf("background task limit reached (%d); all agents are currently working", manager.cfg.MaxTasks)
+	return false, nil
+}
+
+func (current *task) queuePath() string {
+	return filepath.Join(current.dir, "queue.json")
+}
+
+func writeQueuedLaunch(path string, queued queuedLaunch) error {
+	queued.Schema = 1
+	if queued.State == "" {
+		queued.State = "queued"
+	}
+	encoded, err := json.MarshalIndent(queued, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writePrivateFile(path, append(encoded, '\n'))
+}
+
+func readQueuedLaunch(path, sessionRoot string) (queuedLaunch, error) {
+	content, err := readPrivateRegularFile(path, maxRequestBytes)
+	if err != nil {
+		return queuedLaunch{}, err
+	}
+	var queued queuedLaunch
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&queued); err != nil {
+		return queuedLaunch{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return queuedLaunch{}, fmt.Errorf("queued launch must contain exactly one JSON object")
+	}
+	if queued.Schema != 1 || queued.QueuedAt.IsZero() || len(queued.Prompt) > maxPromptBytes || (queued.State != "queued" && queued.State != "launching") {
+		return queuedLaunch{}, fmt.Errorf("queued launch metadata is invalid")
+	}
+	switch queued.Operation {
+	case "start", "fork", "restart":
+		if queued.Prompt == "" {
+			return queuedLaunch{}, fmt.Errorf("queued launch prompt is missing")
+		}
+	case "resume":
+	default:
+		return queuedLaunch{}, fmt.Errorf("queued launch operation is invalid")
+	}
+	if err := validateImages(queued.Images); err != nil {
+		return queuedLaunch{}, err
+	}
+	if queued.Prompt == "" && len(queued.Images) > 0 {
+		return queuedLaunch{}, fmt.Errorf("queued images require a prompt")
+	}
+	if (queued.Operation == "fork" || queued.Operation == "resume") && queued.SessionFile == "" {
+		return queuedLaunch{}, fmt.Errorf("queued %s session is missing", queued.Operation)
+	}
+	if (queued.Operation == "start" || queued.Operation == "restart") && queued.SessionFile != "" {
+		return queuedLaunch{}, fmt.Errorf("queued %s must not bind an existing session", queued.Operation)
+	}
+	if queued.SessionFile != "" {
+		physical, err := validateSessionFile(sessionRoot, queued.SessionFile)
+		if err != nil {
+			return queuedLaunch{}, err
+		}
+		queued.SessionFile = physical
+	}
+	return queued, nil
+}
+
+func (current *task) queue(queued queuedLaunch) error {
+	queued.Schema = 1
+	queued.State = "queued"
+	if queued.QueuedAt.IsZero() {
+		queued.QueuedAt = time.Now().UTC()
+	}
+	if err := writeQueuedLaunch(current.queuePath(), queued); err != nil {
+		current.mu.Lock()
+		current.metadata.Status = statusStarting
+		current.mu.Unlock()
+		current.setTerminal(statusFailed, "persist queued task: "+err.Error())
+		return err
+	}
+	current.mu.Lock()
+	current.pendingLaunch = &queued
+	current.metadata.Status = statusQueued
+	current.metadata.PID = 0
+	current.metadata.LastError = ""
+	current.metadata.Failure = nil
+	current.metadata.AwaitingPrompt = false
+	current.metadata.QueuedAt = &queued.QueuedAt
+	current.metadata.QueueOperation = queued.Operation
+	current.metadata.UpdatedAt = queued.QueuedAt
+	for index := range current.metadata.Approvals {
+		current.metadata.Approvals[index].Active = false
+	}
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		current.setTerminal(statusFailed, "persist queued task: "+err.Error())
+		_ = os.Remove(current.queuePath())
+		return err
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"type": "hobot_task_queued", "queuedAt": queued.QueuedAt, "operation": queued.Operation,
+	})
+	current.recordEvent(raw)
+	if queued.Prompt != "" {
+		current.recordQueuedPrompt(queued)
+	}
+	go current.manager.scheduleQueued()
+	return nil
+}
+
+func (manager *taskManager) scheduleQueued() {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	for {
+		manager.mu.RLock()
+		candidates := make([]*task, 0)
+		for _, current := range manager.tasks {
+			if current.snapshot().Status == statusQueued {
+				candidates = append(candidates, current)
+			}
+		}
+		manager.mu.RUnlock()
+		if len(candidates) == 0 {
+			return
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			left, right := candidates[i].snapshot(), candidates[j].snapshot()
+			if left.QueuedAt != nil && right.QueuedAt != nil && !left.QueuedAt.Equal(*right.QueuedAt) {
+				return left.QueuedAt.Before(*right.QueuedAt)
+			}
+			return left.CreatedAt.Before(right.CreatedAt)
+		})
+		available, err := manager.claimActiveSlot()
+		if err != nil || !available {
+			return
+		}
+		current := candidates[0]
+		current.mu.Lock()
+		if current.metadata.Status != statusQueued || current.pendingLaunch == nil {
+			current.mu.Unlock()
+			continue
+		}
+		queued := *current.pendingLaunch
+		queued.Images = append([]imageContent(nil), current.pendingLaunch.Images...)
+		promptRecorded := current.queuedPromptRecorded(queued)
+		queued.State = "launching"
+		if err := writeQueuedLaunch(current.queuePath(), queued); err != nil {
+			current.mu.Unlock()
+			current.setTerminal(statusFailed, "persist queue handoff: "+err.Error())
+			_ = os.Remove(current.queuePath())
+			continue
+		}
+		current.metadata.Status = statusStarting
+		current.metadata.QueuedAt = nil
+		current.metadata.QueueOperation = ""
+		current.metadata.LastError = ""
+		current.metadata.Failure = nil
+		if queued.Operation == "restart" {
+			current.metadata.SessionFile = ""
+			current.metadata.SessionID = ""
+			current.pendingSessionFile = ""
+			current.pendingSessionID = ""
+		}
+		current.metadata.UpdatedAt = time.Now().UTC()
+		current.mu.Unlock()
+		if err := current.saveMetadata(); err != nil {
+			current.setTerminal(statusFailed, err.Error())
+			_ = os.Remove(current.queuePath())
+			continue
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"type": "hobot_task_dequeued", "queuedAt": queued.QueuedAt, "operation": queued.Operation,
+		})
+		current.recordEvent(raw)
+		if err := current.launch(queued.Prompt, queued.Images, queued.Approve, queued.SessionFile, promptRecorded); err != nil {
+			_ = os.Remove(current.queuePath())
+			if errors.Is(err, errTaskLaunchCancelled) {
+				current.setTerminal(statusStopped, "")
+				continue
+			}
+			current.setTerminal(statusFailed, err.Error())
+			continue
+		}
+		current.mu.Lock()
+		current.pendingLaunch = nil
+		current.mu.Unlock()
+		_ = os.Remove(current.queuePath())
+	}
+}
+
+func (current *task) recordQueuedPrompt(queued queuedLaunch) {
+	attachments := make([]map[string]string, 0, len(queued.Images))
+	for _, image := range queued.Images {
+		attachments = append(attachments, map[string]string{"name": image.Name, "mimeType": image.MimeType})
+	}
+	promptEvent, _ := json.Marshal(map[string]any{
+		"type": "hobot_user_prompt", "message": queued.Prompt, "attachments": attachments,
+		"queuedAt": queued.QueuedAt,
+	})
+	current.recordEvent(promptEvent)
+}
+
+func (current *task) queuedPromptRecorded(queued queuedLaunch) bool {
+	if queued.Prompt == "" {
+		return true
+	}
+	events, err := readEvents(current.events, current.metadata.ID, 0)
+	if err != nil {
+		return false
+	}
+	marker := false
+	for _, event := range events {
+		var raw struct {
+			Type      string    `json:"type"`
+			Message   string    `json:"message"`
+			QueuedAt  time.Time `json:"queuedAt"`
+			Operation string    `json:"operation"`
+		}
+		if json.Unmarshal(event.Event, &raw) != nil || !raw.QueuedAt.Equal(queued.QueuedAt) {
+			continue
+		}
+		if raw.Type == "hobot_task_queued" && raw.Operation == queued.Operation {
+			marker = true
+			continue
+		}
+		if marker && raw.Type == "hobot_user_prompt" && raw.Message == queued.Prompt {
+			return true
+		}
+	}
+	return false
 }
 
 func newTaskID() (string, error) {
@@ -505,6 +905,14 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if err != nil {
 		return taskMetadata{}, err
 	}
+	workspaceMode, err := normalizeWorkspaceMode(params.WorkspaceMode)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	sandboxMode, sandbox, err := manager.resolveTaskSandbox(params.SandboxMode, permissionMode, params.Deployment != nil)
+	if err != nil {
+		return taskMetadata{}, err
+	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
 	manager.mu.RUnlock()
@@ -515,7 +923,8 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if err != nil {
 		return taskMetadata{}, err
 	}
-	if err := manager.ensureActiveSlot(); err != nil {
+	available, err := manager.claimSubmissionSlot()
+	if err != nil {
 		return taskMetadata{}, err
 	}
 	id, err := newTaskID()
@@ -530,6 +939,25 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if err != nil {
 		return taskMetadata{}, err
 	}
+
+	projectCwd := cwd
+	worktreePath := ""
+	worktreeBase := ""
+	if workspaceMode == workspaceModeWorktree {
+		workspace, workspaceErr := manager.createTaskWorktree(projectCwd, id)
+		if workspaceErr != nil {
+			return taskMetadata{}, workspaceErr
+		}
+		cwd = workspace.Cwd
+		worktreePath = workspace.WorktreePath
+		worktreeBase = workspace.BaseRevision
+	}
+	keepWorktree := false
+	defer func() {
+		if workspaceMode == workspaceModeWorktree && !keepWorktree {
+			manager.rollbackTaskWorktree(id)
+		}
+	}()
 
 	dir := filepath.Join(manager.cfg.TasksRoot, id)
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -547,9 +975,11 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 		events:  filepath.Join(dir, "events.jsonl"),
 		stderr:  filepath.Join(dir, "worker.stderr.log"),
 		metadata: taskMetadata{
-			ID: id, Name: name, Cwd: cwd, Status: statusStarting,
+			ID: id, Name: name, Cwd: cwd, ProjectCwd: projectCwd, WorkspaceMode: workspaceMode,
+			WorkspaceID: id, WorktreePath: worktreePath, WorktreeBase: worktreeBase, Status: statusStopped,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
-			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode, Deployment: params.Deployment,
+			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode,
+			SandboxMode: sandboxMode, Sandbox: sandbox, Deployment: params.Deployment,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
@@ -567,7 +997,28 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	manager.tasks[id] = current
 	manager.mu.Unlock()
 	keepDirectory = true
-	if err := current.launch(params.Prompt, params.Images, params.Approve, ""); err != nil {
+	keepWorktree = true
+	if !available {
+		queued := queuedLaunch{Operation: "start", Prompt: params.Prompt, Images: params.Images, Approve: params.Approve, QueuedAt: time.Now().UTC()}
+		if err := current.queue(queued); err != nil {
+			current.setTerminal(statusFailed, err.Error())
+			return current.snapshot(), err
+		}
+		return current.snapshot(), nil
+	}
+	current.mu.Lock()
+	current.metadata.Status = statusStarting
+	current.metadata.UpdatedAt = time.Now().UTC()
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		current.setTerminal(statusFailed, err.Error())
+		return current.snapshot(), err
+	}
+	if err := current.launch(params.Prompt, params.Images, params.Approve, "", false); err != nil {
+		if errors.Is(err, errTaskLaunchCancelled) {
+			current.setTerminal(statusStopped, "")
+			return current.snapshot(), nil
+		}
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
@@ -606,6 +1057,11 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			return taskMetadata{}, err
 		}
 	}
+	if params.SandboxMode != "" {
+		if _, err := normalizeSandboxMode(params.SandboxMode); err != nil {
+			return taskMetadata{}, err
+		}
+	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
 	manager.mu.RUnlock()
@@ -617,6 +1073,10 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		return taskMetadata{}, err
 	}
 	parent := source.snapshot()
+	id, err := newTaskID()
+	if err != nil {
+		return taskMetadata{}, err
+	}
 	sessionFile, err := validateSessionFile(manager.cfg.SessionDir, parent.SessionFile)
 	if err != nil {
 		return taskMetadata{}, err
@@ -637,14 +1097,19 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			return taskMetadata{}, fmt.Errorf("source task has no settled context to fork")
 		}
 	}
-	forkFile, err := writeSessionFork(manager.cfg.SessionDir, sessionFile, parent.Cwd, leafID, lines)
+	forkSessionDir := filepath.Join(manager.cfg.SessionDir, id)
+	if err := ensurePrivateDir(forkSessionDir); err != nil {
+		return taskMetadata{}, fmt.Errorf("prepare fork session directory: %w", err)
+	}
+	forkFile, err := writeSessionFork(forkSessionDir, sessionFile, parent.Cwd, leafID, lines)
 	if err != nil {
+		_ = os.RemoveAll(forkSessionDir)
 		return taskMetadata{}, fmt.Errorf("create session fork: %w", err)
 	}
 	keepSession := false
 	defer func() {
 		if !keepSession {
-			_ = os.Remove(forkFile)
+			_ = os.RemoveAll(forkSessionDir)
 		}
 	}()
 	if params.Kind == "edit" {
@@ -655,14 +1120,12 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			return taskMetadata{}, fmt.Errorf("task must be idle or stopped before editing its history")
 		}
 	}
+	available := true
 	if params.Kind == "edit" || params.Prompt != "" {
-		if err := manager.ensureActiveSlot(); err != nil {
+		available, err = manager.claimSubmissionSlot()
+		if err != nil {
 			return taskMetadata{}, err
 		}
-	}
-	id, err := newTaskID()
-	if err != nil {
-		return taskMetadata{}, err
 	}
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
@@ -699,6 +1162,22 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		permissionMode = parent.PermissionMode
 	}
 	permissionMode, _ = normalizePermissionMode(permissionMode)
+	sandboxMode := params.SandboxMode
+	if sandboxMode == "" {
+		sandboxMode = parent.SandboxMode
+	}
+	sandboxMode, sandbox, err := manager.resolveTaskSandbox(sandboxMode, permissionMode, parent.Deployment != nil)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	projectCwd := parent.ProjectCwd
+	if projectCwd == "" {
+		projectCwd = parent.Cwd
+	}
+	workspaceMode, workspaceErr := normalizeWorkspaceMode(parent.WorkspaceMode)
+	if workspaceErr != nil {
+		return taskMetadata{}, workspaceErr
+	}
 	parentTaskID := parent.ID
 	if params.Kind == "side" {
 		parentTaskID = manager.rootTaskID(parent)
@@ -708,6 +1187,8 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if params.Kind == "side" && params.Prompt == "" {
 		status = statusStopped
 		awaitingPrompt = true
+	} else if !available {
+		status = statusStopped
 	}
 	current := &task{
 		manager: manager,
@@ -715,9 +1196,12 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		events:  filepath.Join(dir, "events.jsonl"),
 		stderr:  filepath.Join(dir, "worker.stderr.log"),
 		metadata: taskMetadata{
-			ID: id, Name: name, Cwd: parent.Cwd, Status: status,
+			ID: id, Name: name, Cwd: parent.Cwd, ProjectCwd: projectCwd,
+			WorkspaceMode: workspaceMode, WorkspaceID: parent.WorkspaceID,
+			WorktreePath: parent.WorktreePath, WorktreeBase: parent.WorktreeBase, Status: status,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
-			SessionFile: forkFile, Model: model, PermissionMode: permissionMode, ParentTaskID: parentTaskID,
+			SessionFile: forkFile, Model: model, PermissionMode: permissionMode,
+			SandboxMode: sandboxMode, Sandbox: sandbox, ParentTaskID: parentTaskID,
 			ForkSequence: params.Sequence, BranchKind: params.Kind, AwaitingPrompt: awaitingPrompt,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
@@ -744,7 +1228,19 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	keepDirectory = true
 	keepSession = true
 	if params.Prompt != "" {
-		if err := current.launch(params.Prompt, params.Images, parent.Approved, forkFile); err != nil {
+		if !available {
+			queued := queuedLaunch{Operation: "fork", Prompt: params.Prompt, Images: params.Images, Approve: parent.Approved, SessionFile: forkFile, QueuedAt: time.Now().UTC()}
+			if err := current.queue(queued); err != nil {
+				current.setTerminal(statusFailed, err.Error())
+				return current.snapshot(), err
+			}
+			return current.snapshot(), nil
+		}
+		if err := current.launch(params.Prompt, params.Images, parent.Approved, forkFile, false); err != nil {
+			if errors.Is(err, errTaskLaunchCancelled) {
+				current.setTerminal(statusStopped, "")
+				return current.snapshot(), nil
+			}
 			current.setTerminal(statusFailed, err.Error())
 			return current.snapshot(), err
 		}
@@ -857,28 +1353,42 @@ func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLin
 	return parentID, nil
 }
 
-func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string) error {
-	if err := current.ensurePermissionPolicy(current.metadata.PermissionMode); err != nil {
+func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string, promptRecorded bool) error {
+	metadata := current.snapshot()
+	if err := current.manager.validateManagedTaskWorkspace(metadata); err != nil {
+		return fmt.Errorf("validate task workspace: %w", err)
+	}
+	if err := current.ensurePermissionPolicy(metadata.PermissionMode); err != nil {
 		return fmt.Errorf("write task permission policy: %w", err)
 	}
-	args := []string{"--mode", "rpc", "--session-dir", current.manager.cfg.SessionDir, "--name", current.metadata.Name}
+	taskSessionDir, sessionFile, err := current.prepareTaskSession(sessionFile)
+	if err != nil {
+		return fmt.Errorf("prepare private task session: %w", err)
+	}
+	args := []string{"--mode", "rpc", "--session-dir", taskSessionDir, "--name", metadata.Name}
 	if sessionFile != "" {
 		args = append(args, "--session", sessionFile)
 	}
-	if current.metadata.Model != "" {
-		args = append(args, "--model", current.metadata.Model)
+	if metadata.Model != "" {
+		args = append(args, "--model", metadata.Model)
 	}
 	if approve {
 		args = append(args, "--approve")
 	} else {
 		args = append(args, "--no-approve")
 	}
-	command := exec.Command(current.manager.cfg.AgentBinary, args...)
-	command.Dir = current.metadata.Cwd
+	commandName, commandArgs, sandbox, err := current.manager.sandboxCommand(metadata, args)
+	if err != nil {
+		return err
+	}
+	command := exec.Command(commandName, commandArgs...)
+	command.Dir = metadata.Cwd
 	command.Env = append(os.Environ(),
 		"HOBOT_CODE_BACKGROUND_TASK=1",
-		"HOBOT_CODE_BACKGROUND_TASK_ID="+current.metadata.ID,
+		"HOBOT_CODE_BACKGROUND_TASK_ID="+metadata.ID,
 		"HOBOT_CODE_PERMISSION_POLICY="+current.permissionPolicyPath(),
+		"HOBOT_CODE_SANDBOX_MODE="+metadata.SandboxMode,
+		"HOBOT_CODE_SANDBOX_BACKEND="+sandbox.Backend,
 	)
 	command.SysProcAttr = workerSysProcAttr()
 	stdin, err := command.StdinPipe()
@@ -893,15 +1403,26 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	if err != nil {
 		return err
 	}
+	current.mu.Lock()
+	if current.metadata.Status != statusStarting {
+		current.mu.Unlock()
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return errTaskLaunchCancelled
+	}
 	if err := command.Start(); err != nil {
+		current.mu.Unlock()
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
 		return err
 	}
-
-	current.mu.Lock()
 	current.command = command
 	current.stdin = stdin
 	current.workerDone = make(chan struct{})
 	current.metadata.PID = command.Process.Pid
+	current.metadata.Sandbox = sandbox
 	current.metadata.UpdatedAt = time.Now().UTC()
 	current.stopping = false
 	current.interrupted = false
@@ -909,6 +1430,16 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	if err := current.saveMetadata(); err != nil {
 		_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
 		_ = command.Wait()
+		current.mu.Lock()
+		done := current.workerDone
+		current.command = nil
+		current.stdin = nil
+		current.workerDone = nil
+		current.metadata.PID = 0
+		current.mu.Unlock()
+		if done != nil {
+			close(done)
+		}
 		return err
 	}
 
@@ -925,18 +1456,85 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	stateCommand, _ := json.Marshal(map[string]any{"id": "agentd-state", "type": "get_state"})
 	if err := current.writeWorkerCommand(stateCommand); err != nil {
 		_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
+		if current.snapshot().Status == statusStopping || current.snapshot().Status == statusStopped {
+			return errTaskLaunchCancelled
+		}
 		return err
 	}
 	if prompt != "" {
 		startCommand, _ := json.Marshal(map[string]any{
 			"id": "agentd-start", "type": "prompt", "message": prompt, "images": images,
 		})
-		if err := current.sendCommand(startCommand); err != nil {
+		if err := current.sendCommandWithPromptEvent(startCommand, !promptRecorded); err != nil {
 			_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
+			if current.snapshot().Status == statusStopping || current.snapshot().Status == statusStopped {
+				return errTaskLaunchCancelled
+			}
 			return err
 		}
 	}
 	return nil
+}
+
+func (current *task) taskSessionDirectory() string {
+	return filepath.Join(current.manager.cfg.SessionDir, current.metadata.ID)
+}
+
+func (current *task) prepareTaskSession(sessionFile string) (string, string, error) {
+	directory := current.taskSessionDirectory()
+	if err := ensurePrivateDir(directory); err != nil {
+		return "", "", err
+	}
+	if sessionFile == "" {
+		return directory, "", nil
+	}
+	source, err := validateSessionFile(current.manager.cfg.SessionDir, sessionFile)
+	if err != nil {
+		return "", "", err
+	}
+	relative, err := filepath.Rel(directory, source)
+	if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return directory, source, nil
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return "", "", err
+	}
+	defer input.Close()
+	temporary, err := os.CreateTemp(directory, ".resume-*.jsonl")
+	if err != nil {
+		return "", "", err
+	}
+	temporaryPath := temporary.Name()
+	keep := false
+	defer func() {
+		_ = temporary.Close()
+		if !keep {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return "", "", err
+	}
+	written, err := io.CopyN(temporary, input, int64(maxRequestBytes*32)+1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", "", err
+	}
+	if written > int64(maxRequestBytes*32) {
+		return "", "", fmt.Errorf("session exceeds the private migration limit")
+	}
+	if err := temporary.Sync(); err != nil {
+		return "", "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", "", err
+	}
+	target := filepath.Join(directory, "resume-"+current.metadata.ID+".jsonl")
+	if err := os.Rename(temporaryPath, target); err != nil {
+		return "", "", err
+	}
+	keep = true
+	return directory, target, nil
 }
 
 func (current *task) consumeStdout(reader io.Reader) {
@@ -966,7 +1564,35 @@ func (current *task) consumeStderr(reader io.Reader) {
 		return
 	}
 	defer file.Close()
-	_, _ = io.Copy(&boundedLogWriter{writer: file, remaining: 1024 * 1024}, reader)
+	_, _ = io.Copy(&taskStderrWriter{task: current, file: file}, reader)
+}
+
+type taskStderrWriter struct {
+	task *task
+	file *os.File
+}
+
+func (writer *taskStderrWriter) Write(value []byte) (int, error) {
+	originalLength := len(value)
+	writer.task.stderrMu.Lock()
+	defer writer.task.stderrMu.Unlock()
+	remaining := maximumWorkerStderrBytes - writer.task.stderrBytes
+	if remaining <= 0 {
+		return originalLength, nil
+	}
+	writeLength := int64(len(value))
+	if writeLength > remaining {
+		writeLength = remaining
+	}
+	written, err := writer.file.Write(value[:writeLength])
+	writer.task.stderrBytes += int64(written)
+	if err != nil {
+		return written, err
+	}
+	if written != int(writeLength) {
+		return written, io.ErrShortWrite
+	}
+	return originalLength, nil
 }
 
 type boundedLogWriter struct {
@@ -999,6 +1625,7 @@ func (current *task) wait() {
 	}
 	if workerDone != nil {
 		defer close(workerDone)
+		defer func() { go current.manager.scheduleQueued() }()
 	}
 	err := command.Wait()
 	current.streamWG.Wait()
@@ -1017,13 +1644,16 @@ func (current *task) wait() {
 	} else if err != nil {
 		current.setTerminal(statusFailed, err.Error())
 	} else {
-		current.setTerminal(statusStopped, "")
+		current.setTerminal(statusFailed, "worker exited before the task completed")
 	}
 }
 
 func (current *task) failWorker(message string) {
 	current.mu.Lock()
 	pid := current.metadata.PID
+	if pid > 0 {
+		current.terminalCaptureUnsafe = true
+	}
 	current.mu.Unlock()
 	current.setTerminal(statusFailed, message)
 	if pid > 0 {
@@ -1033,12 +1663,14 @@ func (current *task) failWorker(message string) {
 
 func (current *task) recordEvent(raw json.RawMessage) {
 	var header struct {
-		Type    string `json:"type"`
-		Method  string `json:"method"`
-		Command string `json:"command"`
-		Success bool   `json:"success"`
-		ID      string `json:"id"`
-		Data    struct {
+		Type       string `json:"type"`
+		Method     string `json:"method"`
+		Command    string `json:"command"`
+		Success    bool   `json:"success"`
+		IsError    bool   `json:"isError"`
+		ID         string `json:"id"`
+		ToolCallID string `json:"toolCallId"`
+		Data       struct {
 			SessionFile string `json:"sessionFile"`
 			SessionID   string `json:"sessionId"`
 			Provider    string `json:"provider"`
@@ -1050,6 +1682,20 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(raw, &header)
+	turnBoundary := header.Type == "agent_settled" || header.Type == "hobot_task_failed" || header.Type == "hobot_task_interrupted" || header.Type == "hobot_task_stopped"
+	var boundaryWorkspace *turnWorkspaceEvidence
+	if turnBoundary {
+		current.turnCaptureMu.Lock()
+		defer current.turnCaptureMu.Unlock()
+		current.mu.Lock()
+		cwd := current.metadata.Cwd
+		unsafe := current.terminalCaptureUnsafe
+		current.terminalCaptureUnsafe = false
+		current.mu.Unlock()
+		if !unsafe {
+			boundaryWorkspace = captureTurnWorkspaceEvidence(cwd)
+		}
+	}
 
 	current.mu.Lock()
 	current.metadata.LastSequence++
@@ -1060,10 +1706,27 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		if acceptWorkerTransition {
 			current.metadata.Status = statusRunning
 		}
+		if current.currentRunningTurnLocked() == 0 {
+			beginTurnEvidenceLocked(&current.metadata, nil)
+			current.openToolCalls = nil
+			current.openAnonymousTools = 0
+			fallback := &current.metadata.TurnEvidence[len(current.metadata.TurnEvidence)-1]
+			fallback.StartSequence = current.metadata.LastSequence
+			fallback.Evidence = "partial"
+		}
 	case "agent_settled":
 		if acceptWorkerTransition {
 			current.metadata.Status = statusIdle
 		}
+		finalizeTurnEvidenceLocked(&current.metadata, "completed", boundaryWorkspace, current.metadata.LastSequence)
+	case "tool_execution_start", "tool_execution_end":
+		current.updateTurnToolEvidenceLocked(header.Type, header.ToolCallID, header.IsError)
+	case "hobot_task_failed":
+		finalizeTurnEvidenceLocked(&current.metadata, "failed", boundaryWorkspace, current.metadata.LastSequence)
+	case "hobot_task_interrupted":
+		finalizeTurnEvidenceLocked(&current.metadata, "interrupted", boundaryWorkspace, current.metadata.LastSequence)
+	case "hobot_task_stopped":
+		finalizeTurnEvidenceLocked(&current.metadata, "stopped", boundaryWorkspace, current.metadata.LastSequence)
 	case "extension_ui_request":
 		if approval, ok := approvalFromEvent(raw); ok && acceptWorkerTransition {
 			current.metadata.Status = statusWaiting
@@ -1124,8 +1787,11 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		}
 	}
 	current.mu.Unlock()
-	if sessionBound || logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "extension_ui_request" || header.Type == "response" {
+	if sessionBound || logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "hobot_task_queued" || header.Type == "hobot_task_dequeued" || header.Type == "hobot_task_queue_cancelled" || header.Type == "hobot_task_failed" || header.Type == "hobot_task_interrupted" || header.Type == "hobot_task_stopped" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "tool_execution_start" || header.Type == "tool_execution_end" || header.Type == "extension_ui_request" || header.Type == "response" {
 		_ = current.saveMetadata()
+	}
+	if header.Type == "agent_settled" {
+		go current.manager.scheduleQueued()
 	}
 }
 
@@ -1173,6 +1839,10 @@ func (current *task) upsertApprovalLocked(approval pendingApproval) {
 }
 
 func (current *task) sendCommand(command json.RawMessage) error {
+	return current.sendCommandWithPromptEvent(command, true)
+}
+
+func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordPrompt bool) error {
 	if len(command) == 0 || len(command) > maxRequestBytes || !json.Valid(command) {
 		return fmt.Errorf("worker command must be valid JSON no larger than %d bytes", maxRequestBytes)
 	}
@@ -1221,7 +1891,10 @@ func (current *task) sendCommand(command json.RawMessage) error {
 	default:
 		return fmt.Errorf("unsupported worker command: %s", header.Type)
 	}
+	promptCwd := ""
 	if header.Type == "prompt" {
+		current.turnCaptureMu.Lock()
+		defer current.turnCaptureMu.Unlock()
 		current.mu.Lock()
 		if current.metadata.Status != statusStarting && current.metadata.Status != statusIdle {
 			current.mu.Unlock()
@@ -1229,14 +1902,23 @@ func (current *task) sendCommand(command json.RawMessage) error {
 		}
 		current.metadata.Status = statusRunning
 		current.metadata.UpdatedAt = time.Now().UTC()
+		beginTurnEvidenceLocked(&current.metadata, nil)
+		current.openToolCalls = nil
+		current.openAnonymousTools = 0
+		current.terminalCaptureUnsafe = false
+		turn := current.currentRunningTurnLocked()
+		promptCwd = current.metadata.Cwd
 		current.mu.Unlock()
 		_ = current.saveMetadata()
-		attachments := make([]map[string]string, 0, len(header.Images))
-		for _, image := range header.Images {
-			attachments = append(attachments, map[string]string{"name": image.Name, "mimeType": image.MimeType})
+		if recordPrompt {
+			attachments := make([]map[string]string, 0, len(header.Images))
+			for _, image := range header.Images {
+				attachments = append(attachments, map[string]string{"name": image.Name, "mimeType": image.MimeType})
+			}
+			promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message, "attachments": attachments})
+			current.recordEvent(promptEvent)
 		}
-		promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message, "attachments": attachments})
-		current.recordEvent(promptEvent)
+		current.applyTurnWorkspaceEvidence(turn, true, captureTurnWorkspaceEvidence(promptCwd))
 		workerCommand := map[string]any{}
 		if err := json.Unmarshal(command, &workerCommand); err != nil {
 			return fmt.Errorf("decode prompt command: %w", err)
@@ -1246,11 +1928,13 @@ func (current *task) sendCommand(command json.RawMessage) error {
 	}
 	if err := current.writeWorkerCommand(command); err != nil {
 		if header.Type == "prompt" {
+			after := captureTurnWorkspaceEvidence(promptCwd)
 			current.mu.Lock()
 			if current.metadata.Status == statusRunning {
 				current.metadata.Status = status
 				current.metadata.UpdatedAt = time.Now().UTC()
 			}
+			finalizeTurnEvidenceLocked(&current.metadata, "failed", after, current.metadata.LastSequence)
 			current.mu.Unlock()
 			_ = current.saveMetadata()
 		}
@@ -1310,6 +1994,19 @@ func (current *task) hasActiveApprovalLocked(id string) bool {
 
 func (current *task) stop() error {
 	current.mu.Lock()
+	if current.metadata.Status == statusQueued {
+		queuedAt := current.metadata.QueuedAt
+		operation := current.metadata.QueueOperation
+		current.pendingLaunch = nil
+		current.metadata.QueuedAt = nil
+		current.metadata.QueueOperation = ""
+		current.mu.Unlock()
+		_ = os.Remove(current.queuePath())
+		raw, _ := json.Marshal(map[string]any{"type": "hobot_task_queue_cancelled", "queuedAt": queuedAt, "operation": operation})
+		current.recordEvent(raw)
+		current.setTerminal(statusStopped, "")
+		return nil
+	}
 	pid := current.metadata.PID
 	workerDone := current.workerDone
 	if !isLiveStatus(current.metadata.Status) && pid <= 0 {
@@ -1396,24 +2093,133 @@ func terminateProcessGroup(pid int, signal syscall.Signal) error {
 
 func (current *task) setTerminal(status taskStatus, message string) {
 	current.mu.Lock()
-	if current.metadata.Status == statusStopped && status != statusStopped {
+	if isTerminalStatus(current.metadata.Status) {
 		current.mu.Unlock()
 		return
 	}
 	current.metadata.Status = status
 	current.metadata.UpdatedAt = time.Now().UTC()
-	if message != "" {
-		current.metadata.LastError = message
+	removeQueuedLaunch := false
+	if isTerminalStatus(status) {
+		removeQueuedLaunch = current.pendingLaunch != nil || current.metadata.QueuedAt != nil
+		current.pendingLaunch = nil
+		current.metadata.QueuedAt = nil
+		current.metadata.QueueOperation = ""
+	}
+	if status == statusStopped {
+		current.metadata.LastError = ""
+		current.metadata.Failure = nil
+	} else if status == statusFailed || status == statusInterrupted {
+		current.metadata.Failure = classifyTaskFailure(status, message, current.metadata.SessionFile != "")
+		current.metadata.LastError = current.metadata.Failure.Message
 	}
 	for index := range current.metadata.Approvals {
 		current.metadata.Approvals[index].Active = false
 	}
+	failure := current.metadata.Failure
+	current.mu.Unlock()
+	if status == statusFailed || status == statusInterrupted {
+		current.appendFailureDetail(message)
+	}
+	event := map[string]any{"type": "hobot_task_" + string(status)}
+	if failure != nil {
+		event["code"] = failure.Code
+		event["message"] = failure.Message
+		event["recovery"] = failure.Recovery
+	}
+	raw, _ := json.Marshal(event)
+	current.recordEvent(raw)
+	current.mu.Lock()
 	for id, subscriber := range current.subscribers {
 		close(subscriber)
 		delete(current.subscribers, id)
 	}
 	current.mu.Unlock()
-	_ = current.saveMetadata()
+	if removeQueuedLaunch {
+		_ = os.Remove(current.queuePath())
+	}
+}
+
+func (current *task) appendFailureDetail(detail string) {
+	detail = strings.TrimSpace(detail)
+	if detail == "" || current.stderr == "" {
+		return
+	}
+	detail = boundedValue(detail, maximumAssistantErrorText)
+	prefix := "[agentd failure " + time.Now().UTC().Format(time.RFC3339) + "] "
+	current.stderrMu.Lock()
+	defer current.stderrMu.Unlock()
+	remaining := maximumWorkerStderrBytes - current.stderrBytes
+	maximumDetail := remaining - int64(len(prefix)+1)
+	if maximumDetail <= 0 {
+		return
+	}
+	if int64(len(detail)) > maximumDetail {
+		detail = boundedValue(detail, int(maximumDetail))
+	}
+	file, err := os.OpenFile(current.stderr, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return
+	}
+	written, _ := fmt.Fprintf(file, "%s%s\n", prefix, detail)
+	current.stderrBytes += int64(written)
+	_ = file.Close()
+}
+
+func classifyTaskFailure(status taskStatus, detail string, hasSession bool) *taskFailure {
+	normalized := strings.ToLower(detail)
+	switch {
+	case strings.Contains(normalized, "queued task handoff") || strings.Contains(normalized, "duplicate execution"):
+		return taskFailureFor("handoff-uncertain", hasSession)
+	case status == statusInterrupted:
+		return taskFailureFor("service-restarted", hasSession)
+	case strings.Contains(normalized, "validate task workspace") || strings.Contains(normalized, "isolated workspace"):
+		return taskFailureFor("workspace-unavailable", hasSession)
+	case strings.Contains(normalized, "persist") || strings.Contains(normalized, "metadata") || strings.Contains(normalized, "queue"):
+		return taskFailureFor("state-persistence-failed", hasSession)
+	case strings.Contains(normalized, "unsupported model") || strings.Contains(normalized, "authentication") || strings.Contains(normalized, "unauthorized") || strings.Contains(normalized, "forbidden") || strings.Contains(normalized, "gateway") || strings.Contains(normalized, "message_stop") || strings.Contains(normalized, "stream ended") || strings.Contains(normalized, "http 400") || strings.Contains(normalized, "http 401") || strings.Contains(normalized, "http 403") || strings.Contains(normalized, "http 429") || strings.Contains(normalized, "invalidparameter") || strings.Contains(normalized, "rate limit"):
+		return taskFailureFor("model-unavailable", hasSession)
+	case strings.Contains(normalized, "invalid json") || strings.Contains(normalized, "event stream") || strings.Contains(normalized, "worker emitted"):
+		return taskFailureFor("worker-protocol-failed", hasSession)
+	default:
+		return taskFailureFor("worker-exited", hasSession)
+	}
+}
+
+func normalizeTaskFailure(status taskStatus, existing *taskFailure, legacyDetail string, hasSession bool) *taskFailure {
+	if existing != nil {
+		for _, code := range []string{"queue-recovery-failed", "handoff-uncertain", "service-restarted", "workspace-unavailable", "state-persistence-failed", "model-unavailable", "worker-protocol-failed", "worker-exited"} {
+			if existing.Code == code {
+				return taskFailureFor(code, hasSession)
+			}
+		}
+	}
+	return classifyTaskFailure(status, legacyDetail, hasSession)
+}
+
+func taskFailureFor(code string, hasSession bool) *taskFailure {
+	recovery := "restart"
+	if hasSession {
+		recovery = "resume"
+	}
+	switch code {
+	case "queue-recovery-failed":
+		return &taskFailure{Code: code, Message: "Queued work could not be recovered safely.", Recovery: "restart"}
+	case "handoff-uncertain":
+		return &taskFailure{Code: code, Message: "The board service restarted while this task was starting. Review the last output before continuing.", Recovery: recovery}
+	case "service-restarted":
+		return &taskFailure{Code: code, Message: "This task was interrupted when the board service stopped or restarted.", Recovery: recovery}
+	case "workspace-unavailable":
+		return &taskFailure{Code: code, Message: "This task's isolated workspace is unavailable or no longer trusted.", Recovery: "diagnose"}
+	case "state-persistence-failed":
+		return &taskFailure{Code: code, Message: "Hobot Code could not save this task state safely.", Recovery: "diagnose"}
+	case "model-unavailable":
+		return &taskFailure{Code: code, Message: "The selected model route could not complete this task.", Recovery: "check-model"}
+	case "worker-protocol-failed":
+		return &taskFailure{Code: code, Message: "The Agent worker returned an invalid response.", Recovery: "diagnose"}
+	default:
+		return &taskFailure{Code: "worker-exited", Message: "The Agent worker exited before the task completed.", Recovery: recovery}
+	}
 }
 
 func (current *task) snapshot() taskMetadata {
@@ -1423,6 +2229,8 @@ func (current *task) snapshot() taskMetadata {
 }
 
 func (current *task) saveMetadata() error {
+	current.persistMu.Lock()
+	defer current.persistMu.Unlock()
 	current.mu.Lock()
 	metadata := cloneMetadata(current.metadata)
 	current.mu.Unlock()
@@ -1488,7 +2296,7 @@ func (manager *taskManager) setModel(params setTaskModelParams) (taskMetadata, e
 	}
 	current.mu.Lock()
 	status := current.metadata.Status
-	if isTerminalStatus(status) {
+	if isTerminalStatus(status) || status == statusQueued {
 		current.metadata.Model = model
 		current.metadata.UpdatedAt = time.Now().UTC()
 		metadata := current.metadata
@@ -1522,7 +2330,7 @@ func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (t
 		return taskMetadata{}, err
 	}
 	current.mu.Lock()
-	if current.metadata.Status != statusIdle && !isTerminalStatus(current.metadata.Status) {
+	if current.metadata.Status != statusIdle && current.metadata.Status != statusQueued && !isTerminalStatus(current.metadata.Status) {
 		current.mu.Unlock()
 		return taskMetadata{}, fmt.Errorf("task must be idle or stopped before changing permissions")
 	}
@@ -1547,6 +2355,45 @@ func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (t
 		if restoreErr := current.writePermissionPolicy(previousMode); restoreErr != nil {
 			return taskMetadata{}, fmt.Errorf("save task metadata: %w; restore permission policy: %v", err, restoreErr)
 		}
+		return taskMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func (manager *taskManager) setSandboxMode(params setTaskSandboxParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	if current.metadata.Status != statusQueued && !isTerminalStatus(current.metadata.Status) {
+		current.mu.Unlock()
+		return taskMetadata{}, fmt.Errorf("task must be queued or stopped before changing its OS sandbox")
+	}
+	permissionMode := current.metadata.PermissionMode
+	deployment := current.metadata.Deployment != nil
+	current.mu.Unlock()
+	mode, sandbox, err := manager.resolveTaskSandbox(params.Mode, permissionMode, deployment)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	previousMode := current.metadata.SandboxMode
+	previousStatus := current.metadata.Sandbox
+	previousUpdatedAt := current.metadata.UpdatedAt
+	current.metadata.SandboxMode = mode
+	current.metadata.Sandbox = sandbox
+	current.metadata.UpdatedAt = time.Now().UTC()
+	metadata := current.metadata
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		current.mu.Lock()
+		current.metadata.SandboxMode = previousMode
+		current.metadata.Sandbox = previousStatus
+		current.metadata.UpdatedAt = previousUpdatedAt
+		current.mu.Unlock()
 		return taskMetadata{}, err
 	}
 	return metadata, nil
@@ -1585,6 +2432,25 @@ func cloneMetadata(metadata taskMetadata) taskMetadata {
 	if metadata.ArchivedAt != nil {
 		value := *metadata.ArchivedAt
 		copy.ArchivedAt = &value
+	}
+	copy.TurnEvidence = append([]taskTurnEvidence(nil), metadata.TurnEvidence...)
+	for index := range copy.TurnEvidence {
+		if metadata.TurnEvidence[index].EndedAt != nil {
+			value := *metadata.TurnEvidence[index].EndedAt
+			copy.TurnEvidence[index].EndedAt = &value
+		}
+		if metadata.TurnEvidence[index].WorkspaceBefore != nil {
+			value := *metadata.TurnEvidence[index].WorkspaceBefore
+			copy.TurnEvidence[index].WorkspaceBefore = &value
+		}
+		if metadata.TurnEvidence[index].WorkspaceAfter != nil {
+			value := *metadata.TurnEvidence[index].WorkspaceAfter
+			copy.TurnEvidence[index].WorkspaceAfter = &value
+		}
+		if metadata.TurnEvidence[index].WorkspaceChanged != nil {
+			value := *metadata.TurnEvidence[index].WorkspaceChanged
+			copy.TurnEvidence[index].WorkspaceChanged = &value
+		}
 	}
 	return copy
 }
@@ -1708,6 +2574,7 @@ func (manager *taskManager) delete(id string) error {
 		manager.mu.Unlock()
 		return err
 	}
+	_ = os.RemoveAll(filepath.Join(manager.cfg.SessionDir, id))
 	return nil
 }
 
@@ -1750,13 +2617,25 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	if err != nil {
 		return taskMetadata{}, err
 	}
-	if err := manager.ensureActiveSlot(); err != nil {
+	available, err := manager.claimSubmissionSlot()
+	if err != nil {
 		return taskMetadata{}, err
+	}
+	if !available {
+		current.mu.Lock()
+		current.metadata.ResumeCount++
+		current.mu.Unlock()
+		queued := queuedLaunch{Operation: "resume", Prompt: params.Prompt, Images: params.Images, Approve: metadata.Approved, SessionFile: sessionFile, QueuedAt: time.Now().UTC()}
+		if err := current.queue(queued); err != nil {
+			return taskMetadata{}, err
+		}
+		return current.snapshot(), nil
 	}
 	current.mu.Lock()
 	current.metadata.Status = statusStarting
 	current.metadata.PID = 0
 	current.metadata.LastError = ""
+	current.metadata.Failure = nil
 	current.metadata.AwaitingPrompt = false
 	current.metadata.ResumeCount++
 	for index := range current.metadata.Approvals {
@@ -1765,9 +2644,14 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 	current.metadata.UpdatedAt = time.Now().UTC()
 	current.mu.Unlock()
 	if err := current.saveMetadata(); err != nil {
-		return taskMetadata{}, err
+		current.setTerminal(statusFailed, "persist resumed task: "+err.Error())
+		return current.snapshot(), err
 	}
-	if err := current.launch(params.Prompt, params.Images, metadata.Approved, sessionFile); err != nil {
+	if err := current.launch(params.Prompt, params.Images, metadata.Approved, sessionFile, false); err != nil {
+		if errors.Is(err, errTaskLaunchCancelled) {
+			current.setTerminal(statusStopped, "")
+			return current.snapshot(), nil
+		}
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
@@ -1794,13 +2678,25 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	if metadata.ArchivedAt != nil {
 		return taskMetadata{}, fmt.Errorf("unarchive the task before restarting it")
 	}
-	if err := manager.ensureActiveSlot(); err != nil {
+	available, err := manager.claimSubmissionSlot()
+	if err != nil {
 		return taskMetadata{}, err
+	}
+	if !available {
+		current.mu.Lock()
+		current.metadata.RestartCount++
+		current.mu.Unlock()
+		queued := queuedLaunch{Operation: "restart", Prompt: params.Prompt, Images: params.Images, Approve: metadata.Approved, QueuedAt: time.Now().UTC()}
+		if err := current.queue(queued); err != nil {
+			return taskMetadata{}, err
+		}
+		return current.snapshot(), nil
 	}
 	current.mu.Lock()
 	current.metadata.Status = statusStarting
 	current.metadata.PID = 0
 	current.metadata.LastError = ""
+	current.metadata.Failure = nil
 	current.metadata.SessionFile = ""
 	current.metadata.SessionID = ""
 	current.metadata.AwaitingPrompt = false
@@ -1813,9 +2709,14 @@ func (manager *taskManager) restart(params resumeTaskParams) (taskMetadata, erro
 	current.metadata.UpdatedAt = time.Now().UTC()
 	current.mu.Unlock()
 	if err := current.saveMetadata(); err != nil {
-		return taskMetadata{}, err
+		current.setTerminal(statusFailed, "persist restarted task: "+err.Error())
+		return current.snapshot(), err
 	}
-	if err := current.launch(params.Prompt, params.Images, metadata.Approved, ""); err != nil {
+	if err := current.launch(params.Prompt, params.Images, metadata.Approved, "", false); err != nil {
+		if errors.Is(err, errTaskLaunchCancelled) {
+			current.setTerminal(statusStopped, "")
+			return current.snapshot(), nil
+		}
 		current.setTerminal(statusFailed, err.Error())
 		return current.snapshot(), err
 	}
@@ -2048,7 +2949,7 @@ func (manager *taskManager) interruptAll() {
 	for _, current := range manager.tasks {
 		current.mu.Lock()
 		pid := current.metadata.PID
-		live := isLiveStatus(current.metadata.Status)
+		live := occupiesActiveSlot(current.metadata.Status)
 		current.mu.Unlock()
 		tasks = append(tasks, struct {
 			current *task
@@ -2061,18 +2962,16 @@ func (manager *taskManager) interruptAll() {
 		active := &tasks[index]
 		current := active.current
 		current.mu.Lock()
-		live := isLiveStatus(current.metadata.Status)
+		live := occupiesActiveSlot(current.metadata.Status)
 		active.live = live
 		if live {
 			current.interrupted = true
-			current.metadata.Status = statusInterrupted
-			current.metadata.LastError = "agentd stopped; worker was not replayed"
 			current.metadata.PID = 0
-			current.metadata.UpdatedAt = time.Now().UTC()
+			current.terminalCaptureUnsafe = true
 		}
 		current.mu.Unlock()
 		if live {
-			_ = current.saveMetadata()
+			current.setTerminal(statusInterrupted, "agentd stopped; worker was not replayed")
 			_ = terminateProcessGroup(active.pid, syscall.SIGTERM)
 		}
 	}

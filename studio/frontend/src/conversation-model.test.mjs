@@ -32,6 +32,17 @@ test('conversation groups thinking, tools, and text into one assistant turn', ()
   assert.equal(result[1].completed, true);
 });
 
+test('schema four tool previews do not require raw provider fields', () => {
+  const result = buildConversation([
+    event(1, 'user.message', {text: 'Run'}),
+    event(2, 'tool.started', {toolCallId: 'one', toolName: 'bash', inputPreview: 'pwd'}),
+    event(3, 'tool.completed', {toolCallId: 'one', toolName: 'bash', outputPreview: '/root', isError: false}),
+    event(4, 'task.idle'),
+  ]);
+  assert.equal(result[1].tools[0].input, 'pwd');
+  assert.equal(result[1].tools[0].output, '/root');
+});
+
 test('conversation separates turns at each persisted user message', () => {
   const result = buildConversation([
     event(1, 'assistant.text.delta', {delta: 'Legacy response'}),

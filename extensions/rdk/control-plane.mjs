@@ -874,7 +874,7 @@ export async function fingerprintWorkspace(cwd) {
       const path = join(directory, entry.name);
       const relativePath = join(relativeDirectory, entry.name);
       const info = await lstat(path);
-      hash.update(`${relativePath}\0${info.mode}\0${info.size}\0${info.mtimeMs}\0`);
+      hash.update(`${relativePath}\0${info.mode}\0${info.size}\0${info.mtimeMs}\0${info.ctimeMs}\0`);
       if (entry.isSymbolicLink()) {
         files += 1;
         hash.update(await readlink(path));
@@ -889,4 +889,48 @@ export async function fingerprintWorkspace(cwd) {
 
   await visit(root);
   return { digest: hash.digest("hex"), files, hashedBytes };
+}
+
+export async function fingerprintWorkspaceMetadata(cwd, {maximumEntries = 50_000} = {}) {
+  if (!Number.isInteger(maximumEntries) || maximumEntries < 1 || maximumEntries > 50_000) {
+    throw new Error("workspace change check maximumEntries must be between 1 and 50000");
+  }
+  const root = resolve(cwd);
+  const hash = createHash("sha256");
+  let files = 0;
+  let entries = 0;
+  let truncated = false;
+
+  async function visit(directory, relativeDirectory = "") {
+    const directoryEntries = [];
+    const directoryHandle = await opendir(directory);
+    for await (const entry of directoryHandle) {
+      if (entries >= maximumEntries) {
+        truncated = true;
+        break;
+      }
+      entries += 1;
+      directoryEntries.push(entry);
+    }
+    directoryEntries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of directoryEntries) {
+      if (entry.isDirectory() && fingerprintExcludedDirectories.has(entry.name)) continue;
+      const path = join(directory, entry.name);
+      const relativePath = join(relativeDirectory, entry.name);
+      const info = await lstat(path);
+      hash.update(`${relativePath}\0${info.mode}\0${info.size}\0${info.mtimeMs}\0${info.ctimeMs}\0`);
+      if (entry.isSymbolicLink()) {
+        files += 1;
+        hash.update(await readlink(path));
+      } else if (entry.isDirectory()) {
+        await visit(path, relativePath);
+        if (truncated) break;
+      } else if (entry.isFile()) {
+        files += 1;
+      }
+    }
+  }
+
+  await visit(root);
+  return {digest: hash.digest("hex"), files, entries, truncated};
 }

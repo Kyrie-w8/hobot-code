@@ -22,6 +22,12 @@ func (client *Client) GetCapabilities(ctx context.Context) (Capabilities, error)
 	return capabilities, err
 }
 
+func (client *Client) Extensions(ctx context.Context) (ExtensionCatalog, error) {
+	var catalog ExtensionCatalog
+	err := client.Call(ctx, "extensions.list", struct{}{}, &catalog)
+	return catalog, err
+}
+
 func (client *Client) SystemSnapshot(ctx context.Context) (SystemSnapshot, error) {
 	var snapshot SystemSnapshot
 	err := client.Call(ctx, "system.snapshot", struct{}{}, &snapshot)
@@ -95,6 +101,12 @@ func (client *Client) SetPermissionMode(ctx context.Context, taskID, mode string
 	return task, err
 }
 
+func (client *Client) SetSandboxMode(ctx context.Context, taskID, mode string) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.sandbox", map[string]any{"taskId": taskID, "mode": mode}, &task)
+	return task, err
+}
+
 func (client *Client) RenameTask(ctx context.Context, taskID, name string) (Task, error) {
 	var task Task
 	err := client.Call(ctx, "task.rename", map[string]any{"taskId": taskID, "name": name}, &task)
@@ -113,6 +125,12 @@ func (client *Client) ModelHealth(ctx context.Context, model string, force bool)
 	return result, err
 }
 
+func (client *Client) ModelConformance(ctx context.Context, model string, force bool) (ModelConformance, error) {
+	var result ModelConformance
+	err := client.Call(ctx, "models.conformance", map[string]any{"model": model, "force": force}, &result)
+	return result, err
+}
+
 func (client *Client) BrowseWorkspace(ctx context.Context, path string) (WorkspaceListing, error) {
 	var listing WorkspaceListing
 	err := client.Call(ctx, "workspace.list", map[string]any{"path": path}, &listing)
@@ -123,6 +141,48 @@ func (client *Client) CreateWorkspace(ctx context.Context, parent, name string) 
 	var listing WorkspaceListing
 	err := client.Call(ctx, "workspace.create", map[string]any{"parent": parent, "name": name}, &listing)
 	return listing, err
+}
+
+func (client *Client) WorkspaceChanges(ctx context.Context, taskID string) (WorkspaceChanges, error) {
+	var changes WorkspaceChanges
+	err := client.Call(ctx, "workspace.changes", map[string]any{"taskId": taskID}, &changes)
+	return changes, err
+}
+
+func (client *Client) InspectWorkspaceIsolation(ctx context.Context, path string) (WorkspaceIsolation, error) {
+	var inspection WorkspaceIsolation
+	err := client.Call(ctx, "workspace.isolation", map[string]any{"path": path}, &inspection)
+	return inspection, err
+}
+
+func (client *Client) ManagedWorktrees(ctx context.Context) (ManagedWorktreeList, error) {
+	var worktrees ManagedWorktreeList
+	err := client.Call(ctx, "workspace.worktrees", struct{}{}, &worktrees)
+	return worktrees, err
+}
+
+func (client *Client) WorkspaceWrites(ctx context.Context) (WorkspaceWriteLeaseList, error) {
+	var leases WorkspaceWriteLeaseList
+	err := client.Call(ctx, "workspace.writes", struct{}{}, &leases)
+	return leases, err
+}
+
+func (client *Client) CleanupWorkspace(ctx context.Context, taskID string) (WorkspaceCleanupResult, error) {
+	var result WorkspaceCleanupResult
+	err := client.Call(ctx, "workspace.cleanup", map[string]any{"taskId": taskID}, &result)
+	return result, err
+}
+
+func (client *Client) InspectWorkspaceDelivery(ctx context.Context, taskID string) (WorkspaceDelivery, error) {
+	var result WorkspaceDelivery
+	err := client.Call(ctx, "workspace.delivery", map[string]any{"taskId": taskID}, &result)
+	return result, err
+}
+
+func (client *Client) ApplyWorkspace(ctx context.Context, taskID, expectedDigest string) (WorkspaceApplyResult, error) {
+	var result WorkspaceApplyResult
+	err := client.Call(ctx, "workspace.apply", map[string]any{"taskId": taskID, "expectedDigest": expectedDigest}, &result)
+	return result, err
 }
 
 func (client *Client) ForkTask(ctx context.Context, request ForkTaskRequest) (Task, error) {

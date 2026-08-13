@@ -18,7 +18,8 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 	current := &task{manager: manager, metadata: taskMetadata{
 		ID: "00112233445566778899aabb", Name: "secret project", Cwd: "/root/private/project",
 		Status: statusFailed, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
-		LastError: "HTTP 400 at /root/private/project using " + secret,
+		LastError: "The selected model route could not complete this task.",
+		Failure:   taskFailureFor("model-unavailable", false),
 	}, subscribers: map[uint64]chan taskEvent{}}
 	manager.tasks[current.metadata.ID] = current
 	leaseDir := cfg.StateRoot + "/hardware-leases/bpu"
@@ -30,6 +31,17 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 		"pid": os.Getpid(), "cwd": current.metadata.Cwd, "acquiredAt": time.Now().UTC(),
 	})
 	if err := os.WriteFile(leaseDir+"/owner.json", append(leaseOwner, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceLeaseDir := cfg.StateRoot + "/workspace-write-leases/lease-00112233-4455-6677-8899-aabbccddeeff"
+	if err := os.MkdirAll(workspaceLeaseDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspaceLeaseOwner, _ := json.Marshal(map[string]any{
+		"schemaVersion": 1, "leaseId": "00112233-4455-6677-8899-aabbccddeeff", "taskId": current.metadata.ID,
+		"pid": os.Getpid(), "cwd": current.metadata.Cwd, "acquiredAt": time.Now().UTC(),
+	})
+	if err := os.WriteFile(workspaceLeaseDir+"/owner.json", append(workspaceLeaseOwner, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	server := &daemonServer{cfg: cfg, manager: manager, started: time.Now().Add(-time.Minute)}
@@ -57,9 +69,16 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 	if document.System.Hostname != "[redacted]" || len(document.Tasks) != 1 || document.Tasks[0].ErrorFingerprint == "" {
 		t.Fatalf("unexpected sanitized document: %+v", document)
 	}
+	if document.Tasks[0].ErrorCategory != "model-unavailable" {
+		t.Fatalf("structured failure category was not preserved: %+v", document.Tasks[0])
+	}
 	if len(document.System.HardwareLeases) != 1 || document.System.HardwareLeases[0].Resource != "bpu" ||
 		document.System.HardwareLeases[0].TaskID != "" || document.System.HardwareLeases[0].PID != 0 || document.System.HardwareLeases[0].Cwd != "" {
 		t.Fatalf("support bundle leaked hardware lease identity: %+v", document.System.HardwareLeases)
+	}
+	if len(document.System.WorkspaceWrites) != 1 || document.System.WorkspaceWrites[0].TaskID != "" ||
+		document.System.WorkspaceWrites[0].PID != 0 || document.System.WorkspaceWrites[0].Cwd != "" {
+		t.Fatalf("support bundle leaked workspace write lease identity: %+v", document.System.WorkspaceWrites)
 	}
 }
 

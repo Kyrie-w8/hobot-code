@@ -74,7 +74,7 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 
 func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 	dir := t.TempDir()
-	current := &task{dir: dir}
+	current := &task{dir: dir, manager: &taskManager{cfg: config{SessionDir: filepath.Join(dir, "sessions")}}, metadata: taskMetadata{ID: "00112233445566778899aabb"}}
 	policy, err := permissionPolicyForMode("developer")
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +83,9 @@ func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 	policy.Rules = append([]permissionRule{{Tool: "bash", Action: "allow", TargetHash: strings.Repeat("a", 64)}}, policy.Rules...)
 	legacy, err := json.Marshal(policy)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateDir(current.permissionPolicyDirectory()); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(current.permissionPolicyPath(), legacy, 0o600); err != nil {
@@ -109,12 +112,13 @@ func TestSetPermissionModePersistsPrivateTaskPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := &task{
-		dir: dir,
+		dir:     dir,
+		manager: &taskManager{cfg: config{SessionDir: filepath.Join(root, "sessions")}},
 		metadata: taskMetadata{
 			ID: "00112233445566778899aabb", Name: "test", Status: statusIdle,
 		},
 	}
-	manager := &taskManager{tasks: map[string]*task{current.metadata.ID: current}}
+	manager := &taskManager{cfg: current.manager.cfg, tasks: map[string]*task{current.metadata.ID: current}}
 	current.manager = manager
 	if _, err := manager.setPermissionMode(setTaskPermissionParams{TaskID: current.metadata.ID, Mode: "developer"}); err != nil {
 		t.Fatal(err)

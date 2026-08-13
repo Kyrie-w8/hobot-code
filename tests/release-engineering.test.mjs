@@ -90,6 +90,7 @@ test("release metadata is derived from the repository version and pinned inputs"
   const release = await validateReleaseSource(repository);
   const stage = await mkdtemp(join(tmpdir(), "hobot-build-info-"));
   t.after(() => rm(stage, { recursive: true, force: true }));
+  await writeFile(join(stage, "agentd"), "agentd fixture\n");
   const info = await writeBuildInfo(repository, stage, {
     commit: "a".repeat(40),
     dirty: "0",
@@ -114,6 +115,10 @@ test("release metadata is derived from the repository version and pinned inputs"
   info.tools.fd = "0.0.0";
   await writeFile(join(stage, "BUILD_INFO.json"), `${JSON.stringify(info)}\n`);
   await assert.rejects(() => validatePackageMetadata(stage), /tool provenance does not match/);
+  info.tools.fd = release.tools.FD_VERSION;
+  await writeFile(join(stage, "BUILD_INFO.json"), `${JSON.stringify(info)}\n`);
+  await writeFile(join(stage, "agentd"), "mutated agentd fixture\n");
+  await assert.rejects(() => validatePackageMetadata(stage), /agentdSha256 does not match/);
 });
 
 test("release CLIs execute through symbolic directory paths", async (t) => {
@@ -196,6 +201,7 @@ test("release layout covers installer inputs and linked documentation", async (t
   for (const name of [
     "agentd-protocol.md",
     "architecture.md",
+    "board-reliability.md",
     "cache-efficiency.md",
     "compatibility.md",
     "configuration.md",

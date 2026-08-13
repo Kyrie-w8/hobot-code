@@ -8,6 +8,10 @@ test('background task transitions surface only actionable attention', () => {
   assert.equal(taskAttention('running', 'waiting'), 'Approval needed');
   assert.equal(taskAttention('running', 'failed'), 'Task failed');
   assert.equal(taskAttention('idle', 'running'), '');
+  assert.equal(taskAttention('queued', 'starting'), 'Queued task started');
+  assert.equal(taskAttention('queued', 'running'), 'Queued task started');
+  assert.equal(taskAttention('queued', 'idle'), 'Task completed');
+  assert.equal(taskAttention('queued', 'waiting'), 'Approval needed');
 });
 
 test('initial, unchanged, and selected task states stay quiet', () => {

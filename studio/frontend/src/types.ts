@@ -14,16 +14,22 @@ export type Capabilities = {
   capabilities: string[];
   maximumActiveTasks: number;
   maximumRetainedTasks: number;
+  sandbox?: {available: boolean; backend?: string; profiles?: string[]; filesystemWritesRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
 };
+
+export type ExtensionEntry = {id: string; name: string; version: string; kind: 'extension' | 'skill' | 'provider' | 'integration'; description: string; origin: string; scope: string; runtime: string; entrypoint: string; trust: string; defaultEnabled: boolean; required: boolean; provides: string[]; requires: string[]; permissions: string[]; targets: string[]};
+export type ExtensionCatalog = {schemaVersion: number; apiVersion: string; productVersion: string; hostVersion: string; entries: ExtensionEntry[]; policy: {inventoryOnly: boolean; executionAuthority: string; permissionAuthority: string; thirdPartyRuntime: string; hotReload: boolean}};
 
 export type DaemonInfo = {
   version: string;
   pid: number;
   startedAt: string;
   activeTasks: number;
+  queuedTasks?: number;
   maximumTasks: number;
   stateRoot: string;
   configurationCurrent?: boolean;
+  build?: {status: 'verified' | 'invalid' | 'unavailable'; reason?: string; commit?: string; dirty?: boolean; builtAt?: string; target?: string; binarySha256?: string; piVersion?: string; piCommit?: string};
 };
 
 export type CompatibilityIssue = {code: string; severity: 'warning' | 'error'; message: string; action?: string};
@@ -60,6 +66,7 @@ export type AcceleratorMemoryPoolInfo = {name: string; totalBytes: number; usedB
 export type AcceleratorProcessInfo = {pid: number; name: string; rssBytes: number; hbmemBytes: number};
 export type AcceleratorInfo = {available: boolean; source?: string; capturedAt?: string; ddrReadMiBps?: number; ddrWriteMiBps?: number; hbmemPools?: AcceleratorMemoryPoolInfo[]; processes?: AcceleratorProcessInfo[]};
 export type HardwareLease = {resource: string; taskId: string; pid: number; cwd?: string; acquiredAt: string};
+export type WorkspaceWriteLease = {taskId: string; pid: number; cwd: string; acquiredAt: string};
 export type SystemSnapshot = {
   capturedAt: string;
   board: string;
@@ -79,6 +86,7 @@ export type SystemSnapshot = {
   aiMemory?: AIMemoryInfo;
   accelerator?: AcceleratorInfo;
   hardwareLeases?: HardwareLease[];
+  workspaceWrites?: WorkspaceWriteLease[];
   rdkUtilities: Record<string, boolean>;
   uptimeSeconds: number;
 };
@@ -93,7 +101,7 @@ export type DeploymentMetric = {name: string; unit: string; value: number; thres
 export type DeploymentResourceSample = {capturedAt?: string; aiAllocationAvailable?: boolean; aiAllocationSource?: string; aiAllocatedBytes?: number; bpuUtilizationAvailable?: boolean; temperatureAvailable?: boolean; systemMemoryUsedBytes?: number; systemMemoryAvailableBytes?: number; ionAllocatedBytes?: number; bpuUtilizationPercent?: number; cpuLoadPercent?: number; maxTemperatureC?: number};
 export type DeploymentReport = {schema: number; outcome: string; boardId: string; artifactPath: string; artifactSha256?: string; summary: string; correctness: {passed: boolean; method?: string; dataset?: string; sampleCount?: number; referenceArtifact?: string; metrics?: DeploymentMetric[]}; performance: {warmupIterations?: number; iterations?: number; p50LatencyMs?: number; p95LatencyMs?: number; throughput?: number; endToEndP50Ms?: number; endToEndP95Ms?: number}; resources?: {sampleCount?: number; baseline?: DeploymentResourceSample; peak?: DeploymentResourceSample; final?: DeploymentResourceSample; limits?: {maxTemperatureC?: number; minSystemMemoryAvailableBytes?: number}}};
 export type DeploymentStatus = {taskId: string; phase: string; deployment: DeploymentRecord; report?: DeploymentReport; issue?: string};
-export type StartDeploymentRequest = {cwd: string; artifactPath: string; goal: 'deploy-and-validate' | 'benchmark'; name?: string; model?: string; permissionMode?: string; profile?: string};
+export type StartDeploymentRequest = {cwd: string; artifactPath: string; goal: 'deploy-and-validate' | 'benchmark'; name?: string; model?: string; permissionMode?: string; sandboxMode?: 'system' | 'off'; profile?: string};
 
 export type Approval = {
   id: string;
@@ -106,16 +114,41 @@ export type Approval = {
   active: boolean;
 };
 
+export type TurnWorkspaceEvidence = {status: 'captured' | 'partial' | 'not-repository' | 'unavailable'; capturedAt: string; stateDigest?: string; dirty?: boolean; changedFiles?: number; truncated?: boolean};
+export type TaskTurnEvidence = {
+  turn: number;
+  status: 'running' | 'completed' | 'interrupted' | 'failed' | 'stopped';
+  evidence: 'in-progress' | 'complete' | 'partial';
+  startedAt: string;
+  endedAt?: string;
+  startSequence: number;
+  endSequence?: number;
+  toolsStarted: number;
+  toolsCompleted: number;
+  toolsFailed: number;
+  openTools: number;
+  workspaceBefore?: TurnWorkspaceEvidence;
+  workspaceAfter?: TurnWorkspaceEvidence;
+  workspaceChanged?: boolean;
+  recommendedAction: 'none' | 'review' | 'review-before-resume' | 'review-before-restart';
+};
+
 export type Task = {
   id: string;
   name: string;
-  cwd: string;
+	cwd: string;
+	projectCwd?: string;
+	workspaceMode?: 'shared' | 'worktree';
+	workspaceId?: string;
+	worktreePath?: string;
+	worktreeBase?: string;
   status: string;
   pid?: number;
   createdAt: string;
   updatedAt: string;
   lastSequence: number;
   lastError?: string;
+  failure?: {code: string; message: string; recovery: 'resume' | 'restart' | 'check-model' | 'diagnose' | 'none'};
   logTruncated?: boolean;
   sessionFile?: string;
   sessionId?: string;
@@ -124,19 +157,25 @@ export type Task = {
   restartCount?: number;
   model?: string;
   permissionMode?: 'review' | 'ask' | 'developer';
+  sandboxMode?: 'review' | 'workspace' | 'system' | 'off';
+  sandbox?: {requested: string; effective: string; backend: string; filesystemRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
   parentTaskId?: string;
   forkSequence?: number;
   branchKind?: 'side' | 'edit';
   awaitingPrompt?: boolean;
+  queuedAt?: string;
+  queueOperation?: 'start' | 'fork' | 'resume' | 'restart';
   archivedAt?: string;
   pendingApprovals?: Approval[];
   deployment?: DeploymentRecord;
+  turnEvidence?: TaskTurnEvidence[];
 };
 
 export type NormalizedEvent = {
   schema: number;
   type: string;
   data?: Record<string, unknown>;
+  item?: {id?: string; type: string; status: string};
 };
 
 export type TaskEvent = {
@@ -174,8 +213,27 @@ export type ModelHealth = {
   attempts: number;
   cached: boolean;
 };
+
+export type ModelConformanceCheck = {name: string; status: 'passed' | 'degraded' | 'failed' | 'blocked' | 'skipped'; category: string; message: string; latencyMs?: number};
+export type ModelConformance = {
+  provider: string;
+  model: string;
+  status: 'verified' | 'compatible' | 'failed';
+  message: string;
+  checkedAt: string;
+  expiresAt: string;
+  durationMs?: number;
+  attempts: number;
+  cached: boolean;
+  checks: ModelConformanceCheck[];
+};
 export type ImageContent = {type: 'image'; data: string; mimeType: string; name?: string};
 export type AttachmentSummary = {name?: string; mimeType: string};
 export type WorkspaceEntry = {name: string; path: string};
 export type WorkspaceListing = {path: string; parent?: string; home: string; directories: WorkspaceEntry[]};
-export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string};
+export type WorkspaceChangeFile = {path: string; originalPath?: string; status: string; kind: string; staged?: boolean; unstaged?: boolean; untracked?: boolean; conflict?: boolean};
+export type WorkspaceChanges = {capturedAt: string; available: boolean; repository: boolean; repositoryRoot?: string; scope?: string; head?: string; files: WorkspaceChangeFile[]; patch?: string; filesTruncated?: boolean; patchTruncated?: boolean};
+export type WorkspaceIsolation = {capturedAt: string; available: boolean; repository: boolean; eligible: boolean; recommendedMode: 'shared' | 'worktree'; repositoryRoot?: string; scope?: string; head?: string; clean: boolean; reason: string};
+export type WorkspaceDelivery = {taskId: string; ready: boolean; reason: string; patchBytes?: number; digest?: string; alreadyApplied?: boolean};
+export type WorkspaceApplyResult = {taskId: string; applied: boolean; staged: boolean; patchBytes: number; digest: string; appliedAt: string};
+export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string; sandboxMode?: 'review' | 'workspace' | 'system' | 'off'};

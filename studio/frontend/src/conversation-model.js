@@ -121,7 +121,7 @@ function updateTool(turn, event, type, data) {
       isError: false,
       startedAt: event.time,
       endedAt: event.time,
-      input: eventPreview(event.event, ['input', 'args', 'arguments', 'params']),
+      input: String(data.inputPreview ?? eventPreview(event.event, ['input', 'args', 'arguments', 'params'])),
       output: '',
     };
     turn.tools.push(tool);
@@ -130,7 +130,7 @@ function updateTool(turn, event, type, data) {
   if (type === 'tool.completed') {
     tool.status = 'completed';
     tool.isError = Boolean(data.isError);
-    tool.output = eventPreview(event.event, ['result', 'output', 'error']);
+    tool.output = String(data.outputPreview ?? eventPreview(event.event, ['result', 'output', 'error']));
   }
 }
 

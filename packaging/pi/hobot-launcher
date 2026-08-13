@@ -577,6 +577,7 @@ hobot_notification_config=${HOBOT_CODE_NOTIFICATION_CONFIG:-$hobot_agent_dir/not
 hobot_lsp_config=${HOBOT_CODE_LSP_CONFIG:-$hobot_agent_dir/lsp.json}
 hobot_rdk_knowledge_dir=${HOBOT_CODE_RDK_KNOWLEDGE_DIR:-/usr/local/lib/hobot-code/knowledge}
 hobot_rdk_expert_prompt=${HOBOT_CODE_RDK_EXPERT_PROMPT:-/usr/local/lib/hobot-code/prompts/rdk-expert.md}
+hobot_extension_catalog=${HOBOT_CODE_EXTENSION_CATALOG:-/usr/local/lib/hobot-code/extensions/catalog.json}
 require_absolute_path HOBOT_CODING_AGENT_DIR "$hobot_agent_dir"
 require_absolute_path HOBOT_CODE_STATE_DIR "$hobot_state_dir"
 require_absolute_path HOBOT_CODING_AGENT_SESSION_DIR "$hobot_session_dir"
@@ -591,6 +592,7 @@ require_absolute_path HOBOT_CODE_NOTIFICATION_CONFIG "$hobot_notification_config
 require_absolute_path HOBOT_CODE_LSP_CONFIG "$hobot_lsp_config"
 require_absolute_path HOBOT_CODE_RDK_KNOWLEDGE_DIR "$hobot_rdk_knowledge_dir"
 require_absolute_path HOBOT_CODE_RDK_EXPERT_PROMPT "$hobot_rdk_expert_prompt"
+require_absolute_path HOBOT_CODE_EXTENSION_CATALOG "$hobot_extension_catalog"
 
 for hobot_path in "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"; do
   reject_symlink "$hobot_path"
@@ -625,6 +627,7 @@ export HOBOT_CODE_NOTIFICATION_CONFIG="$hobot_notification_config"
 export HOBOT_CODE_LSP_CONFIG="$hobot_lsp_config"
 export HOBOT_CODE_RDK_KNOWLEDGE_DIR="$hobot_rdk_knowledge_dir"
 export HOBOT_CODE_RDK_EXPERT_PROMPT="$hobot_rdk_expert_prompt"
+export HOBOT_CODE_EXTENSION_CATALOG="$hobot_extension_catalog"
 if [ -r /usr/local/lib/hobot-code/VERSION ]; then
   HOBOT_CODE_VERSION=$(sed -n '1p' /usr/local/lib/hobot-code/VERSION)
   export HOBOT_CODE_VERSION
@@ -634,7 +637,7 @@ export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 
 umask "$original_umask"
 case "${1:-}" in
-  daemon|deploy|task|bridge|diagnose|model) exec /usr/local/lib/hobot-code/agentd "$@" ;;
+  daemon|deploy|task|bridge|diagnose|extensions|model|workspace) exec /usr/local/lib/hobot-code/agentd "$@" ;;
 esac
 if [ "${1:-}" = persistent ]; then
   handle_persistent_command "$@"

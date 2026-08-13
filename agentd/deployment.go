@@ -52,6 +52,7 @@ type deploymentStartParams struct {
 	Name           string `json:"name,omitempty"`
 	Model          string `json:"model,omitempty"`
 	PermissionMode string `json:"permissionMode,omitempty"`
+	SandboxMode    string `json:"sandboxMode,omitempty"`
 	Profile        string `json:"profile,omitempty"`
 }
 
@@ -499,7 +500,7 @@ func (manager *taskManager) startDeployment(params deploymentStartParams, snapsh
 	}
 	return manager.start(startTaskParams{
 		Name: params.Name, Cwd: cwd, Prompt: deploymentPrompt(*record), Model: params.Model,
-		PermissionMode: permissionMode, Deployment: record,
+		PermissionMode: permissionMode, SandboxMode: params.SandboxMode, Deployment: record,
 	})
 }
 
@@ -512,7 +513,11 @@ func (manager *taskManager) deploymentStatus(taskID string) (deploymentStatus, e
 	if metadata.Deployment == nil {
 		return deploymentStatus{}, fmt.Errorf("task is not a model deployment")
 	}
-	status := deploymentStatus{TaskID: taskID, Phase: "running", Deployment: *metadata.Deployment}
+	phase := "running"
+	if metadata.Status == statusQueued {
+		phase = "queued"
+	}
+	status := deploymentStatus{TaskID: taskID, Phase: phase, Deployment: *metadata.Deployment}
 	content, reportErr := readDeploymentReport(metadata.Deployment.ReportPath, metadata.Deployment.Cwd, metadata.Deployment.Artifact.Path)
 	if reportErr == nil {
 		var report deploymentReport

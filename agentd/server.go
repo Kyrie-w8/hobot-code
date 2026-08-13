@@ -15,13 +15,17 @@ import (
 )
 
 type daemonServer struct {
-	cfg      config
-	manager  *taskManager
-	health   *modelHealthService
-	listener *net.UnixListener
-	started  time.Time
-	stopOnce sync.Once
-	stop     chan struct{}
+	cfg        config
+	manager    *taskManager
+	health     *modelHealthService
+	verify     *modelConformanceService
+	sandbox    sandboxCapability
+	build      buildIdentity
+	extensions extensionCatalog
+	listener   *net.UnixListener
+	started    time.Time
+	stopOnce   sync.Once
+	stop       chan struct{}
 }
 
 type daemonInfo struct {
@@ -30,12 +34,14 @@ type daemonInfo struct {
 	PID                  int            `json:"pid"`
 	StartedAt            time.Time      `json:"startedAt"`
 	ActiveTasks          int            `json:"activeTasks"`
+	QueuedTasks          int            `json:"queuedTasks"`
 	MaximumTasks         int            `json:"maximumTasks"`
 	SocketPath           string         `json:"socketPath"`
 	StateRoot            string         `json:"stateRoot"`
 	BackgroundTasks      bool           `json:"backgroundTasks"`
 	ConfigurationCurrent *bool          `json:"configurationCurrent,omitempty"`
 	Capabilities         capabilityInfo `json:"capabilities"`
+	Build                buildIdentity  `json:"build"`
 }
 
 func newDaemonServer(cfg config) (*daemonServer, error) {
@@ -43,8 +49,12 @@ func newDaemonServer(cfg config) (*daemonServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	extensions, err := loadExtensionCatalog(cfg.ExtensionCatalog, version)
+	if err != nil {
+		return nil, err
+	}
 	return &daemonServer{
-		cfg: cfg, manager: manager, health: newModelHealthService(), started: time.Now().UTC(), stop: make(chan struct{}),
+		cfg: cfg, manager: manager, health: newModelHealthService(), verify: newModelConformanceService(), sandbox: sandboxCapabilityStatus(cfg), build: currentBuildIdentity(), extensions: extensions, started: time.Now().UTC(), stop: make(chan struct{}),
 	}, nil
 }
 
@@ -52,9 +62,9 @@ func (server *daemonServer) info(clientFingerprint string) daemonInfo {
 	capabilities := server.capabilities()
 	info := daemonInfo{
 		Version: version, Protocol: protocolVersion, PID: os.Getpid(), StartedAt: server.started,
-		ActiveTasks: server.manager.activeCount(), MaximumTasks: server.cfg.MaxTasks,
+		ActiveTasks: server.manager.activeCount(), QueuedTasks: server.manager.queuedCount(), MaximumTasks: server.cfg.MaxTasks,
 		SocketPath: server.cfg.SocketPath, StateRoot: server.cfg.StateRoot, BackgroundTasks: true,
-		Capabilities: capabilities,
+		Capabilities: capabilities, Build: server.build,
 	}
 	if clientFingerprint != "" {
 		current := clientFingerprint == server.cfg.ConfigFingerprint
@@ -68,7 +78,7 @@ func (server *daemonServer) capabilities() capabilityInfo {
 		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion, EventSchema: eventSchemaVersion,
 		Capabilities: append([]string(nil), protocolCapabilities...), MaximumRequest: maxRequestBytes,
 		MaximumResponse: maxResponseBytes, MaximumPrompt: maxPromptBytes, MaximumTasks: server.cfg.MaxTasks,
-		MaximumRetained: server.cfg.MaxRetainedTasks,
+		MaximumRetained: server.cfg.MaxRetainedTasks, Sandbox: server.sandbox,
 	}
 }
 
@@ -197,6 +207,12 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, server.capabilities()))
+	case "extensions.list":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, server.extensions))
 	case "models.list":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
@@ -217,6 +233,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		result, err := server.health.check(server.manager, params)
 		if err != nil {
 			_ = writeJSON(connection, failure(req.ID, "models_health_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "models.conformance":
+		var params modelConformanceParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.verify.check(server.manager, params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_conformance_failed", err))
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, result))
@@ -298,6 +326,83 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, listing))
+	case "workspace.changes":
+		var params workspaceChangesParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		changes, err := server.manager.workspaceChanges(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_changes_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, changes))
+	case "workspace.isolation":
+		var params workspaceIsolationParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		inspection, err := server.manager.inspectWorkspaceIsolation(params.Path)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_isolation_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, inspection))
+	case "workspace.worktrees":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		worktrees, err := server.manager.listTaskWorktrees()
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_worktrees_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, worktrees))
+	case "workspace.writes":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, map[string]any{"leases": readWorkspaceWriteLeases(server.cfg)}))
+	case "workspace.cleanup":
+		var params workspaceCleanupParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.manager.cleanupTaskWorktree(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_cleanup_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "workspace.delivery":
+		var params workspaceDeliveryParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.manager.inspectWorkspaceDelivery(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_delivery_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "workspace.apply":
+		var params workspaceApplyParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.manager.applyWorkspaceDelivery(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "workspace_apply_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
 	case "daemon.shutdown":
 		var params struct {
 			Force bool `json:"force,omitempty"`
@@ -450,6 +555,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		metadata, err := server.manager.setPermissionMode(params)
 		if err != nil {
 			_ = writeJSON(connection, failure(req.ID, "task_permissions_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.sandbox":
+		var params setTaskSandboxParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.setSandboxMode(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_sandbox_failed", err))
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, metadata))

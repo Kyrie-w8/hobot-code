@@ -118,27 +118,35 @@ type hardwareLeaseSnapshot struct {
 	AcquiredAt time.Time `json:"acquiredAt"`
 }
 
+type workspaceWriteLeaseSnapshot struct {
+	TaskID     string    `json:"taskId"`
+	PID        int       `json:"pid"`
+	Cwd        string    `json:"cwd"`
+	AcquiredAt time.Time `json:"acquiredAt"`
+}
+
 type systemSnapshot struct {
-	CapturedAt     time.Time               `json:"capturedAt"`
-	Board          string                  `json:"board"`
-	BoardID        string                  `json:"boardId"`
-	Hostname       string                  `json:"hostname"`
-	RDKOSVersion   string                  `json:"rdkOsVersion"`
-	Kernel         string                  `json:"kernel"`
-	Architecture   string                  `json:"architecture"`
-	CPUCores       int                     `json:"cpuCores"`
-	LoadAverage    []float64               `json:"loadAverage"`
-	Memory         memorySnapshot          `json:"memory"`
-	Disk           diskSnapshot            `json:"disk"`
-	ThermalZones   []thermalZoneSnapshot   `json:"thermalZones"`
-	BPUDevices     []string                `json:"bpuDevices"`
-	BPUCores       []bpuCoreSnapshot       `json:"bpuCores"`
-	BPUTelemetry   bpuTelemetrySnapshot    `json:"bpuTelemetry"`
-	AIMemory       aiMemorySnapshot        `json:"aiMemory"`
-	Accelerator    acceleratorSnapshot     `json:"accelerator"`
-	HardwareLeases []hardwareLeaseSnapshot `json:"hardwareLeases,omitempty"`
-	RDKUtilities   map[string]bool         `json:"rdkUtilities"`
-	UptimeSeconds  uint64                  `json:"uptimeSeconds"`
+	CapturedAt      time.Time                     `json:"capturedAt"`
+	Board           string                        `json:"board"`
+	BoardID         string                        `json:"boardId"`
+	Hostname        string                        `json:"hostname"`
+	RDKOSVersion    string                        `json:"rdkOsVersion"`
+	Kernel          string                        `json:"kernel"`
+	Architecture    string                        `json:"architecture"`
+	CPUCores        int                           `json:"cpuCores"`
+	LoadAverage     []float64                     `json:"loadAverage"`
+	Memory          memorySnapshot                `json:"memory"`
+	Disk            diskSnapshot                  `json:"disk"`
+	ThermalZones    []thermalZoneSnapshot         `json:"thermalZones"`
+	BPUDevices      []string                      `json:"bpuDevices"`
+	BPUCores        []bpuCoreSnapshot             `json:"bpuCores"`
+	BPUTelemetry    bpuTelemetrySnapshot          `json:"bpuTelemetry"`
+	AIMemory        aiMemorySnapshot              `json:"aiMemory"`
+	Accelerator     acceleratorSnapshot           `json:"accelerator"`
+	HardwareLeases  []hardwareLeaseSnapshot       `json:"hardwareLeases,omitempty"`
+	WorkspaceWrites []workspaceWriteLeaseSnapshot `json:"workspaceWrites,omitempty"`
+	RDKUtilities    map[string]bool               `json:"rdkUtilities"`
+	UptimeSeconds   uint64                        `json:"uptimeSeconds"`
 }
 
 func collectSystemSnapshot(cfg config) systemSnapshot {
@@ -152,27 +160,86 @@ func collectSystemSnapshot(cfg config) systemSnapshot {
 	bpuCores, bpuTelemetry := readBPUCores(bpuDevices)
 	aiMemory := readAIMemorySnapshot(memory)
 	return systemSnapshot{
-		CapturedAt:     time.Now().UTC(),
-		Board:          board,
-		BoardID:        detectBoardID(board),
-		Hostname:       host,
-		RDKOSVersion:   detectRDKOSVersion(),
-		Kernel:         kernelRelease(),
-		Architecture:   runtime.GOARCH,
-		CPUCores:       runtime.NumCPU(),
-		LoadAverage:    readLoadAverage(),
-		Memory:         memory,
-		Disk:           readDiskSnapshot(cfg.StateRoot),
-		ThermalZones:   readThermalZones(),
-		BPUDevices:     bpuDevices,
-		BPUCores:       bpuCores,
-		BPUTelemetry:   bpuTelemetry,
-		AIMemory:       aiMemory,
-		Accelerator:    readAcceleratorSnapshot(aiMemory),
-		HardwareLeases: readHardwareLeases(cfg),
-		RDKUtilities:   detectRDKUtilities(),
-		UptimeSeconds:  readUptimeSeconds(),
+		CapturedAt:      time.Now().UTC(),
+		Board:           board,
+		BoardID:         detectBoardID(board),
+		Hostname:        host,
+		RDKOSVersion:    detectRDKOSVersion(),
+		Kernel:          kernelRelease(),
+		Architecture:    runtime.GOARCH,
+		CPUCores:        runtime.NumCPU(),
+		LoadAverage:     readLoadAverage(),
+		Memory:          memory,
+		Disk:            readDiskSnapshot(cfg.StateRoot),
+		ThermalZones:    readThermalZones(),
+		BPUDevices:      bpuDevices,
+		BPUCores:        bpuCores,
+		BPUTelemetry:    bpuTelemetry,
+		AIMemory:        aiMemory,
+		Accelerator:     readAcceleratorSnapshot(aiMemory),
+		HardwareLeases:  readHardwareLeases(cfg),
+		WorkspaceWrites: readWorkspaceWriteLeases(cfg),
+		RDKUtilities:    detectRDKUtilities(),
+		UptimeSeconds:   readUptimeSeconds(),
 	}
+}
+
+var workspaceWriteLeaseDirectoryPattern = regexp.MustCompile(`^lease-[0-9a-f-]{36}$`)
+
+func readWorkspaceWriteLeases(cfg config) []workspaceWriteLeaseSnapshot {
+	root := filepath.Join(cfg.StateRoot, "workspace-write-leases")
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return nil
+	}
+	if owner, ok := fileOwner(info); ok && owner != os.Getuid() {
+		return nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	leases := make([]workspaceWriteLeaseSnapshot, 0, 8)
+	for _, entry := range entries {
+		if len(leases) >= 128 || !entry.IsDir() || !workspaceWriteLeaseDirectoryPattern.MatchString(entry.Name()) {
+			continue
+		}
+		dir := filepath.Join(root, entry.Name())
+		dirInfo, err := os.Lstat(dir)
+		if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 || dirInfo.Mode().Perm()&0o077 != 0 {
+			continue
+		}
+		if owner, ok := fileOwner(dirInfo); ok && owner != os.Getuid() {
+			continue
+		}
+		content, err := readPrivateRegularFile(filepath.Join(dir, "owner.json"), 16*1024)
+		if err != nil {
+			continue
+		}
+		var lease struct {
+			SchemaVersion int       `json:"schemaVersion"`
+			LeaseID       string    `json:"leaseId"`
+			TaskID        string    `json:"taskId"`
+			PID           int       `json:"pid"`
+			Cwd           string    `json:"cwd"`
+			AcquiredAt    time.Time `json:"acquiredAt"`
+		}
+		if json.Unmarshal(content, &lease) != nil || lease.SchemaVersion != 1 || len(lease.LeaseID) == 0 || len(lease.LeaseID) > 64 ||
+			lease.PID <= 0 || len(lease.TaskID) == 0 || len(lease.TaskID) > 128 || lease.AcquiredAt.IsZero() ||
+			!filepath.IsAbs(lease.Cwd) || len(lease.Cwd) > 4096 || !processAlive(lease.PID) {
+			continue
+		}
+		leases = append(leases, workspaceWriteLeaseSnapshot{
+			TaskID: lease.TaskID, PID: lease.PID, Cwd: filepath.Clean(lease.Cwd), AcquiredAt: lease.AcquiredAt,
+		})
+	}
+	sort.Slice(leases, func(i, j int) bool {
+		if leases[i].Cwd == leases[j].Cwd {
+			return leases[i].TaskID < leases[j].TaskID
+		}
+		return leases[i].Cwd < leases[j].Cwd
+	})
+	return leases
 }
 
 var hardwareLeaseResourcePattern = regexp.MustCompile(`^(?:bpu|media-pipeline|camera-video[0-9]+)$`)

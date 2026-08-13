@@ -251,7 +251,7 @@ test("launcher persistent sessions preserve arguments and shell safety", async (
   }
 });
 
-test("launcher routes daemon, deployment, task, bridge, diagnosis, and model commands after loading the user environment", async () => {
+test("launcher routes daemon, deployment, task, bridge, diagnosis, extensions, and model commands after loading the user environment", async () => {
   const fixture = await createLauncherFixture("hobot-agentd-route-");
   try {
     const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
@@ -265,6 +265,8 @@ test("launcher routes daemon, deployment, task, bridge, diagnosis, and model com
     assert.equal(bridge.stdout.trim(), "agentd=<bridge>\nagentd=<--stdio>");
     const diagnose = await execFileAsync(fixture.launcher, ["diagnose", "--json"], { env: environment });
     assert.equal(diagnose.stdout.trim(), "agentd=<diagnose>\nagentd=<--json>");
+    const extensions = await execFileAsync(fixture.launcher, ["extensions", "--json"], { env: environment });
+    assert.equal(extensions.stdout.trim(), "agentd=<extensions>\nagentd=<--json>");
     const model = await execFileAsync(fixture.launcher, ["model", "check", "drobotics/kimi-k3"], { env: environment });
     assert.equal(model.stdout.trim(), "agentd=<model>\nagentd=<check>\nagentd=<drobotics/kimi-k3>");
   } finally {

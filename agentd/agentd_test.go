@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,10 +29,13 @@ func testConfig(t *testing.T) config {
 	}
 	cfg := config{
 		StateRoot: root, AgentdRoot: filepath.Join(root, "agentd"),
-		TasksRoot: filepath.Join(root, "agentd", "tasks"), SupportRoot: filepath.Join(root, "agentd", "support"), SessionDir: filepath.Join(root, "sessions"),
+		TasksRoot: filepath.Join(root, "agentd", "tasks"), WorktreesRoot: filepath.Join(root, "agentd", "worktrees"),
+		AttachCursorRoot: filepath.Join(root, "agentd", "attach-cursors"),
+		SupportRoot:      filepath.Join(root, "agentd", "support"), SessionDir: filepath.Join(root, "sessions"),
 		SocketPath: filepath.Join(socketRoot, "agentd.sock"), PIDPath: filepath.Join(root, "agentd", "agentd.pid"),
 		LogPath: filepath.Join(root, "agentd", "agentd.log"), AgentBinary: worker,
-		MaxTasks: 1, MaxRetainedTasks: 20, MaxEventSize: 1024 * 1024,
+		ExtensionCatalog: sourceExtensionCatalog(t),
+		MaxTasks:         1, MaxRetainedTasks: 20, MaxEventSize: 1024 * 1024,
 	}
 	if err := preparePaths(cfg); err != nil {
 		t.Fatal(err)
@@ -71,14 +76,22 @@ func addSettledSourceTask(t *testing.T, manager *taskManager, cfg config) *task 
 	}
 	now := time.Now().UTC()
 	current := &task{
-		manager: manager, dir: dir, events: eventsPath, stderr: stderrPath,
-		metadata:    taskMetadata{ID: id, Name: "source", Cwd: cfg.StateRoot, Status: statusStopped, CreatedAt: now, UpdatedAt: now, SessionFile: sessionPath, Model: "drobotics/kimi-k3"},
+		manager: manager,
+		dir:     dir,
+		events:  eventsPath,
+		stderr:  stderrPath,
+		metadata: taskMetadata{
+			ID: id, Name: "source", Cwd: cfg.StateRoot, Status: statusStopped,
+			CreatedAt: now, UpdatedAt: now, SessionFile: sessionPath, Model: "drobotics/kimi-k3",
+		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
 	if err := current.saveMetadata(); err != nil {
 		t.Fatal(err)
 	}
+	manager.mu.Lock()
 	manager.tasks[id] = current
+	manager.mu.Unlock()
 	return current
 }
 
@@ -89,17 +102,25 @@ func TestBlankSideTaskStartsOnlyAfterItsFirstPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := addSettledSourceTask(t, manager, cfg)
+
 	metadata, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "side"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Status != statusStopped || !metadata.AwaitingPrompt || metadata.PID != 0 || manager.activeCount() != 0 {
-		t.Fatalf("blank side task started a worker or occupied a slot: %+v", metadata)
+	if metadata.Status != statusStopped || !metadata.AwaitingPrompt || metadata.PID != 0 {
+		t.Fatalf("blank side task started a worker: %+v", metadata)
+	}
+	if manager.activeCount() != 0 {
+		t.Fatalf("blank side task occupied an active slot: %d", manager.activeCount())
 	}
 	if metadata.SessionFile == "" || metadata.SessionFile == source.metadata.SessionFile {
 		t.Fatalf("blank side task did not receive a private session fork: %+v", metadata)
 	}
-	current, _ := manager.get(metadata.ID)
+	current, err := manager.get(metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	resumed, err := manager.resume(resumeTaskParams{TaskID: metadata.ID, Prompt: "first side prompt"})
 	if err != nil {
 		t.Fatal(err)
@@ -108,18 +129,25 @@ func TestBlankSideTaskStartsOnlyAfterItsFirstPrompt(t *testing.T) {
 		t.Fatalf("first prompt did not clear awaitingPrompt: %+v", resumed)
 	}
 	waitForStatus(t, current, statusIdle)
+	if manager.activeCount() != 1 {
+		t.Fatalf("started side task did not occupy one active slot: %d", manager.activeCount())
+	}
 	if err := current.stop(); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestCapabilitiesAdvertiseDeferredSidePrompt(t *testing.T) {
+	found := false
 	for _, capability := range protocolCapabilities {
 		if capability == "tasks.fork.deferred-prompt.v1" {
-			return
+			found = true
+			break
 		}
 	}
-	t.Fatal("deferred side prompts are implemented but not advertised")
+	if !found {
+		t.Fatal("deferred side prompts are implemented but not advertised")
+	}
 }
 
 func TestEditForkStillRequiresAReplacementPrompt(t *testing.T) {
@@ -221,13 +249,16 @@ func TestTaskLifecyclePersistsEventsAndBoundsConcurrency(t *testing.T) {
 	}
 	current, _ := manager.get(metadata.ID)
 	waitForStatus(t, current, statusWaiting)
-	if _, err := manager.start(startTaskParams{Name: "excess", Cwd: cfg.StateRoot, Prompt: "test"}); err == nil {
-		t.Fatal("expected the background task limit to reject another working agent")
+	queuedMetadata, err := manager.start(startTaskParams{Name: "queued", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil || queuedMetadata.Status != statusQueued || queuedMetadata.QueuedAt == nil {
+		t.Fatalf("busy workers should queue new work: metadata=%+v err=%v", queuedMetadata, err)
 	}
+	queued, _ := manager.get(queuedMetadata.ID)
 	if err := current.sendCommand(json.RawMessage(`{"type":"extension_ui_response","id":"approval-1","confirmed":true}`)); err != nil {
 		t.Fatal(err)
 	}
-	waitForStatus(t, current, statusIdle)
+	waitForStatus(t, current, statusStopped)
+	waitForStatus(t, queued, statusIdle)
 	events, _, cancel, err := current.subscribe(0, false)
 	if err != nil {
 		t.Fatal(err)
@@ -243,10 +274,10 @@ func TestTaskLifecyclePersistsEventsAndBoundsConcurrency(t *testing.T) {
 	if len(events) < 4 || !settled {
 		t.Fatalf("unexpected persisted events: %+v", events)
 	}
-	if err := current.stop(); err != nil {
+	if err := queued.stop(); err != nil {
 		t.Fatal(err)
 	}
-	waitForStatus(t, current, statusStopped)
+	waitForStatus(t, queued, statusStopped)
 	if info, err := os.Stat(current.events); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("event log permissions: info=%v err=%v", info, err)
 	}
@@ -278,6 +309,439 @@ func TestStartingTaskSuspendsOldestIdleWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForStatus(t, second, statusStopped)
+}
+
+func TestQueuedTaskCanBeCancelledWithoutStartingWorker(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeMetadata, err := manager.start(startTaskParams{Name: "active", Cwd: cfg.StateRoot, Prompt: "approval-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _ := manager.get(activeMetadata.ID)
+	waitForStatus(t, active, statusWaiting)
+	queuedMetadata, err := manager.start(startTaskParams{Name: "queued", Cwd: cfg.StateRoot, Prompt: "must not run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, _ := manager.get(queuedMetadata.ID)
+	if err := queued.stop(); err != nil {
+		t.Fatal(err)
+	}
+	state := waitForStatus(t, queued, statusStopped)
+	if state.PID != 0 || state.QueuedAt != nil || state.QueueOperation != "" || queued.pendingLaunch != nil {
+		t.Fatalf("cancelled queue entry retained executable state: %+v", state)
+	}
+	if _, err := os.Stat(queued.queuePath()); !os.IsNotExist(err) {
+		t.Fatalf("cancelled queue file still exists: %v", err)
+	}
+	events, err := readEvents(queued.events, queued.metadata.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Normalized != nil {
+			types = append(types, event.Normalized.Type)
+		}
+	}
+	if strings.Join(types, ",") != "task.queued,user.message,task.cancelled,task.stopped" {
+		t.Fatalf("unexpected cancelled queue events: %v", types)
+	}
+	if err := active.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, active, statusStopped)
+	manager.interruptAll()
+}
+
+func TestQueuedTasksRunFIFO(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeMetadata, err := manager.start(startTaskParams{Name: "active", Cwd: cfg.StateRoot, Prompt: "approval-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _ := manager.get(activeMetadata.ID)
+	waitForStatus(t, active, statusWaiting)
+
+	firstMetadata, err := manager.start(startTaskParams{Name: "first", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondMetadata, err := manager.start(startTaskParams{Name: "second", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstMetadata.Status != statusQueued || secondMetadata.Status != statusQueued || firstMetadata.QueuedAt == nil || secondMetadata.QueuedAt == nil {
+		t.Fatalf("tasks were not queued: first=%+v second=%+v", firstMetadata, secondMetadata)
+	}
+	if firstMetadata.QueuedAt.After(*secondMetadata.QueuedAt) {
+		t.Fatalf("queue timestamps are out of order: first=%s second=%s", firstMetadata.QueuedAt, secondMetadata.QueuedAt)
+	}
+	first, _ := manager.get(firstMetadata.ID)
+	second, _ := manager.get(secondMetadata.ID)
+	if err := active.sendCommand(json.RawMessage(`{"type":"extension_ui_response","id":"approval-1","confirmed":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, active, statusStopped)
+	waitForStatus(t, first, statusStopped)
+	waitForStatus(t, second, statusIdle)
+
+	firstEvents, err := readEvents(first.events, first.metadata.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEvents, err := readEvents(second.events, second.metadata.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstStarted, secondStarted := false, false
+	for _, event := range firstEvents {
+		firstStarted = firstStarted || (event.Normalized != nil && event.Normalized.Type == "task.starting")
+	}
+	for _, event := range secondEvents {
+		secondStarted = secondStarted || (event.Normalized != nil && event.Normalized.Type == "task.starting")
+	}
+	if !firstStarted || !secondStarted {
+		t.Fatalf("queued tasks did not both start: first=%t second=%t", firstStarted, secondStarted)
+	}
+	if err := second.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, second, statusStopped)
+}
+
+func TestCancelledStartingTaskCannotLaunchWorker(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Now().UTC()
+	current := &task{
+		manager: &taskManager{cfg: cfg},
+		dir:     cfg.TasksRoot,
+		events:  filepath.Join(cfg.TasksRoot, "cancelled.events.jsonl"),
+		stderr:  filepath.Join(cfg.TasksRoot, "cancelled.stderr.log"),
+		metadata: taskMetadata{
+			ID: "44556677889900aabbccddee", Name: "cancelled", Cwd: cfg.StateRoot,
+			Status: statusStopped, CreatedAt: now, UpdatedAt: now, PermissionMode: "ask",
+		},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.launch("must not run", nil, false, "", false); !errors.Is(err, errTaskLaunchCancelled) {
+		t.Fatalf("cancelled launch was accepted: %v", err)
+	}
+	state := current.snapshot()
+	if state.Status != statusStopped || state.PID != 0 || current.command != nil || current.stdin != nil {
+		t.Fatalf("cancelled task launched a worker: %+v", state)
+	}
+}
+
+func TestQueuedTaskSurvivesManagerRestart(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeMetadata, err := manager.start(startTaskParams{Name: "active", Cwd: cfg.StateRoot, Prompt: "approval-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _ := manager.get(activeMetadata.ID)
+	waitForStatus(t, active, statusWaiting)
+	queuedMetadata, err := manager.start(startTaskParams{Name: "recover", Cwd: cfg.StateRoot, Prompt: "recover after restart"})
+	if err != nil || queuedMetadata.Status != statusQueued {
+		t.Fatalf("task was not queued: metadata=%+v err=%v", queuedMetadata, err)
+	}
+	queueInfo, err := os.Stat(filepath.Join(cfg.TasksRoot, queuedMetadata.ID, "queue.json"))
+	if err != nil || queueInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("queue file is not private: info=%v err=%v", queueInfo, err)
+	}
+	// Simulate a daemon crash: recovery marks the old in-flight worker as
+	// interrupted and starts the persisted queue entry without replaying it.
+	recovered, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredTask, err := recovered.get(queuedMetadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, recoveredTask, statusIdle)
+	events, err := readEvents(recoveredTask.events, queuedMetadata.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userMessages := 0
+	for _, event := range events {
+		if event.Normalized != nil && event.Normalized.Type == "user.message" {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("recovered queued prompt was duplicated: %d user events", userMessages)
+	}
+	if err := recoveredTask.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := active.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, recoveredTask, statusStopped)
+	waitForStatus(t, active, statusStopped)
+	manager.interruptAll()
+	recovered.interruptAll()
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestQueuedPromptRecoveryRepairsMissingUserEvent(t *testing.T) {
+	cfg := testConfig(t)
+	id := "11223344556677889900aabb"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	queuedAt := time.Now().UTC().Truncate(time.Microsecond)
+	metadata := taskMetadata{
+		ID: id, Name: "recover prompt", Cwd: cfg.StateRoot, Status: statusQueued,
+		CreatedAt: queuedAt, UpdatedAt: queuedAt, QueuedAt: &queuedAt, QueueOperation: "start", PermissionMode: "ask",
+	}
+	current := &task{
+		manager: &taskManager{cfg: cfg}, dir: dir, events: filepath.Join(dir, "events.jsonl"), stderr: filepath.Join(dir, "worker.stderr.log"),
+		metadata: metadata, subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	queued := queuedLaunch{Operation: "start", Prompt: "restore exactly once", QueuedAt: queuedAt}
+	if err := writeQueuedLaunch(current.queuePath(), queued); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.saveMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, _ := manager.get(id)
+	waitForStatus(t, recovered, statusIdle)
+	events, err := readEvents(recovered.events, id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userMessages := 0
+	for _, event := range events {
+		if event.Normalized != nil && event.Normalized.Type == "user.message" {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("recovery did not reconstruct exactly one user event: %d", userMessages)
+	}
+	if err := recovered.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, recovered, statusStopped)
+}
+
+func TestQueueLaunchingHandoffNeverReplaysAfterRestart(t *testing.T) {
+	cfg := testConfig(t)
+	id := "223344556677889900aabbcc"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	queuedAt := time.Now().UTC().Truncate(time.Microsecond)
+	metadata := taskMetadata{
+		ID: id, Name: "handoff", Cwd: cfg.StateRoot, Status: statusQueued,
+		CreatedAt: queuedAt, UpdatedAt: queuedAt, QueuedAt: &queuedAt, QueueOperation: "start", PermissionMode: "ask",
+	}
+	current := &task{
+		manager: &taskManager{cfg: cfg}, dir: dir, events: filepath.Join(dir, "events.jsonl"), stderr: filepath.Join(dir, "worker.stderr.log"),
+		metadata: metadata, subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	queued := queuedLaunch{State: "launching", Operation: "start", Prompt: "do not replay", QueuedAt: queuedAt}
+	if err := writeQueuedLaunch(current.queuePath(), queued); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.saveMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := manager.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := recovered.snapshot()
+	if state.Status != statusInterrupted || state.PID != 0 || state.Failure == nil || state.Failure.Code != "handoff-uncertain" || state.Failure.Recovery != "restart" {
+		t.Fatalf("uncertain handoff was replayed or hidden: %+v", state)
+	}
+	if _, err := os.Stat(recovered.queuePath()); !os.IsNotExist(err) {
+		t.Fatalf("completed recovery retained the sensitive queue file: %v", err)
+	}
+}
+
+func TestTaskFailureMigrationIsStableAndSanitized(t *testing.T) {
+	cfg := testConfig(t)
+	id := "556677889900aabbccddeeff"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	current := &task{
+		manager: &taskManager{cfg: cfg}, dir: dir, events: filepath.Join(dir, "events.jsonl"), stderr: filepath.Join(dir, "worker.stderr.log"),
+		metadata: taskMetadata{
+			ID: id, Name: "legacy", Cwd: cfg.StateRoot, Status: statusFailed,
+			CreatedAt: now, UpdatedAt: now, LastError: "HTTP 401 token=top-secret at /root/private/project", PermissionMode: "ask",
+		},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.saveMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := first.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := migrated.snapshot()
+	if state.Failure == nil || state.Failure.Code != "model-unavailable" || state.Failure.Recovery != "check-model" {
+		t.Fatalf("legacy model failure was not classified: %+v", state)
+	}
+	encoded, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("top-secret")) || bytes.Contains(encoded, []byte("/root/private")) {
+		t.Fatalf("legacy failure detail survived migration: %s", encoded)
+	}
+	second, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := second.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := reloaded.snapshot()
+	if stable.Failure == nil || *stable.Failure != *state.Failure || stable.LastError != state.LastError {
+		t.Fatalf("structured failure changed across restarts: first=%+v second=%+v", state, stable)
+	}
+}
+
+func TestTerminalLifecycleEventIsPersistedExactlyOnce(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.start(startTaskParams{Name: "terminal", Cwd: cfg.StateRoot, Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := manager.get(metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusIdle)
+	if err := current.stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusStopped)
+	current.setTerminal(statusFailed, "must be ignored")
+	events, err := readEvents(current.events, metadata.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := 0
+	for _, event := range events {
+		if event.Normalized != nil && event.Normalized.Type == "task.stopped" {
+			terminal++
+		}
+		if event.Normalized != nil && event.Normalized.Type == "task.failed" {
+			t.Fatal("terminal state was overwritten by a late failure")
+		}
+	}
+	if terminal != 1 {
+		t.Fatalf("terminal lifecycle count = %d, want 1", terminal)
+	}
+}
+
+func TestRecoveryRemovesStaleQueueFromStartedTask(t *testing.T) {
+	cfg := testConfig(t)
+	id := "3344556677889900aabbccdd"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	queuedAt := time.Now().UTC().Truncate(time.Microsecond)
+	current := &task{
+		manager: &taskManager{cfg: cfg}, dir: dir, events: filepath.Join(dir, "events.jsonl"), stderr: filepath.Join(dir, "worker.stderr.log"),
+		metadata: taskMetadata{
+			ID: id, Name: "handoff", Cwd: cfg.StateRoot, Status: statusStarting,
+			CreatedAt: queuedAt, UpdatedAt: queuedAt, PermissionMode: "ask",
+		},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	if err := os.WriteFile(current.events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current.stderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeQueuedLaunch(current.queuePath(), queuedLaunch{State: "launching", Operation: "start", Prompt: "already handed off", QueuedAt: queuedAt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.saveMetadata(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := manager.get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := recovered.snapshot(); state.Status != statusInterrupted {
+		t.Fatalf("started handoff was not marked interrupted: %+v", state)
+	}
+	if _, err := os.Stat(recovered.queuePath()); !os.IsNotExist(err) {
+		t.Fatalf("stale queue file survived recovery: %v", err)
+	}
 }
 
 func TestSideTaskDisplayParentUsesConversationRoot(t *testing.T) {
@@ -435,6 +899,9 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if !containsString(ping.Capabilities.Capabilities, "models.health.v1") {
 		t.Fatalf("model health capability is missing: %+v", ping.Capabilities.Capabilities)
 	}
+	if !containsString(ping.Capabilities.Capabilities, "models.conformance.v1") {
+		t.Fatalf("model conformance capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
 	server.health.probe = func(context.Context, modelOption) modelHealthResult {
 		return modelHealthResult{Status: "available", Category: "ok", Message: modelHealthMessage("ok"), Transport: "sse", FirstByteMS: 12, LatencyMS: 18, Attempts: 1}
 	}
@@ -445,6 +912,20 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	var health modelHealthResult
 	if err := json.Unmarshal(healthResult, &health); err != nil || health.Status != "available" || health.Model != "kimi-k3" {
 		t.Fatalf("unexpected model health: result=%+v err=%v", health, err)
+	}
+	server.verify.probe = func(context.Context, modelOption) modelConformanceResult {
+		return modelConformanceResult{Checks: []modelConformanceCheck{
+			{Name: "streaming", Status: "passed"}, {Name: "tool-call", Status: "passed"},
+			{Name: "tool-result", Status: "passed"}, {Name: "image-input", Status: "passed"},
+		}}
+	}
+	verificationResult, err := client.call("models.conformance", modelConformanceParams{Model: "drobotics/kimi-k3"})
+	if err != nil {
+		t.Fatalf("model conformance failed: %v", err)
+	}
+	var verification modelConformanceResult
+	if err := json.Unmarshal(verificationResult, &verification); err != nil || verification.Status != "verified" || verification.Model != "kimi-k3" {
+		t.Fatalf("unexpected model conformance: result=%+v err=%v", verification, err)
 	}
 	snapshotResult, err := client.call("system.snapshot", struct{}{})
 	if err != nil {
@@ -530,6 +1011,65 @@ func TestRestartMarksLiveTasksInterrupted(t *testing.T) {
 	restored := current.snapshot()
 	if restored.Status != statusInterrupted || restored.PID != 0 || restored.LastError == "" {
 		t.Fatalf("unexpected recovery state: %+v", restored)
+	}
+}
+
+func TestInterruptAllPersistsOneTerminalLifecycleEvent(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.start(startTaskParams{Name: "interrupt", Cwd: cfg.StateRoot, Prompt: "approval-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := manager.get(metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, current, statusWaiting)
+	manager.interruptAll()
+	waitForStatus(t, current, statusInterrupted)
+	events, err := readEvents(current.events, metadata.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := 0
+	for _, event := range events {
+		if event.Normalized != nil && event.Normalized.Type == "task.interrupted" {
+			interrupted++
+			if event.Normalized.Data["recovery"] != "resume" {
+				t.Fatalf("interrupted task did not recommend its safe session recovery: %+v", event.Normalized)
+			}
+		}
+	}
+	if interrupted != 1 {
+		t.Fatalf("interrupted lifecycle count = %d, want 1", interrupted)
+	}
+}
+
+func TestFailureDetailLogRemainsStrictlyBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.stderr.log")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), int(maximumWorkerStderrBytes-32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{stderr: path, stderrBytes: maximumWorkerStderrBytes - 32}
+	var workers sync.WaitGroup
+	for index := 0; index < 8; index++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			current.appendFailureDetail(strings.Repeat("secret", 1024))
+		}()
+	}
+	workers.Wait()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > maximumWorkerStderrBytes {
+		t.Fatalf("failure log size = %d, exceeds %d", info.Size(), maximumWorkerStderrBytes)
 	}
 }
 

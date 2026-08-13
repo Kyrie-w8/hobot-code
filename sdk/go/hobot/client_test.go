@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,6 +23,9 @@ while IFS= read -r line; do
     *'"method":"capabilities"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"protocolMin":1,"protocolMax":1,"eventSchema":2,"capabilities":["bridge.stdio"],"maximumRequestBytes":2097152,"maximumResponseBytes":8388608}}\n' "$id"
       ;;
+	*'"method":"extensions.list"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"schemaVersion":1,"apiVersion":"hobot.extensions/v1","productVersion":"0.26.0","hostVersion":"0.26.0","entries":[{"id":"hobot.rdk-core","name":"RDK development core","version":"0.26.0","kind":"extension","description":"RDK integration","origin":"built-in","scope":"system","runtime":"pi-extension","entrypoint":"rdk/index.ts","trust":"product","defaultEnabled":true,"required":true,"provides":["provider.drobotics"],"requires":["pi.extension-api"],"permissions":["workspace"],"targets":["x5","s100","s600"]}],"policy":{"inventoryOnly":true,"executionAuthority":"pi-runtime","permissionAuthority":"board","thirdPartyRuntime":"current-user","hotReload":false}}}\n' "$id"
+	  ;;
     *'"method":"system.snapshot"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","board":"D-Robotics RDK S100","boardId":"s100","hostname":"rdk","rdkOsVersion":"4.0.2","kernel":"6.1.83","architecture":"arm64","cpuCores":8,"loadAverage":[0.5,0.4,0.3],"memory":{"totalBytes":8589934592,"availableBytes":4294967296},"disk":{"path":"/root","totalBytes":68719476736,"availableBytes":34359738368},"thermalZones":[{"name":"pvt_bpu","celsius":52.5}],"bpuDevices":["/dev/bpu","/dev/bpu_core0"],"bpuCores":[{"index":0,"name":"BPU 0","utilizationPercent":42,"currentFrequencyHz":1000000000,"maximumFrequencyHz":1500000000}],"bpuTelemetry":{"status":"available","source":"sysfs-ratio-devfreq"},"aiMemory":{"available":true,"bpuAllocationAvailable":true,"ionAvailable":true,"cmaAvailable":false,"dmaBufAvailable":true,"bpuAllocatedBytes":33554432,"ionAllocatedBytes":134217728,"dmaBufBytes":4194304,"dmaBufObjects":1},"rdkUtilities":{"hrt_model_exec":true},"uptimeSeconds":3600}}\n' "$id"
       ;;
@@ -37,6 +41,27 @@ while IFS= read -r line; do
     *'"method":"deployment.status"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"taskId":"11223344556677889900aabb","phase":"running","deployment":{"schema":1,"cwd":"/root/models","boardId":"s100","goal":"benchmark","artifact":{"path":"/root/models/detector_nashe.hbm","name":"detector_nashe.hbm","kind":"rdk-hbm","compatibility":"candidate"},"reportPath":"/root/models/.hobot/deployments/report.json","createdAt":"2026-08-12T00:00:00Z"}}}\n' "$id"
       ;;
+    *'"method":"workspace.changes"'*)
+      printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","available":true,"repository":true,"repositoryRoot":"/root/models","scope":".","head":"abc123","files":[{"path":"main.go","status":".M","kind":"modified","unstaged":true}],"patch":"diff --git a/main.go b/main.go\\n+updated\\n"}}\n' "$id"
+      ;;
+	*'"method":"workspace.isolation"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","available":true,"repository":true,"eligible":true,"recommendedMode":"worktree","repositoryRoot":"/root/models","scope":".","head":"abc123","clean":true,"reason":"A clean Git repository can be isolated from other tasks."}}\n' "$id"
+	  ;;
+	*'"method":"workspace.worktrees"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"worktrees":[{"taskId":"00112233445566778899aabb","projectCwd":"/root/models","path":"/root/.local/state/hobot-code/agentd/worktrees/00112233445566778899aabb/workspace","baseRevision":"abc123","createdAt":"2026-08-12T00:00:00Z","inUse":false}]}}\n' "$id"
+	  ;;
+	*'"method":"workspace.writes"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"leases":[{"taskId":"00112233445566778899aabb","pid":1234,"cwd":"/root/models","acquiredAt":"2026-08-12T00:00:00Z"}]}}\n' "$id"
+	  ;;
+		*'"method":"workspace.cleanup"'*)
+		  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"taskId":"00112233445566778899aabb","cleaned":true}}\n' "$id"
+		  ;;
+		*'"method":"workspace.delivery"'*)
+		  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"taskId":"00112233445566778899aabb","ready":true,"reason":"ready","patchBytes":128,"digest":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}\n' "$id"
+		  ;;
+		*'"method":"workspace.apply"'*)
+		  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"taskId":"00112233445566778899aabb","applied":true,"staged":true,"patchBytes":128,"digest":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","appliedAt":"2026-08-12T00:00:00Z"}}\n' "$id"
+		  ;;
     *'"method":"task.page"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"tasks":[{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"idle","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:01Z","lastSequence":7}]}}\n' "$id"
       ;;
@@ -73,6 +98,10 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	if err != nil || capabilities.EventSchema != 2 {
 		t.Fatalf("capabilities=%+v err=%v", capabilities, err)
 	}
+	extensions, err := client.Extensions(ctx)
+	if err != nil || len(extensions.Entries) != 1 || extensions.Entries[0].ID != "hobot.rdk-core" || !extensions.Policy.InventoryOnly || extensions.Policy.PermissionAuthority != "board" {
+		t.Fatalf("extensions=%+v err=%v", extensions, err)
+	}
 	snapshot, err := client.SystemSnapshot(ctx)
 	if err != nil || snapshot.BoardID != "s100" || len(snapshot.BPUDevices) != 2 || len(snapshot.BPUCores) != 1 || snapshot.BPUCores[0].UtilizationPercent != 42 || snapshot.BPUTelemetry.Status != "available" || snapshot.AIMemory.BPUAllocatedBytes != 33554432 || snapshot.Memory.AvailableBytes == 0 || len(snapshot.ThermalZones) != 1 || snapshot.ThermalZones[0].Celsius != 52.5 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
@@ -92,6 +121,34 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	deploymentStatus, err := client.DeploymentStatus(ctx, deployment.ID)
 	if err != nil || deploymentStatus.Phase != "running" || deploymentStatus.Deployment.Goal != "benchmark" {
 		t.Fatalf("deployment status=%+v err=%v", deploymentStatus, err)
+	}
+	changes, err := client.WorkspaceChanges(ctx, "00112233445566778899aabb")
+	if err != nil || !changes.Available || !changes.Repository || len(changes.Files) != 1 || changes.Files[0].Path != "main.go" || !strings.Contains(changes.Patch, "+updated") {
+		t.Fatalf("workspace changes=%+v err=%v", changes, err)
+	}
+	isolation, err := client.InspectWorkspaceIsolation(ctx, "/root/models")
+	if err != nil || !isolation.Eligible || isolation.RecommendedMode != "worktree" || isolation.RepositoryRoot != "/root/models" {
+		t.Fatalf("workspace isolation=%+v err=%v", isolation, err)
+	}
+	worktrees, err := client.ManagedWorktrees(ctx)
+	if err != nil || len(worktrees.Worktrees) != 1 || worktrees.Worktrees[0].TaskID != "00112233445566778899aabb" || worktrees.Worktrees[0].InUse {
+		t.Fatalf("managed worktrees=%+v err=%v", worktrees, err)
+	}
+	writes, err := client.WorkspaceWrites(ctx)
+	if err != nil || len(writes.Leases) != 1 || writes.Leases[0].TaskID != "00112233445566778899aabb" || writes.Leases[0].Cwd != "/root/models" {
+		t.Fatalf("workspace writes=%+v err=%v", writes, err)
+	}
+	delivery, err := client.InspectWorkspaceDelivery(ctx, "00112233445566778899aabb")
+	if err != nil || !delivery.Ready || delivery.PatchBytes != 128 || len(delivery.Digest) != 64 {
+		t.Fatalf("workspace delivery=%+v err=%v", delivery, err)
+	}
+	applied, err := client.ApplyWorkspace(ctx, "00112233445566778899aabb", delivery.Digest)
+	if err != nil || !applied.Applied || !applied.Staged || applied.Digest != delivery.Digest {
+		t.Fatalf("workspace apply=%+v err=%v", applied, err)
+	}
+	cleanup, err := client.CleanupWorkspace(ctx, "00112233445566778899aabb")
+	if err != nil || !cleanup.Cleaned {
+		t.Fatalf("workspace cleanup=%+v err=%v", cleanup, err)
 	}
 	page, err := client.Tasks(ctx, false, "", 50)
 	if err != nil || len(page.Tasks) != 1 || page.Tasks[0].Name != "build" {

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTaskHelpIsHandledBeforeStartingDaemon(t *testing.T) {
@@ -63,5 +65,54 @@ func TestPrintRequestedTaskHelpWritesSpecificUsage(t *testing.T) {
 	}
 	if printRequestedTaskHelp([]string{"resume", "task", "--", "--help"}, io.Discard) {
 		t.Fatal("literal text after -- was treated as help")
+	}
+}
+
+func TestCLISummariesHideApprovalAndSessionDetails(t *testing.T) {
+	now := time.Now().UTC()
+	metadata := taskMetadata{
+		ID: "00112233445566778899aabb", Name: "safe", Cwd: "/root/project", Status: statusWaiting,
+		WorkspaceMode: workspaceModeShared, SessionFile: "/secret/session.jsonl", SessionID: "private-session",
+		CreatedAt: now, UpdatedAt: now, Approvals: []pendingApproval{{
+			ID: "approval-1", Method: "confirm", Title: "Allow bash?\nTarget: curl -H 'Token: secret'", Message: "secret details", Prefill: "secret", RequestedAt: now, Active: true,
+		}, {
+			ID: "approval-0", Method: "confirm", Title: "Old", RequestedAt: now, Active: false,
+		}},
+		SandboxMode: sandboxModeWorkspace,
+		Sandbox:     taskSandboxStatus{Requested: sandboxModeWorkspace, Effective: sandboxModeWorkspace, Backend: "bubblewrap", FilesystemRestricted: true, DevicesRestricted: true, CapabilitiesDropped: true},
+		Deployment: &deploymentRecord{
+			Schema: 2, Board: "RDK S600", RDKOS: "4.0.5", Goal: "deploy-and-validate",
+			Artifact:   deploymentArtifact{Path: "/secret/model.hbm", Name: "model.hbm", Kind: "hbm", Compatibility: "match"},
+			ReportPath: "/secret/report.json", CreatedAt: now,
+		},
+		TurnEvidence: []taskTurnEvidence{{
+			Turn: 1, Status: "interrupted", Evidence: "partial", StartedAt: now, ToolsStarted: 1, OpenTools: 1,
+			WorkspaceBefore:   &turnWorkspaceEvidence{Status: "captured", CapturedAt: now, StateDigest: strings.Repeat("a", 64)},
+			RecommendedAction: "review-before-resume",
+		}},
+	}
+	summary := summarizeTaskForCLI(metadata)
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "secret") || strings.Contains(text, "sessionFile") || strings.Contains(text, "reportPath") || strings.Contains(text, "stateDigest") || strings.Contains(text, "artifact\":{") || summary.PendingApprovalCount != 1 || summary.InactiveApprovalCount != 1 {
+		t.Fatalf("task summary leaked detail: %s", text)
+	}
+	if summary.LastTurnEvidence == nil || summary.LastTurnEvidence.OpenTools != 1 || summary.LastTurnEvidence.RecommendedAction != "review-before-resume" {
+		t.Fatalf("task summary omitted turn recovery evidence: %s", text)
+	}
+	if summary.SandboxMode != sandboxModeWorkspace || summary.Sandbox.Backend != "bubblewrap" || !summary.Sandbox.FilesystemRestricted {
+		t.Fatalf("task summary omitted the effective OS boundary: %s", text)
+	}
+	approvals := summarizeApprovalsForCLI(metadata.Approvals)
+	encoded, err = json.Marshal(approvals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(encoded)
+	if strings.Contains(text, "Target:") || strings.Contains(text, "secret") || len(approvals) != 2 || approvals[0].Title != "Allow bash?" {
+		t.Fatalf("approval summary leaked detail: %s", text)
 	}
 }

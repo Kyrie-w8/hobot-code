@@ -1,4 +1,5 @@
 import { readFile, realpath, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,6 +68,16 @@ export async function validateReleaseSource(rootDirectory) {
   if (packageJson.version !== version) {
     throw new Error(`VERSION ${version} does not match pi-runtime/package.json ${packageJson.version}`);
   }
+  const extensionCatalog = JSON.parse(await readFile(resolve(root, "extensions/catalog.json"), "utf8"));
+  if (extensionCatalog.schemaVersion !== 1 || extensionCatalog.apiVersion !== "hobot.extensions/v1") {
+    throw new Error("extensions/catalog.json has an unsupported schema or API version");
+  }
+  if (extensionCatalog.productVersion !== version) {
+    throw new Error(`VERSION ${version} does not match extensions/catalog.json ${extensionCatalog.productVersion ?? "missing"}`);
+  }
+  if (!Array.isArray(extensionCatalog.entries) || extensionCatalog.entries.length === 0) {
+    throw new Error("extensions/catalog.json has no extension entries");
+  }
 
   const desktopConfig = JSON.parse(await readFile(resolve(root, "studio/wails.json"), "utf8"));
   if (desktopConfig.name !== "Hobot Code" || desktopConfig.outputfilename !== "HobotCode") {
@@ -117,7 +128,7 @@ export async function validateReleaseSource(rootDirectory) {
     "RIPGREP_LINUX_ARM64_URL",
   );
 
-  return { root, version, packageJson, desktopConfig, pi, tools };
+  return { root, version, packageJson, extensionCatalog, desktopConfig, pi, tools };
 }
 
 export async function writeBuildInfo(rootDirectory, stageDirectory, options) {
@@ -127,12 +138,13 @@ export async function writeBuildInfo(rootDirectory, stageDirectory, options) {
   const builtAt = new Date(options.builtAt);
   if (Number.isNaN(builtAt.valueOf())) throw new Error(`Invalid build timestamp: ${options.builtAt}`);
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     version: release.version,
     commit: options.commit,
     dirty: options.dirty === "1",
     builtAt: builtAt.toISOString(),
     target: "linux-arm64",
+    agentdSha256: createHash("sha256").update(await readFile(resolve(stageDirectory, "agentd"))).digest("hex"),
     pi: {
       version: release.pi.PI_VERSION,
       commit: release.pi.PI_COMMIT,

@@ -115,6 +115,15 @@ acquire_install_lock() {
 }
 acquire_install_lock
 
+if ! command -v bwrap >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    printf 'Installing bubblewrap for background Agent isolation...\n'
+    DEBIAN_FRONTEND=noninteractive apt-get install -y bubblewrap
+  else
+    printf 'bubblewrap is required for sandboxed background tasks. Install it before using hobot task, or explicitly select --sandbox off.\n' >&2
+  fi
+fi
+
 finish_install() {
   status=$?
   trap - EXIT HUP INT TERM

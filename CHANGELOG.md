@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.26.0
+
+- Add the versioned `hobot.extensions/v1` catalog across agentd, CLI, Go SDK, and Studio so built-in extensions and Skills expose their origin, capabilities, declared permissions, and supported RDK targets without loading code or bypassing board-side policy.
+- Add explicit model protocol verification across agentd, CLI, SDK, and Studio. `hobot model verify` distinguishes a reachable endpoint from an Agent-ready model by testing terminal streaming, structured tools, matching tool results, and declared image input without retaining raw provider content.
+- Add board-side bubblewrap profiles for background Agents: read-only review, writable workspace, RDK hardware access, and explicit opt-out. Report the effective file, device, capability, and network boundary through CLI, SDK, Studio, diagnostics, and compatibility checks.
+- Add board-enforced per-task Git worktrees for clean committed repositories, Studio preflight and workspace selection, inherited Side Agent/edit branches, and fail-closed explicit cleanup that preserves dirty or newly committed code.
+- Serialize workspace-changing turns across main, side, foreground, and background Agents with private crash-recoverable write leases; detect external source changes before each Agent write, expose live ownership in Studio diagnostics and the board CLI, and keep support bundles identity-redacted.
+- Add reviewed delivery for isolated task workspaces: Studio and CLI preflight an exact binary-capable snapshot, stop idle sibling Agents only after confirmation, and apply it to an unchanged original project as staged Git changes without committing or pushing.
+- Queue new, forked, resumed, and restarted Agent work in a private FIFO when all board worker slots are busy; preserve not-yet-executed prompts across daemon restarts, support cancellation, and never replay an already-started tool turn.
+- Add normalized event schema 4 with stable item lifecycle semantics and bounded command/tool previews while retaining schema 3 fields and capability compatibility for older clients.
+- Classify terminal task failures into stable, sanitized reasons with one safe recovery action; persist terminal lifecycle events so Studio does not mistake a completed task stream for an SSH disconnect.
+- Persist a bounded, privacy-preserving turn ledger with tool completion counts and Git workspace state summaries; show uncertain side effects in Studio recovery guidance, CLI summaries, and support bundles without automatically replaying work.
+- Replace Studio's protocol-first compatibility block with a user-facing readiness outcome, one primary action, and collapsible technical evidence; distinguish daily Agent availability from hardware-production validation.
+- Add a bounded, read-only Studio change review for each task workspace; bind inspection to the server-side task directory, disable executable Git integrations, omit untracked file contents, and label shared-workspace attribution honestly.
+- Bind every packaged `agentd` executable to strict release metadata and expose its source commit, clean/dirty state, build time, Pi runtime, and binary SHA-256 to diagnostics and Studio compatibility checks.
+- Add a private, resumable X5/S100/S600 reliability verifier with bounded SSH/RPC sampling, sanitized evidence, release-capability checks, and an opt-in idle-daemon recovery test that refuses to interrupt live tasks.
+- Add recorded current, previous-minor, and minimum-schema handshake fixtures so SDK and Studio compatibility behavior is replayed in CI instead of inferred from version numbers alone.
+- Resume `hobot task attach` from a private per-task display cursor after disconnects, add explicit full replay, and default task and approval inspection to redacted summaries with opt-in local details.
+
 ## 0.25.0
 
 - Bound update checks to ten seconds on disconnected boards, preserve the installed version, and replace raw curl failures with a concise recovery message while retaining opt-in debug details.

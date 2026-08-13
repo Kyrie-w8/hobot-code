@@ -93,6 +93,8 @@ hobot config
 hobot update --extensions
 ```
 
+`hobot extensions` 显示发行包内置扩展与 Skills 的版本化清单；`hobot extensions --json` 供 Studio 和自动化读取。清单只用于发现和兼容性判断，不执行扩展、不改变启用状态，也不授予权限。第三方 package 的安装、更新和加载继续由 Pi 负责，工具调用仍由 Hobot Code 的板端策略判定。
+
 第三方扩展与 Skills 不是沙箱内容，它们拥有当前用户权限。安装前应审查来源和代码；root 会话尤其不应加载来源不明的 package。
 
 基础 Hobot Code 运行时不依赖板端 Node.js。Pi package 若包含 npm 依赖，安装过程仍需要可用的 `npm`，或在 `settings.json` 中配置 `npmCommand`；Git 来源还需要 `git` 和相应网络或 SSH 凭据。
@@ -118,11 +120,13 @@ cacheRead / (input + cacheRead + cacheWrite)
 | `HOBOT_CODE_CONFIG_DIR` | `${XDG_CONFIG_HOME:-$HOME/.config}/hobot-code`；仅限启动前设置 |
 | `HOBOT_CODE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/hobot-code` |
 | `HOBOT_CODE_AGENTD_SOCKET` | 当前用户 agentd 的绝对 Unix socket 路径 |
+| `HOBOT_CODE_EXTENSION_CATALOG` | 发行包内置扩展清单的绝对路径；仅用于受管安装和开发测试 |
 | `HOBOT_CODE_MAX_BACKGROUND_TASKS` | 同时活跃的后台 Agent 数，取值 `1..8`，默认 `2` |
 | `HOBOT_CODE_MAX_RETAINED_TASKS` | 当前用户可保留的任务总数，取值 `10..1000`，默认 `100` |
 | `HOBOT_CODE_MAX_EVENT_MIB` | 单个后台任务事件日志上限，取值 `1..64` MiB，默认 `16` |
 | `HOBOT_CODING_AGENT_DIR` | `<config-root>/agent` |
 | `HOBOT_CODING_AGENT_SESSION_DIR` | `<state-root>/sessions` |
+| `HOBOT_CODE_BWRAP` | 自动发现 `/usr/bin/bwrap` 或 `/bin/bwrap`；仅在自定义安装路径时设置绝对路径 |
 | `HOBOT_CODE_PERMISSION_POLICY` | 权限策略文件 |
 | `HOBOT_CODE_MEMORY_CONFIG`、`HOBOT_CODE_MEMORY_DB` | 记忆配置与数据库 |
 | `HOBOT_CODE_GOAL_CONFIG`、`HOBOT_CODE_GOAL_DB` | 目标配置与数据库 |
@@ -263,16 +267,22 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 无界面任务可直接交给 `agentd`，无需安装 `tmux`：
 
 ```bash
-hobot task start [--name NAME] [--cwd DIR] [--model PROVIDER/MODEL] \
-  [--permissions review|ask|developer] [--trust-project] -- PROMPT
+hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] \
+  [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--trust-project] -- PROMPT
 hobot task list
-hobot task show TASK_ID
+hobot task show TASK_ID [--details]
 hobot task logs TASK_ID [--after SEQUENCE] [--follow]
-hobot task attach TASK_ID [--after SEQUENCE]
+hobot task attach TASK_ID [--after SEQUENCE | --replay-all]
 hobot task send TASK_ID PROMPT
 hobot task abort TASK_ID
 hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
-hobot task approvals TASK_ID
+hobot task approvals TASK_ID [--details]
+hobot workspace inspect [DIR]
+hobot workspace list
+hobot workspace writes
+hobot workspace delivery TASK_ID
+hobot workspace apply TASK_ID --yes
+hobot workspace cleanup TASK_ID --yes
 hobot task resume TASK_ID [PROMPT]
 hobot task rename TASK_ID NAME
 hobot task archive TASK_ID
@@ -282,7 +292,9 @@ hobot task delete TASK_ID --yes
 hobot task stop TASK_ID
 ```
 
-`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。`attach` 会先重放已持久化事件再跟随实时输出；失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务标记为 `interrupted`；`resume` 从已校验的 Pi session 续接对话，但不重放中断的 Prompt、审批或工具调用。归档任务从普通 `list` 中隐藏，但可用 `list --all` 查看；只有已停止且已归档的任务才能显式删除。完整接口见 [agentd 协议](agentd-protocol.md)。
+后台任务默认使用 OS 隔离：只读权限对应 `review`，普通开发对应 `workspace`，模型部署对应 `system`。`system` 只额外开放 BPU、ION/Hbmem、DMA heap、video 和 media 设备，而不是整个 `/dev`；它仍限制宿主文件写入并丢弃 Linux capabilities。网络为模型网关、包源和开发服务保留共享；需要完全无隔离的系统维护必须显式使用 `--sandbox off`。
+
+`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。首次 `attach` 会显示已持久化事件，之后按已成功显示的事件断点继续跟随；断点每两秒和退出时写入当前用户私有状态，`--replay-all` 才会明确从头回放。失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务标记为 `interrupted`；`resume` 从已校验的 Pi session 续接对话，但不重放中断的 Prompt、审批或工具调用。`show` 与 `approvals` 默认省略 session、审批正文和部署绝对路径，只有显式 `--details` 才返回完整本地记录。归档任务从普通 `list` 中隐藏，但可用 `list --all` 查看；只有已停止且已归档的任务才能显式删除。完整接口见 [agentd 协议](agentd-protocol.md)。
 
 桌面客户端应在 SSH 连接上运行 `hobot bridge --stdio`。控制请求和长时订阅各使用一个 bridge 进程；每行是一个 agentd JSON 请求。桥接只转发到当前用户的 Unix socket，不替代板端权限判定。
 

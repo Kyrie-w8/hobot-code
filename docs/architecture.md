@@ -4,15 +4,23 @@ Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 
 
 产品形态是“板端常驻核心 + 双前端”：SSH 现场调试使用 `hobot` TUI，长期任务由每用户的 `agentd` 托管，Mac 上的 Hobot Code 应用是同一控制面的可视化客户端。
 
+## 扩展边界
+
+Hobot Code 遵循“小核心、强扩展、板端裁决”的原则。Agent 循环、会话、任务恢复、权限、资源租约和审计属于稳定核心；模型 Provider、RDK 工具、Skills、MCP、Hook 与 LSP 通过明确能力边界接入。只有需要共享生命周期、权限或持久状态的能力才进入核心，单一工作流优先保留为 Skill 或扩展，避免把每项新功能都固化为守护进程接口。
+
+`extensions/catalog.json` 是与产品版本绑定的 `hobot.extensions/v1` 清单。`agentd` 启动时严格校验 schema、版本、重复 ID、入口路径和随包文件，随后通过 `extensions.list` 只读暴露给 CLI、SDK 和 Studio。清单不加载代码、不改变启用状态，也不授予权限；真正的扩展执行由固定 Pi 运行时负责，工具权限与系统安全边界仍由板端判定。
+
+扩展演进分三步进行：先完成内置能力发现和兼容性；再聚合 Pi packages、Skills、MCP、Hook、LSP 与 Provider 的状态；最后才引入经过签名、版本约束和隔离的第三方插件宿主。插件崩溃不得拖垮 `agentd`，客户端不得绕过板端安装、权限和审计。热加载在有独立宿主、撤销语义和故障隔离前保持关闭。
+
 ## 桌面端与 SSH Bridge
 
 `sdk/go/hobot` 通过系统 OpenSSH 启动 `hobot bridge --stdio`。控制请求复用一条串行化 SSH 连接，每个活跃任务的事件订阅使用独立连接；订阅断开后从最后确认的 sequence 自动退避重连。SSH 参数以独立 argv 传入，不经 Shell 解析；主机、用户、端口、私钥和 host-key 策略均在启动前校验。
 
 `studio/` 是 Wails/Go 桌面应用，对外名称仍为 Hobot Code。它只在 macOS 用户配置目录保存板卡显示名、地址、SSH 用户、端口和可选私钥路径，文件与目录分别限定为 `0600` 和 `0700`，并拒绝符号链接、过大文件和重复 ID。它不保存 SSH 密码、Provider 凭据或工具权限副本。
 
-桌面端按板端工作目录组织项目与任务分支。项目是导航概念，任务的工作目录和会话仍由板端元数据决定；目录浏览、创建和模型枚举由 `agentd` 执行，Mac 端不猜测板端文件系统或 Provider 配置。
+桌面端按用户选定的板端项目目录组织项目与任务分支，隔离 worktree 的内部路径不会被当成新项目。项目是导航概念，任务的工作目录和会话仍由板端元数据决定；目录浏览、创建、隔离预检和模型枚举由 `agentd` 执行，Mac 端不猜测板端文件系统或 Provider 配置。Changes 视图同样只接受任务 ID，由板端把它绑定到持久化工作目录后执行只读、有界 Git 检查；客户端不能借此指定任意路径、执行 Git 扩展或读取未跟踪文件内容。共享目录中的改动可能来自其他 Agent 或人工操作，因此该快照不承担单 Agent 归因。
 
-桌面端展示 schema-3 normalized events。用户 Prompt 由 `agentd` 作为私有任务事件持久化，前端据此恢复完整用户轮次，并将碎片化的 thinking、工具和回答聚合成对话。板端仍保留原始 Pi RPC 事件用于调试和协议兼容。审批结果通过 task command 发回 `agentd`，最终工具权限和安全边界仍由板端决定，客户端无法绕过。历史消息编辑和侧边任务都是服务端 session 树分支：前者从指定用户消息之前继续，后者从最新已稳定叶节点继续，两者都保留源任务并继承板端权限判定。
+桌面端展示 schema-4 normalized events；兼容客户端仍可继续读取 schema-3 的 `type + data` 表示。用户 Prompt 由 `agentd` 作为私有任务事件持久化，前端据此恢复完整用户轮次，并将碎片化的 thinking、工具和回答聚合成对话；schema 4 同时提供稳定的 item 类型、状态与有界工具预览，前端不再需要解析 Provider 私有字段。板端仍保留原始 Pi RPC 事件用于调试和协议兼容。审批结果通过 task command 发回 `agentd`，最终工具权限和安全边界仍由板端决定，客户端无法绕过。历史消息编辑和侧边任务都是服务端 session 树分支：前者从指定用户消息之前继续，后者从最新已稳定叶节点继续，两者都保留源任务并继承板端权限判定。
 
 ## 运行路径
 
@@ -55,11 +63,15 @@ flowchart LR
 
 ## 板端常驻服务
 
+新的根任务可选择 `shared` 或 `worktree` 工作区。`worktree` 只对干净且已有提交的 Git 仓库开放；创建前后均由板端使用受信 Git 复核，禁用 hooks 和环境注入。任务元数据同时保留用户项目路径与实际运行路径；Side Agent 和历史编辑分支继承同一 worktree。交付由板端重新验证两侧基线与任务状态，通过临时 Git index 生成二进制安全快照；客户端确认其 SHA-256 后，板端取得两侧跨进程写租约并再次比对，再以 staged changes 应用到仍然干净的原项目。它不提交或推送。删除对话默认保留代码，受管 worktree 只能在无对话引用、未交付改动已清空，或已交付快照未再变化时显式清理。
+
+运行时为所有可修改工作区的工具轮次建立 crash-recoverable 写租约。租约按物理路径和 Git 根目录归一化，覆盖前台 TUI、Side Agent 和 agentd 后台 worker；同一工作区只允许一个 Agent 轮次写入，不同 worktree 可并行。Agent 内并行写工具同样被拒绝。对非 Hobot Code 进程，运行时在模型步骤开始和每个写工具边界比较有界元数据指纹，发现外部变化后要求重新读取。这些机制是协作边界，不替代文件权限、Git 审阅或操作系统 sandbox；大型目录会显式降级为租约保护。
+
 `agentd` 是 Go 编写的按用户常驻控制面，只负责后台任务、事件日志、进程组和客户端重连。每个任务启动发行包内同一个 `runtime/hobot --mode rpc` worker，因此 TUI 与后台模式共享模型、工具、权限、Skills、RDK 知识和系统 Prompt，不存在第二套 Agent 实现。
 
-CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取。每个用户默认最多两个常驻 worker；新工作会挂起最久未使用的 idle worker，但不会打断正在工作或等待审批的 Agent。事件和 stderr 均有硬上限。
+CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取。每个用户默认最多两个常驻 worker；新工作会挂起最久未使用的 idle worker，但不会打断正在工作或等待审批的 Agent。槽位忙时 Prompt 进入板端私有 FIFO 队列，断线或 daemon 重启后仍可恢复；已经启动的副作用操作不会自动重放。终态也作为持久事件发送，客户端可区分任务结束与传输断线；对外失败原因是稳定脱敏结构，原始诊断只写入板端私有日志。事件、队列输入和 stderr 均有硬上限。
 
-daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但活动任务只会标记为 `interrupted`。系统不会自动重放 Prompt、审批或工具调用，以免重复产生文件、进程和硬件副作用。用户可显式从已校验的 Pi session 恢复同一对话；新客户端通过 SSH 上的 stdio bridge 消费稳定的 Hobot 事件 schema，不直接依赖 Pi 内部事件。协议细节见 [agentd 协议](agentd-protocol.md)。
+daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但活动任务只会标记为 `interrupted`。每轮有界账本保存工具计数、未闭合调用和不含文件名的 Git 状态摘要，让客户端能说明哪些完成、哪些未知；非 Git 副作用始终按未知处理。系统不会自动重放 Prompt、审批或工具调用，以免重复产生文件、进程和硬件副作用。用户可显式从已校验的 Pi session 恢复同一对话；新客户端通过 SSH 上的 stdio bridge 消费稳定的 Hobot 事件 schema，不直接依赖 Pi 内部事件。协议细节见 [agentd 协议](agentd-protocol.md)。
 
 `runtime/hobot` 是按版本与 SHA256 固定的 Pi Linux ARM64 standalone 二进制。它读取同目录的产品配置，由 Pi 生成标题、帮助、配置路径、会话 UI 和快捷键。Hobot Code 不复制或修改 Pi 的 TUI 组件、消息队列与会话树实现。
 

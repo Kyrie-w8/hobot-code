@@ -13,7 +13,7 @@ export function deploymentCompatibilityLabel(value) {
 }
 
 export function deploymentPhaseLabel(value) {
-  return ({checking: 'Checking report', running: 'Deployment running', passed: 'Verified deployment', partial: 'Partially completed', failed: 'Deployment failed', incomplete: 'Report missing', 'invalid-report': 'Report rejected'})[value] ?? value;
+  return ({checking: 'Checking report', queued: 'Waiting for Agent slot', running: 'Deployment running', passed: 'Verified deployment', partial: 'Partially completed', failed: 'Deployment failed', incomplete: 'Report missing', 'invalid-report': 'Report rejected'})[value] ?? value;
 }
 
 export function deploymentProfileFor(artifact, boardId) {

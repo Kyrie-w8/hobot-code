@@ -65,6 +65,45 @@ func TestHardwareLeaseSnapshotIsPrivateBoundedAndLive(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWriteLeaseSnapshotIsPrivateBoundedAndLive(t *testing.T) {
+	cfg := testConfig(t)
+	root := filepath.Join(cfg.StateRoot, "workspace-write-leases")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeLease := func(name string, value map[string]any, mode os.FileMode) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := json.Marshal(value)
+		if err := os.WriteFile(filepath.Join(dir, "owner.json"), append(content, '\n'), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	writeLease("lease-00112233-4455-6677-8899-aabbccddeeff", map[string]any{
+		"schemaVersion": 1, "leaseId": "00112233-4455-6677-8899-aabbccddeeff", "taskId": "task-live",
+		"pid": os.Getpid(), "cwd": cfg.StateRoot, "acquiredAt": now,
+	}, 0o600)
+	writeLease("lease-11112233-4455-6677-8899-aabbccddeeff", map[string]any{
+		"schemaVersion": 1, "leaseId": "11112233-4455-6677-8899-aabbccddeeff", "taskId": "task-dead",
+		"pid": 99999999, "cwd": cfg.StateRoot, "acquiredAt": now,
+	}, 0o600)
+	writeLease("lease-22112233-4455-6677-8899-aabbccddeeff", map[string]any{
+		"schemaVersion": 1, "leaseId": "22112233-4455-6677-8899-aabbccddeeff", "taskId": "too-open",
+		"pid": os.Getpid(), "cwd": cfg.StateRoot, "acquiredAt": now,
+	}, 0o644)
+	writeLease("not-a-lease", map[string]any{
+		"schemaVersion": 1, "leaseId": "invalid", "taskId": "invalid", "pid": os.Getpid(), "cwd": cfg.StateRoot, "acquiredAt": now,
+	}, 0o600)
+	leases := readWorkspaceWriteLeases(cfg)
+	if len(leases) != 1 || leases[0].TaskID != "task-live" || leases[0].PID != os.Getpid() || leases[0].Cwd != cfg.StateRoot {
+		t.Fatalf("unexpected workspace write leases: %+v", leases)
+	}
+}
+
 func TestCollectSystemSnapshotIsBounded(t *testing.T) {
 	cfg := testConfig(t)
 	snapshot := collectSystemSnapshot(cfg)

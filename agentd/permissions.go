@@ -93,10 +93,17 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 }
 
 func (current *task) permissionPolicyPath() string {
-	return filepath.Join(current.dir, "permissions.json")
+	return filepath.Join(current.permissionPolicyDirectory(), "permissions.json")
+}
+
+func (current *task) permissionPolicyDirectory() string {
+	return filepath.Join(current.taskSessionDirectory(), "policy")
 }
 
 func (current *task) writePermissionPolicy(mode string) error {
+	if err := ensurePrivateDir(current.permissionPolicyDirectory()); err != nil {
+		return err
+	}
 	policy, err := permissionPolicyForMode(mode)
 	if err != nil {
 		return err

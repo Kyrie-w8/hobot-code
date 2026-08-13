@@ -14,6 +14,7 @@ import {
   applyPermissionPreset,
   describeToolCall,
   fingerprintWorkspace,
+  fingerprintWorkspaceMetadata,
   initializeProject,
   isMcpTool,
   knowledgeQueryTerms,
@@ -57,6 +58,7 @@ import { registerSideAgent } from "./side-agent.ts";
 import { destructiveShellReasons, inspectResolvedPath } from "./runtime-safety.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
+import { acquireWorkspaceWriteLease } from "./workspace-write-lease.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = "kimi-k3";
@@ -559,6 +561,7 @@ const lspToolSchema = Type.Object({
 });
 
 const mutatingToolNames = new Set(["bash", "edit", "write"]);
+const workspaceChangingToolNames = new Set([...mutatingToolNames, "quality_gate"]);
 const completionAssertionPattern = /(?:已|已经|全部|现已)(?:完成|实现|修复|通过|部署)|(?:implementation|task|work|changes?)\s+(?:is|are)\s+(?:complete|done)|all\s+(?:checks|tests|gates)\s+pass/i;
 const qualityGateEntryType = "hobot-quality-gates";
 
@@ -746,12 +749,77 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let lastPromptSnapshot: PromptSnapshot | undefined;
   const qualityGateBlockedCalls = new Set<string>();
   const hardwareLeases = new Map<string, { release: () => Promise<void> }>();
+  let workspaceWriteLease: { release: () => Promise<void> } | undefined;
+  let workspaceWriteLeasePending: Promise<{ release: () => Promise<void> }> | undefined;
+  const workspaceMutationCalls = new Set<string>();
+  let workspaceTurnFingerprint: string | undefined;
+  let workspaceTurnFingerprintTruncated = false;
+  let workspaceTurnFingerprintError: string | undefined;
+  let workspaceFingerprintWarningShown = false;
   let permissionHiddenTools = new Set<string>();
 
   async function releaseAllHardwareLeases(): Promise<void> {
     const leases = [...hardwareLeases.values()];
     hardwareLeases.clear();
     await Promise.allSettled(leases.map((lease) => lease.release()));
+  }
+
+  async function releaseWorkspaceWriteLease(): Promise<void> {
+	const pending = workspaceWriteLeasePending;
+	workspaceWriteLeasePending = undefined;
+    const lease = workspaceWriteLease;
+    workspaceWriteLease = undefined;
+	if (pending) {
+		try {
+			await (await pending).release();
+		} catch {
+			// A failed acquisition has no lease to release.
+		}
+	}
+	await lease?.release();
+  }
+
+  async function ensureWorkspaceWriteLease(ctx: { cwd: string; sessionManager: { getSessionFile: () => string | undefined } }): Promise<void> {
+	if (workspaceWriteLease) return;
+	if (!workspaceWriteLeasePending) {
+		workspaceWriteLeasePending = acquireWorkspaceWriteLease({
+			registryDir: resolve(resolveUserPaths().stateRoot, "workspace-write-leases"),
+			cwd: ctx.cwd,
+			taskId: currentTaskID(ctx),
+		}) as Promise<{ release: () => Promise<void> }>;
+	}
+	const pending = workspaceWriteLeasePending;
+	try {
+		const lease = await pending;
+		if (workspaceWriteLeasePending !== pending) {
+			await lease.release();
+			throw new Error("The Agent turn ended before the workspace write lease was acquired");
+		}
+		workspaceWriteLease = lease;
+		workspaceWriteLeasePending = undefined;
+	} catch (error) {
+		if (workspaceWriteLeasePending === pending) workspaceWriteLeasePending = undefined;
+		throw error;
+	}
+  }
+
+  function currentTaskID(ctx: { sessionManager: { getSessionFile: () => string | undefined } }): string {
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    return process.env.HOBOT_CODE_BACKGROUND_TASK_ID
+      || (sideAgentMode ? `side-${process.pid}` : basename(sessionFile || `process-${process.pid}`));
+  }
+
+  async function captureWorkspaceTurnFingerprint(cwd: string): Promise<void> {
+	try {
+		const fingerprint = await fingerprintWorkspaceMetadata(cwd);
+		workspaceTurnFingerprint = fingerprint.digest;
+		workspaceTurnFingerprintTruncated = fingerprint.truncated;
+		workspaceTurnFingerprintError = undefined;
+	} catch (error) {
+		workspaceTurnFingerprint = undefined;
+		workspaceTurnFingerprintTruncated = false;
+		workspaceTurnFingerprintError = error instanceof Error ? error.message : String(error);
+	}
   }
 
   function memoryContext(
@@ -1330,6 +1398,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     await refreshPermissionPolicy();
     applyDeniedTools();
+	workspaceFingerprintWarningShown = false;
+	await captureWorkspaceTurnFingerprint(ctx.cwd);
     if (sideAgentMode) return undefined;
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
@@ -1392,6 +1462,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
       disposeSideAgent(),
       lspManager?.stopAll() ?? Promise.resolve(),
       releaseAllHardwareLeases(),
+      releaseWorkspaceWriteLease(),
     ]);
     try {
       closeMemory();
@@ -1411,6 +1482,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async () => {
+    await Promise.allSettled([releaseAllHardwareLeases(), releaseWorkspaceWriteLease()]);
+	workspaceMutationCalls.clear();
     agentStartedAt = Date.now();
     agentHadFailure = false;
     agentHadMutation = false;
@@ -1440,7 +1513,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async () => {
-    await releaseAllHardwareLeases();
+    await Promise.allSettled([releaseAllHardwareLeases(), releaseWorkspaceWriteLease()]);
+	workspaceMutationCalls.clear();
     if (sideAgentMode) return;
     const duration = agentStartedAt ? Date.now() - agentStartedAt : 0;
     if (duration < notificationConfig.minDurationMs) return;
@@ -1582,6 +1656,48 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
     }
 
+	const writesWorkspace = workspaceChangingToolNames.has(event.toolName) || toolIsMcp(event.toolName);
+	if (writesWorkspace && workspaceMutationCalls.size > 0) {
+		return { block: true, reason: "Workspace-changing tools must run sequentially; wait for the active tool call to finish" };
+	}
+	const hadWorkspaceLease = Boolean(workspaceWriteLease);
+	if (writesWorkspace) workspaceMutationCalls.add(event.toolCallId);
+    if (writesWorkspace && !workspaceWriteLease) {
+      try {
+		await ensureWorkspaceWriteLease(ctx);
+      } catch (error) {
+		workspaceMutationCalls.delete(event.toolCallId);
+        return { block: true, reason: error instanceof Error ? error.message : String(error) };
+      }
+    }
+	if (writesWorkspace) {
+		if (!workspaceTurnFingerprint) {
+			if (!workspaceFingerprintWarningShown) {
+				ctx.ui.notify(`External workspace change detection is unavailable for this turn${workspaceTurnFingerprintError ? `: ${workspaceTurnFingerprintError}` : ""}. Cross-Agent write locking remains active.`, "warning");
+				workspaceFingerprintWarningShown = true;
+			}
+		}
+		if (workspaceTurnFingerprint) try {
+			const current = await fingerprintWorkspaceMetadata(ctx.cwd);
+			if (current.digest !== workspaceTurnFingerprint) {
+				workspaceMutationCalls.delete(event.toolCallId);
+				if (!hadWorkspaceLease) await releaseWorkspaceWriteLease();
+				return {
+					block: true,
+					reason: "The workspace changed after this Agent started thinking. Re-read the affected files and retry in a new model step before writing.",
+				};
+			}
+		} catch (error) {
+			workspaceMutationCalls.delete(event.toolCallId);
+			if (!hadWorkspaceLease) await releaseWorkspaceWriteLease();
+			return {block: true, reason: `Hobot Code could not verify the workspace before writing: ${error instanceof Error ? error.message : String(error)}`};
+		}
+		if (workspaceTurnFingerprintTruncated && !workspaceFingerprintWarningShown) {
+			ctx.ui.notify("External workspace change detection is bounded because this project is large. Cross-Agent write locking remains active.", "warning");
+			workspaceFingerprintWarningShown = true;
+		}
+	}
+
     const hookResult = await runHooks({
       config: hookConfig,
       event: "PreToolUse",
@@ -1594,29 +1710,30 @@ export default function rdkExtension(pi: ExtensionAPI) {
     });
     for (const warning of hookResult.warnings) ctx.ui.notify(`PreToolUse hook warning: ${warning}`, "warning");
     if (hookResult.blocked) {
+		workspaceMutationCalls.delete(event.toolCallId);
+		if (writesWorkspace && !hadWorkspaceLease) await releaseWorkspaceWriteLease();
       return { block: true, reason: `PreToolUse hook blocked ${event.toolName}: ${hookResult.reason}` };
     }
 
     const hardwareResources = hardwareResourcesForTool(event.toolName, event.input);
     if (hardwareResources.length > 0) {
-      const sessionFile = ctx.sessionManager.getSessionFile();
-      const taskId = process.env.HOBOT_CODE_BACKGROUND_TASK_ID
-        || (sideAgentMode ? `side-${process.pid}` : basename(sessionFile || `process-${process.pid}`));
       try {
         const lease = await acquireHardwareResourceLease({
           resources: hardwareResources,
           registryDir: resolve(resolveUserPaths().stateRoot, "hardware-leases"),
-          taskId,
+          taskId: currentTaskID(ctx),
           cwd: ctx.cwd,
           toolCallId: event.toolCallId,
         }) as { release: () => Promise<void> };
         hardwareLeases.set(event.toolCallId, lease);
       } catch (error) {
+		workspaceMutationCalls.delete(event.toolCallId);
+		if (writesWorkspace && !hadWorkspaceLease) await releaseWorkspaceWriteLease();
         return { block: true, reason: error instanceof Error ? error.message : String(error) };
       }
     }
 
-    if (mutatingToolNames.has(event.toolName) || toolIsMcp(event.toolName)) {
+    if (workspaceChangingToolNames.has(event.toolName) || toolIsMcp(event.toolName)) {
       agentHadMutation = true;
       if (qualityGateState.lastRun) {
         qualityGateState = { ...qualityGateState, invalidated: true };
@@ -1627,6 +1744,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", async (event, ctx) => {
+	const changedWorkspace = workspaceMutationCalls.has(event.toolCallId);
     if (event.isError) agentHadFailure = true;
     const hardwareLease = hardwareLeases.get(event.toolCallId);
     hardwareLeases.delete(event.toolCallId);
@@ -1649,6 +1767,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
       signal: ctx.signal,
     });
     for (const warning of hookResult.warnings) ctx.ui.notify(`PostToolUse hook warning: ${warning}`, "warning");
+	if (changedWorkspace) {
+		await captureWorkspaceTurnFingerprint(ctx.cwd);
+		workspaceMutationCalls.delete(event.toolCallId);
+	}
     if (!hookResult.appendText && !hookResult.forceError && !hookResult.blocked) return undefined;
     const reason = hookResult.blocked ? `PostToolUse hook failed: ${hookResult.reason}` : undefined;
     if (hookResult.forceError || hookResult.blocked) agentHadFailure = true;

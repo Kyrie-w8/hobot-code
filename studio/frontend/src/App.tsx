@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, Gauge, Info, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Download, FileDiff, Gauge, Info, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
@@ -23,15 +23,18 @@ import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, 
 import {shouldToggleMaximise} from './titlebar-policy.js';
 import {isCurrentRequest, isCurrentTarget, watchRetryDelay, watchStatusLabel} from './async-policy.js';
 import {taskAttention} from './task-notifications.js';
+import {taskRecovery, taskRecoveryActionAvailable} from './task-recovery.js';
+import {compatibilityPresentation, compatibilityTargetLabel} from './compatibility-presentation.js';
+import {workspaceChangeLabel, workspaceChangeSummary, workspaceDeliverySummary, workspaceDiffLines} from './workspace-changes.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceListing} from './types';
+import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ImageContent, ModelConformance, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
 const statusLabel: Record<string, string> = {
   draft: 'Draft',
-  starting: 'Starting', idle: 'Ready', running: 'Working', waiting: 'Approval needed',
+  queued: 'Queued', starting: 'Starting', idle: 'Ready', running: 'Working', waiting: 'Approval needed',
   stopping: 'Stopping', stopped: 'Stopped', failed: 'Failed', interrupted: 'Interrupted',
 };
 
@@ -56,6 +59,8 @@ function App() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelHealth, setModelHealth] = useState<ModelHealth | null>(null);
   const [checkingModel, setCheckingModel] = useState(false);
+  const [modelConformance, setModelConformance] = useState<ModelConformance | null>(null);
+  const [verifyingModel, setVerifyingModel] = useState(false);
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
   const [editingNeedsImages, setEditingNeedsImages] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
@@ -69,12 +74,14 @@ function App() {
   const [showBoard, setShowBoard] = useState(false);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
+	const [workspaceInspection, setWorkspaceInspection] = useState<{taskId: string; loading: boolean; result?: WorkspaceIsolation} | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [unreadTasks, setUnreadTasks] = useState<Set<string>>(new Set());
   const [showInspector, setShowInspector] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<{kind: 'conversation' | 'project'; label: string; taskIds: string[]} | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{kind: 'conversation' | 'project'; label: string; taskIds: string[]; retainsWorktree?: boolean} | null>(null);
   const [renamingTask, setRenamingTask] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [watchRevision, setWatchRevision] = useState(0);
@@ -90,6 +97,7 @@ function App() {
   const selectedTaskId = useRef('');
   const snapshotSampling = useRef(false);
   const modelHealthRequest = useRef(0);
+  const modelVerificationRequest = useRef(0);
   const connectionRequest = useRef(0);
   const connectionTarget = useRef('');
   const watchRetryAttempt = useRef(0);
@@ -138,8 +146,11 @@ function App() {
     const request = ++connectionRequest.current;
     connectionTarget.current = board.id;
     modelHealthRequest.current += 1;
+    modelVerificationRequest.current += 1;
     setCheckingModel(false);
+    setVerifyingModel(false);
     setModelHealth(null);
+    setModelConformance(null);
     setBusy(true);
     setConnectionState('connecting');
     setError('');
@@ -180,6 +191,7 @@ function App() {
       setOptimisticPrompt(null);
       setError('');
       setShowBoard(false);
+      setShowChanges(false);
     } catch (reason) {
       if (!isCurrentRequest(request, connectionRequest.current)) return;
       setConnectionState('offline');
@@ -232,7 +244,7 @@ function App() {
     const removeEvent = api.onEvent(({boardId: eventBoard, event}) => {
       if (eventBoard !== activeBoardId.current || event.taskId !== selectedTask?.id) return;
       setEvents((current) => current.some((item) => item.sequence === event.sequence) ? current : [...current, event]);
-      if (['task.running', 'task.idle', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
+      if (['task.queued', 'task.starting', 'task.running', 'task.idle', 'task.cancelled', 'task.failed', 'task.interrupted', 'task.stopped', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
     });
     const removeError = api.onWatchError((watchError) => {
       if (watchError.boardId === activeBoardId.current && watchError.taskId === selectedTask?.id) {
@@ -382,6 +394,17 @@ function App() {
   }, [modelHealth]);
 
   useEffect(() => {
+    if (!modelConformance) return;
+    const remaining = Date.parse(modelConformance.expiresAt) - Date.now();
+    if (remaining <= 0) {
+      setModelConformance(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setModelConformance((current) => current?.expiresAt === modelConformance.expiresAt ? null : current), remaining);
+    return () => window.clearTimeout(timer);
+  }, [modelConformance]);
+
+  useEffect(() => {
     const textarea = composerRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
@@ -391,27 +414,38 @@ function App() {
   const visibleTasks = useMemo(() => {
     const query = search.trim().toLowerCase();
     const available = selectedTask?.id.startsWith('draft:') ? [selectedTask, ...tasks] : tasks;
-    return query ? available.filter((task) => `${task.name} ${task.cwd} ${task.status}`.toLowerCase().includes(query)) : available;
+	return query ? available.filter((task) => `${task.name} ${task.projectCwd || task.cwd} ${task.status}`.toLowerCase().includes(query)) : available;
   }, [search, selectedTask, tasks]);
   const conversation = useMemo(() => buildConversation(events), [events]);
   const projects = useMemo(() => groupTasksByProject(visibleTasks), [visibleTasks]);
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
   const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
+	const workspaceInspectionLoading = Boolean(draftSelected && workspaceInspection?.taskId === selectedTask?.id && workspaceInspection?.loading);
   const awaitingFirstPrompt = Boolean(selectedTask?.awaitingPrompt);
-  const composerBlocked = busy || connectionState !== 'online' || (editingNeedsImages && attachments.length === 0) || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
+	const composerBlocked = busy || workspaceInspectionLoading || connectionState !== 'online' || (editingNeedsImages && attachments.length === 0) || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
+  const selectedTaskRecovery = taskRecovery(selectedTask);
   const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
   const effectiveModel = resolveEffectiveModel(models, selectedModel);
   const currentModelHealth = resolveCurrentModelHealth(modelHealth, effectiveModel);
+  const currentModelConformance = modelConformance
+    && effectiveModel
+    && modelConformance.provider === effectiveModel.provider
+    && modelConformance.model === effectiveModel.id
+    && Date.parse(modelConformance.expiresAt) > Date.now()
+      ? modelConformance
+      : null;
   const imageInputSupported = modelAcceptsImages(models, selectedModel);
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
+  const selectedSandboxMode = selectedTask?.sandboxMode ?? (selectedPermissionMode === 'review' ? 'review' : 'workspace');
   const canCreateBlankSideTask = Boolean(connection?.capabilities?.capabilities.includes('tasks.fork.deferred-prompt.v1'));
   const canChangeModel = Boolean(connectionState === 'online' && selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
   const canChangePermissions = canChangeModel;
-  const canStopTask = Boolean(selectedTask && ['starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
+  const canChangeSandbox = Boolean(connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') && selectedTask && (draftSelected || selectedTask.status === 'queued' || terminalStatuses.has(selectedTask.status)) && !busy && connectionState === 'online');
+  const canStopTask = Boolean(selectedTask && ['queued', 'starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
   const latestConversationItem = conversation[conversation.length - 1];
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
     ? optimisticPrompt.time
@@ -456,8 +490,10 @@ function App() {
         images: submittedImages,
         approve: false,
         model: selectedModel || undefined,
-        permissionMode: selectedPermissionMode,
-      });
+		permissionMode: selectedPermissionMode,
+		workspaceMode: connection?.capabilities?.capabilities.includes('workspaces.isolation.v1') ? selectedTask.workspaceMode || 'shared' : undefined,
+		sandboxMode: connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') ? selectedSandboxMode : undefined,
+	  });
       else if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, images: submittedImages, kind: 'edit', model: selectedModel});
       else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
       else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt, submittedImages);
@@ -544,8 +580,11 @@ function App() {
     if (!provider || !modelId) return;
     const nextModel = models.find((model) => model.provider === provider && model.id === modelId);
     modelHealthRequest.current += 1;
+    modelVerificationRequest.current += 1;
     setCheckingModel(false);
+    setVerifyingModel(false);
     setModelHealth(null);
+    setModelConformance(null);
     if (attachments.length > 0 && nextModel?.capabilities?.imageInput !== true) {
       setAttachments([]);
       setNotice(`${nextModel?.name || modelId} does not support image input. Attachments were removed.`);
@@ -584,6 +623,22 @@ function App() {
     }
   }
 
+  async function verifyModelConformance() {
+    if (!boardId || !effectiveModel || verifyingModel || !connection?.capabilities?.capabilities.includes('models.conformance.v1')) return;
+    const targetBoard = boardId;
+    const request = ++modelVerificationRequest.current;
+    setVerifyingModel(true);
+    setError('');
+    try {
+      const result = await api.modelConformance(targetBoard, `${effectiveModel.provider}/${effectiveModel.id}`, Boolean(currentModelConformance));
+      if (modelVerificationRequest.current === request && activeBoardId.current === targetBoard) setModelConformance(result);
+    } catch (reason) {
+      if (modelVerificationRequest.current === request && activeBoardId.current === targetBoard) setError(friendlyError(String(reason)));
+    } finally {
+      if (modelVerificationRequest.current === request) setVerifyingModel(false);
+    }
+  }
+
   async function changePermissionMode(mode: string) {
     if (!selectedTask || !boardId || !canChangePermissions) return;
     if (draftSelected) {
@@ -599,6 +654,26 @@ function App() {
       if (activeBoardId.current === boardId) setTasks((current) => current.map((item) => item.id === task.id ? task : item));
     } catch (reason) {
       if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeSandboxMode(mode: string) {
+    if (!selectedTask || !boardId || !canChangeSandbox) return;
+    if (draftSelected) {
+      setSelectedTask({...selectedTask, sandboxMode: mode as Task['sandboxMode']});
+      return;
+    }
+    const sourceTaskId = selectedTask.id;
+    setBusy(true);
+    setError('');
+    try {
+      const task = await api.setSandboxMode(boardId, selectedTask.id, mode);
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask(task);
+      if (activeBoardId.current === boardId) setTasks((current) => current.map((item) => item.id === task.id ? task : item));
+    } catch (reason) {
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(friendlyError(String(reason)));
     } finally {
       setBusy(false);
     }
@@ -630,27 +705,51 @@ function App() {
     }
   }
 
-  function openNewTask(cwd = '') {
-    const now = new Date().toISOString();
-    const id = `draft:${Date.now()}`;
+	function openNewTask(cwd = '') {
+	  const now = new Date().toISOString();
+	  const id = `draft:${Date.now()}`;
+	  const projectCwd = cwd || selectedTask?.projectCwd || selectedTask?.cwd || '/root';
     setRenamingTask(false);
     setOpenMenu('');
     setEvents([]);
     setOptimisticPrompt(null);
     selectedTaskId.current = id;
-    setSelectedTask({
-      id,
-      name: 'New task',
-      cwd: cwd || selectedTask?.cwd || '/root',
+	  setSelectedTask({
+		id,
+		name: 'New task',
+		cwd: projectCwd,
+		projectCwd,
+		workspaceMode: 'shared',
       status: 'draft',
       createdAt: now,
       updatedAt: now,
       lastSequence: 0,
       model: models[0] ? `${models[0].provider}/${models[0].id}` : '',
       permissionMode: 'ask',
-    });
-    window.requestAnimationFrame(() => composerRef.current?.focus());
-  }
+	  sandboxMode: 'workspace',
+	  });
+	  const canInspect = Boolean(boardId && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'));
+	  setWorkspaceInspection(canInspect ? {taskId: id, loading: true} : null);
+	  if (canInspect) {
+		void api.inspectWorkspaceIsolation(boardId, projectCwd).then((result) => {
+		  if (activeBoardId.current !== boardId || selectedTaskId.current !== id) return;
+		  setWorkspaceInspection({taskId: id, loading: false, result});
+		  setSelectedTask((current) => current?.id === id ? {...current, workspaceMode: result.eligible ? result.recommendedMode : 'shared'} : current);
+		}).catch((reason) => {
+		  if (activeBoardId.current !== boardId || selectedTaskId.current !== id) return;
+		  setWorkspaceInspection({taskId: id, loading: false});
+		  setNotice(`Workspace isolation is unavailable. This task will use the shared directory. ${friendlyError(String(reason))}`);
+		});
+	  }
+	  window.requestAnimationFrame(() => composerRef.current?.focus());
+	}
+
+	function changeWorkspaceMode(mode: string) {
+	  if (!selectedTask || !draftSelected || workspaceInspectionLoading) return;
+	  const eligible = workspaceInspection?.taskId === selectedTask.id && workspaceInspection.result?.eligible;
+	  if (mode === 'worktree' && !eligible) return;
+	  setSelectedTask({...selectedTask, workspaceMode: mode as Task['workspaceMode']});
+	}
 
   function beginRename(task: Task) {
     selectTask(task);
@@ -756,6 +855,8 @@ function App() {
   }
 
   function selectTask(task: Task) {
+	setShowChanges(false);
+	setWorkspaceInspection(null);
     setRenamingTask(false);
     if (selectedTask?.id.startsWith('draft:') && selectedTask.id !== task.id) {
       taskDrafts.current.delete(selectedTask.id);
@@ -826,7 +927,7 @@ function App() {
               <button className="project-toggle" onClick={() => toggleProject(project.path)} title={collapsedProjects.has(project.path) ? 'Expand project' : 'Collapse project'}><ChevronRight className="project-chevron" size={13} /><Folder size={14} /><span>{project.name}</span><small>{arrangeTasks(project.tasks).length}</small></button>
               <button className="row-more project-add" title={`New conversation in ${project.name}`} onClick={() => openNewTask(project.path)}><Plus size={14} /></button>
               <button className="row-more" title="Project actions" onClick={() => setOpenMenu((current) => current === `project:${project.path}` ? '' : `project:${project.path}`)}><MoreHorizontal size={15} /></button>
-              {openMenu === `project:${project.path}` && <div className="row-menu"><button className="destructive" onClick={() => setDeleteTarget({kind: 'project', label: project.name, taskIds: project.tasks.map((task) => task.id)})}><Trash2 size={14} />Remove project</button></div>}
+			  {openMenu === `project:${project.path}` && <div className="row-menu"><button className="destructive" onClick={() => setDeleteTarget({kind: 'project', label: project.name, taskIds: project.tasks.map((task) => task.id), retainsWorktree: project.tasks.some((task) => task.workspaceMode === 'worktree')})}><Trash2 size={14} />Remove project</button></div>}
             </div>
             {!collapsedProjects.has(project.path) && <div className="project-conversations">{arrangeTasks(project.tasks).map(({task, depth, branchKind}) => <div key={task.id} className={`task-row-shell ${depth ? 'branch-task' : ''}`} style={{'--task-depth': depth} as any}>
               <button className={`task-row ${selectedTask?.id === task.id ? 'selected' : ''}`} onClick={() => {selectTask(task); setOpenMenu('');}}>
@@ -835,21 +936,22 @@ function App() {
                 <span className={`task-row-time ${unreadTasks.has(task.id) ? 'unread' : ''}`}>{unreadTasks.has(task.id) && <i />}{relativeTime(task.updatedAt)}</span>
               </button>
               <button className="row-more task-more" title="Conversation actions" onClick={() => setOpenMenu((current) => current === `task:${task.id}` ? '' : `task:${task.id}`)}><MoreHorizontal size={15} /></button>
-              {openMenu === `task:${task.id}` && <div className="row-menu task-menu"><button onClick={() => beginRename(task)}><FilePenLine size={14} />Rename conversation</button>{!task.id.startsWith('draft:') && <button className="destructive" onClick={() => setDeleteTarget({kind: 'conversation', label: task.name, taskIds: [task.id]})}><Trash2 size={14} />Delete conversation</button>}</div>}
+			  {openMenu === `task:${task.id}` && <div className="row-menu task-menu"><button onClick={() => beginRename(task)}><FilePenLine size={14} />Rename conversation</button>{!task.id.startsWith('draft:') && <button className="destructive" onClick={() => setDeleteTarget({kind: 'conversation', label: task.name, taskIds: [task.id], retainsWorktree: task.workspaceMode === 'worktree'})}><Trash2 size={14} />Delete conversation</button>}</div>}
             </div>)}</div>}
           </section>)}
           {visibleTasks.length === 0 && <div className="empty-state"><ListTodo size={21} /><span>No tasks</span></div>}
         </div>
         {connection && <button className="board-summary" onClick={() => setShowBoard(true)}>
-          <Server size={16} /><span><strong>{connection.board.name}</strong><small>{connection.daemon?.activeTasks ?? activeTaskCount}/{connection.daemon?.maximumTasks ?? 0} active</small></span><ChevronRight size={15} />
+          <Server size={16} /><span><strong>{connection.board.name}</strong><small>{connection.daemon?.activeTasks ?? activeTaskCount}/{connection.daemon?.maximumTasks ?? 0} active{connection.daemon?.queuedTasks ? ` · ${connection.daemon.queuedTasks} queued` : ''}</small></span><ChevronRight size={15} />
         </button>}
       </aside>
 
       <main className="task-main">
         {selectedTask ? <>
           <div className="task-header">
-            <div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${awaitingFirstPrompt ? 'idle' : selectedTask.status}`}>{awaitingFirstPrompt ? 'Ready' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>{watchStatus && <span className={`stream-status stream-${watchStatus.state}`} role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />{watchStatusLabel(watchStatus)}</span>}</div><span className="workspace-path">{selectedTask.cwd}</span></div>
+			<div className="task-title-block"><div className="task-title-line">{renamingTask ? <form className="title-editor" onSubmit={(event) => {event.preventDefault(); void renameSelectedTask();}}><input value={renameValue} maxLength={64} autoFocus onChange={(event) => setRenameValue(event.target.value)} onBlur={() => void renameSelectedTask()} onKeyDown={(event) => {if (event.key === 'Escape') {setRenameValue(selectedTask.name); setRenamingTask(false);}}} /></form> : <><h1 title="Double-click to rename" onDoubleClick={() => beginRename(selectedTask)}>{selectedTask.name}</h1><button className="title-edit" title="Rename conversation" onClick={() => beginRename(selectedTask)}><FilePenLine size={13} /></button></>}<span className={`status status-${awaitingFirstPrompt ? 'idle' : selectedTask.status}`}>{awaitingFirstPrompt ? 'Ready' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>{selectedTask.workspaceMode === 'worktree' && <span className="workspace-mode-badge">Isolated</span>}{watchStatus && <span className={`stream-status stream-${watchStatus.state}`} role="status" title={watchStatus.message}><RefreshCw size={11} className="spin" />{watchStatusLabel(watchStatus)}</span>}</div><span className="workspace-path">{selectedTask.projectCwd || selectedTask.cwd}</span></div>
             <div className="task-actions">
+              {!draftSelected && connection?.capabilities?.capabilities.includes('workspaces.changes.v1') && <button className="secondary-button changes-button" title="Review current workspace changes" onClick={() => setShowChanges(true)} disabled={connectionState !== 'online'}><FileDiff size={15} />Changes</button>}
               {!draftSelected && <button className="secondary-button side-task-button" title={!selectedTask.sessionFile ? 'Side Agent is available after the first response' : !canCreateBlankSideTask ? 'Update Hobot Code on the board to open blank Side Agent conversations' : 'Open an independent conversation from this context'} onClick={() => void createSideTask()} disabled={busy || !selectedTask.sessionFile || !canCreateBlankSideTask}><GitBranch size={15} />Side Agent</button>}
               {terminalStatuses.has(selectedTask.status) && !awaitingFirstPrompt && <button className="secondary-button" onClick={() => composerRef.current?.focus()}><RefreshCw size={14} />{selectedComposerMode === 'resume' ? 'Resume' : 'New session'}</button>}
             </div>
@@ -863,7 +965,8 @@ function App() {
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
               {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)}))}} />}
-              {['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
+              {selectedTask.status === 'queued' ? <div className="agent-progress immediate"><ListTodo size={14} /><span>Waiting for a board Agent slot</span><small>{selectedTask.queuedAt ? relativeTime(selectedTask.queuedAt) : 'queued'}</small></div> : ['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
+              {selectedTaskRecovery && <TaskRecoveryCard presentation={selectedTaskRecovery} canCheckModel={Boolean(effectiveModel && connection?.capabilities?.capabilities.includes('models.health.v1'))} canDiagnose={Boolean(connection?.capabilities?.capabilities.includes('support.bundle.v1'))} busy={busy || checkingModel} onAction={() => {if (selectedTaskRecovery.recovery === 'check-model') {void checkModelHealth(); return;} if (selectedTaskRecovery.recovery === 'diagnose') {void saveSupportBundle(); return;} setComposer(selectedTaskRecovery.action?.prompt ?? ''); window.requestAnimationFrame(() => composerRef.current?.focus());}} />}
             </div>
           </div>
 
@@ -887,12 +990,15 @@ function App() {
                 placeholder={awaitingFirstPrompt ? 'Message this Side Agent' : selectedComposerMode === 'resume' ? 'Continue this task' : selectedComposerMode === 'restart' ? 'Start a new session' : 'Message Hobot Code'}
                 rows={1}
               />
-              <div className="composer-footer">
-                <ImagePickerButton disabled={busy || (composerBlocked && !editingNeedsImages) || connectionState !== 'online' || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
+			  <div className="composer-footer">
+				<ImagePickerButton disabled={busy || (composerBlocked && !editingNeedsImages) || connectionState !== 'online' || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
+				{draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1') && <label className="workspace-mode-picker" title={workspaceInspectionLoading ? 'Checking workspace' : workspaceInspection?.result?.reason || 'Choose whether this task shares the project directory'}><GitBranch size={13} /><select aria-label="Workspace mode" value={selectedTask.workspaceMode || 'shared'} disabled={workspaceInspectionLoading} onChange={(event) => changeWorkspaceMode(event.target.value)}><option value="shared">Shared</option><option value="worktree" disabled={!workspaceInspection?.result?.eligible}>Isolated</option></select><ChevronDown size={12} /></label>}
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
-                {connection?.capabilities?.capabilities.includes('models.health.v1') && <button className={`model-health-button ${currentModelHealth?.status ?? ''}`} type="button" title={currentModelHealth ? `${currentModelHealth.message} Click to check again.${currentModelHealth.cached ? ' Cached result.' : ''}` : 'Check model availability'} onClick={() => void checkModelHealth()} disabled={checkingModel || !effectiveModel}>{checkingModel ? <LoaderCircle size={12} className="spin" /> : currentModelHealth?.status === 'available' ? <Check size={12} /> : currentModelHealth?.status === 'unavailable' ? <XCircle size={12} /> : <Activity size={12} />}<span>{checkingModel ? 'Checking' : currentModelHealth?.status === 'available' ? `${currentModelHealth.latencyMs ?? 0} ms` : currentModelHealth?.status === 'unavailable' ? modelHealthLabel(currentModelHealth.category) : 'Check'}</span></button>}
+                {connection?.capabilities?.capabilities.includes('models.health.v1') && <button className={`model-health-button ${currentModelHealth?.status ?? ''}`} type="button" title={currentModelHealth ? `${currentModelHealth.message} Click to check again.${currentModelHealth.cached ? ' Cached result.' : ''}` : 'Check model availability'} onClick={() => void checkModelHealth()} disabled={checkingModel || verifyingModel || !effectiveModel}>{checkingModel ? <LoaderCircle size={12} className="spin" /> : currentModelHealth?.status === 'available' ? <Check size={12} /> : currentModelHealth?.status === 'unavailable' ? <XCircle size={12} /> : <Activity size={12} />}<span>{checkingModel ? 'Checking' : currentModelHealth?.status === 'available' ? `${currentModelHealth.latencyMs ?? 0} ms` : currentModelHealth?.status === 'unavailable' ? modelHealthLabel(currentModelHealth.category) : 'Check'}</span></button>}
+                {connection?.capabilities?.capabilities.includes('models.conformance.v1') && <button className={`model-health-button model-verify-button ${currentModelConformance?.status ?? ''}`} type="button" title={currentModelConformance ? `${currentModelConformance.message} ${currentModelConformance.checks.map((check) => `${check.name}: ${check.status}`).join(', ')}. Click to verify again.` : 'Verify streaming, tools, continuation, and declared input modes'} onClick={() => void verifyModelConformance()} disabled={checkingModel || verifyingModel || !effectiveModel}>{verifyingModel ? <LoaderCircle size={12} className="spin" /> : currentModelConformance?.status === 'verified' ? <ShieldCheck size={12} /> : currentModelConformance?.status === 'failed' ? <AlertTriangle size={12} /> : <ShieldCheck size={12} />}<span>{verifyingModel ? 'Verifying' : currentModelConformance?.status === 'verified' ? 'Verified' : currentModelConformance?.status === 'compatible' ? 'Compatible' : currentModelConformance?.status === 'failed' ? 'Limited' : 'Verify'}</span></button>}
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
-                <span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
+				{connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') && <label className="permission-picker" title={canChangeSandbox ? 'Choose the board-side OS boundary. Network remains available for the model gateway.' : connection.capabilities.sandbox?.reason || 'Stop the current turn before changing the OS boundary'}><ShieldCheck size={13} /><select aria-label="OS sandbox" value={selectedSandboxMode} disabled={!canChangeSandbox} onChange={(event) => void changeSandboxMode(event.target.value)}><option value="review" disabled={!connection.capabilities.sandbox?.available}>Read only</option><option value="workspace" disabled={!connection.capabilities.sandbox?.available}>Workspace</option><option value="system" disabled={!connection.capabilities.sandbox?.available}>Board hardware</option><option value="off">No sandbox</option></select><ChevronDown size={12} /></label>}
+				<span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : workspaceInspectionLoading ? 'Checking workspace' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
             </form>
@@ -903,15 +1009,17 @@ function App() {
       {showInspector && <aside className="inspector">
         <div className="inspector-header"><span>Board monitor</span><div className="inspector-header-actions"><small>{snapshot ? `Updated ${relativeTime(snapshot.capturedAt)}` : 'Not sampled'}</small><button className="icon-button compact" title="Close monitor" onClick={() => setShowInspector(false)}><X size={16} /></button></div></div>
         {connection && <BoardMonitor connection={connection} connectionState={connectionState} snapshot={snapshot} task={selectedTask} />}
+        {selectedTask?.sandbox && <TaskSandboxInspector task={selectedTask} />}
         {selectedTask?.deployment && <DeploymentInspector status={deploymentStatus} record={selectedTask.deployment} />}
       </aside>}
 
       {error && <div className="error-toast"><XCircle size={17} /><span>{friendlyError(error)}</span><button title="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
       {notice && <div className="success-toast"><Check size={17} /><span>{notice}</span><button title="Dismiss" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);}} onRemove={async (board) => {await api.removeBoard(board.id); if (activeBoardId.current === board.id) {activeBoardId.current = ''; setConnection(null); setConnectionState('offline'); setTasks([]); setSelectedTask(null);} setBoards(await api.listBoards());}} />}
-      {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
+	  {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.projectCwd ?? selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
       {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onClose={() => setShowAbout(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
+	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
     </div>
   );
@@ -937,6 +1045,11 @@ function AgentProgress({startedAt, now, hasOutput}: {startedAt?: string; now: nu
   const seconds = startedAt ? Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000)) : 0;
   const label = seconds < 2 ? 'Sending' : seconds < 8 ? 'Starting' : seconds < 30 ? 'Thinking' : 'Still working';
   return <div className="agent-progress immediate"><LoaderCircle size={15} className="spin" /><span>{label}</span>{seconds >= 2 && <small>{seconds}s</small>}</div>;
+}
+
+function TaskRecoveryCard({presentation, canCheckModel, canDiagnose, busy, onAction}: {presentation: NonNullable<ReturnType<typeof taskRecovery>>; canCheckModel: boolean; canDiagnose: boolean; busy: boolean; onAction: () => void}) {
+  const available = taskRecoveryActionAvailable(presentation.recovery, canCheckModel, canDiagnose);
+  return <section className="task-recovery" role="alert"><div className="turn-failure-heading"><AlertTriangle size={16} /><strong>{presentation.title}</strong></div><p>{presentation.message}</p>{presentation.action && <div className="turn-failure-actions"><button className="secondary-button" type="button" disabled={busy || !available} onClick={onAction}>{presentation.recovery === 'diagnose' ? <Download size={14} /> : presentation.recovery === 'check-model' ? <Activity size={14} /> : <RefreshCw size={14} />}{presentation.action.label}</button></div>}</section>;
 }
 
 function ThinkingBlock({item, running}: {item: AssistantConversationItem; running: boolean}) {
@@ -1080,8 +1193,60 @@ function WorkspaceDialog({boardId, initialPath, onClose, onChoose}: {boardId: st
   return <div className="modal-backdrop"><div className="modal workspace-modal"><div className="modal-header"><div><span className="modal-eyebrow">Project workspace</span><h2>Choose a folder</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="workspace-browser"><div className="workspace-path-bar"><button className="icon-button compact" title="Parent folder" onClick={() => listing?.parent && load(listing.parent)} disabled={loading || !listing?.parent}><ChevronDown className="up-icon" size={15} /></button><span>{listing?.path || initialPath || '/root'}</span></div>{loading && !listing ? <div className="deployment-loading"><LoaderCircle size={16} className="spin" />Loading folders</div> : <div className="workspace-folders">{listing?.directories.map((directory) => <button key={directory.path} onClick={() => load(directory.path)}><Folder size={16} /><span>{directory.name}</span><ChevronRight size={14} /></button>)}{listing && listing.directories.length === 0 && <div className="snapshot-empty">No subfolders</div>}</div>}{failure && <div className="connection-failure"><AlertTriangle size={14} /><span><strong>{failure}</strong></span></div>}<div className="workspace-create"><input value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="New folder name" onKeyDown={(event) => {if (event.key === 'Enter') {event.preventDefault(); void create();}}} /><button className="secondary-button" onClick={() => void create()} disabled={loading || !folderName.trim()}><Plus size={14} />Create</button></div><div className="modal-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={!listing || loading} onClick={() => listing && onChoose(listing.path)}><Folder size={15} />Use this folder</button></div></div></div></div>;
 }
 
+function WorkspaceChangesDialog({boardId, task, canDeliver, onClose}: {boardId: string; task: Task; canDeliver: boolean; onClose: () => void}) {
+  const [changes, setChanges] = useState<WorkspaceChanges | null>(null);
+	const [delivery, setDelivery] = useState<WorkspaceDelivery | null>(null);
+  const [loading, setLoading] = useState(true);
+	const [applying, setApplying] = useState(false);
+	const [confirmApply, setConfirmApply] = useState(false);
+  const [failure, setFailure] = useState('');
+  const request = useRef(0);
+	  const deliveryAvailable = canDeliver && task.workspaceMode === 'worktree';
+	  const load = useCallback(() => {
+		const active = ++request.current;
+		setLoading(true);
+		setFailure('');
+		setConfirmApply(false);
+		const deliveryRequest = deliveryAvailable
+		  ? api.inspectWorkspaceDelivery(boardId, task.id).catch((reason): WorkspaceDelivery => ({taskId: task.id, ready: false, reason: friendlyError(String(reason))}))
+		  : Promise.resolve(null);
+		Promise.all([api.workspaceChanges(boardId, task.id), deliveryRequest]).then(([nextChanges, nextDelivery]) => {
+		  if (request.current !== active) return;
+		  setChanges(nextChanges);
+		  setDelivery(nextDelivery);
+		}).catch((reason) => {
+		  if (request.current === active) setFailure(friendlyError(String(reason)));
+		}).finally(() => {
+		  if (request.current === active) setLoading(false);
+		});
+	  }, [boardId, deliveryAvailable, task.id]);
+  useEffect(() => {load(); return () => {request.current += 1;};}, [load]);
+  const summary = changes ? workspaceChangeSummary(changes) : null;
+  const diff = workspaceDiffLines(changes?.patch ?? '');
+	  const deliverySummary = workspaceDeliverySummary(delivery);
+	  const apply = async () => {
+		if (!delivery?.ready) return;
+		setApplying(true);
+		setFailure('');
+		try {
+		  const result = await api.applyWorkspace(boardId, task.id, delivery.digest || '');
+		  setDelivery({taskId: task.id, ready: false, alreadyApplied: result.applied, digest: result.digest, reason: 'These isolated changes have already been applied to the project.'});
+		  setConfirmApply(false);
+		} catch (reason) {
+		  setFailure(friendlyError(String(reason)));
+		} finally {
+		  setApplying(false);
+		}
+	  };
+	  return <div className="modal-backdrop"><div className="modal changes-modal"><div className="modal-header"><div><span className="modal-eyebrow">{task.workspaceMode === 'worktree' ? 'Isolated workspace' : 'Current workspace'}</span><h2>Review changes</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh changes" onClick={load} disabled={loading || applying}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose} disabled={applying}><X size={18} /></button></div></div>{loading && !changes ? <div className="deployment-loading"><LoaderCircle size={17} className="spin" />Inspecting the board workspace</div> : changes && summary ? <div className="changes-content"><div className="changes-summary"><FileDiff size={17} /><span><strong>{summary.title}</strong><small>{summary.detail}</small></span></div>{deliverySummary && <div className={`delivery-summary delivery-${deliverySummary.tone}`}>{deliverySummary.tone === 'blocked' ? <AlertTriangle size={16} /> : <GitBranch size={16} />}<span><strong>{deliverySummary.title}</strong><small>{deliverySummary.detail}</small></span></div>}{confirmApply && delivery?.ready && <div className="delivery-confirm" role="alert"><ShieldCheck size={16} /><span><strong>Apply to {task.projectCwd || 'the original project'}?</strong><small>Idle Agents using the isolated workspace or original project will stop. The exact reviewed snapshot will be staged for your final Git review.</small></span></div>}{changes.repository && <div className="changes-meta"><span>{changes.scope === '.' ? 'Repository root' : `Scope · ${changes.scope}`}</span>{changes.head && <code>{changes.head}</code>}</div>}{changes.files.length > 0 && <div className="changes-files">{changes.files.map((file) => <div key={`${file.status}:${file.path}`} className={file.conflict ? 'conflict' : ''}><span className="change-kind">{file.status}</span><span className="change-path"><strong>{file.path}</strong>{file.originalPath && <small>from {file.originalPath}</small>}</span><small>{workspaceChangeLabel(file)}</small></div>)}</div>}{changes.filesTruncated && <div className="changes-warning"><AlertTriangle size={13} />More changed files exist on the board.</div>}{diff.lines.length > 0 && <div className="diff-view" role="region" aria-label="Workspace diff">{diff.lines.map((line) => <span key={line.key} className={`diff-${line.kind}`}>{line.text || ' '}</span>)}</div>}{changes.repository && changes.files.length > 0 && !changes.patch && <div className="changes-note">Untracked and binary files are listed without transferring their contents.</div>}{(changes.patchTruncated || diff.truncated) && <div className="changes-warning"><AlertTriangle size={13} />{changes.patchTruncated ? 'The board limited this patch to 512 KiB.' : 'Studio is showing the first 4000 diff lines.'}</div>}</div> : null}{failure && <div className="changes-action-error"><AlertTriangle size={14} />{failure}</div>}<div className="changes-footer"><span>{task.workspaceMode === 'worktree' ? task.projectCwd || task.cwd : task.cwd}</span><div>{confirmApply && <button className="secondary-button" onClick={() => setConfirmApply(false)} disabled={applying}>Cancel</button>}{delivery?.ready && <button className="primary-button" onClick={() => confirmApply ? void apply() : setConfirmApply(true)} disabled={loading || applying}>{applying ? <LoaderCircle size={15} className="spin" /> : <GitBranch size={15} />}{confirmApply ? 'Apply staged changes' : 'Apply to project'}</button>}<button className={delivery?.ready ? 'secondary-button' : 'primary-button'} onClick={onClose} disabled={applying}>Done</button></div></div></div></div>;
+}
+
 function AboutDialog({appVersion, connection, onClose}: {appVersion: string; connection: Connection | null; onClose: () => void}) {
-  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className="update-guidance"><Info size={15} /><span><strong>Updates are installed on the board.</strong><small>Hobot Code prevents downgrades and blocks updates while agents or Studio bridges are active.</small></span></div><div className="command-list"><div><code>hobot update --check</code><CopyButton value="hobot update --check" /></div><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose}>Done</button></div></div></div></div>;
+  const build = connection?.daemon?.build;
+  const buildLabel = build?.status === 'verified'
+    ? `${build.commit?.slice(0, 12) ?? build.binarySha256?.slice(0, 12) ?? 'verified'}${build.dirty ? ' (modified)' : ''}`
+    : build?.status ?? 'Not reported';
+  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className="update-guidance"><Info size={15} /><span><strong>Updates are installed on the board.</strong><small>Hobot Code prevents downgrades and blocks updates while agents or Studio bridges are active.</small></span></div><div className="command-list"><div><code>hobot update --check</code><CopyButton value="hobot update --check" /></div><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose}>Done</button></div></div></div></div>;
 }
 
 function DeploymentDialog({boardId, cwd, snapshot, models, busy, onClose, onStart}: {boardId: string; cwd: string; snapshot: SystemSnapshot; models: ModelOption[]; busy: boolean; onClose: () => void; onStart: (request: StartDeploymentRequest) => void}) {
@@ -1120,9 +1285,9 @@ function DeploymentInspector({status, record}: {status: DeploymentStatus | null;
   return <InspectorSection title="Model deployment"><div className={`deployment-phase phase-${phase}`}><span>{deploymentPhaseLabel(phase)}</span>{phase === 'running' || phase === 'checking' ? <LoaderCircle size={13} className="spin" /> : phase === 'passed' ? <Check size={13} /> : <AlertTriangle size={13} />}</div><InfoRow label="Target" value={`${record.boardId.toUpperCase()} · ${record.rdkOsVersion || 'unknown OS'}`} /><InfoRow label="Goal" value={record.goal} />{record.acceptance?.profile && <InfoRow label="Acceptance" value={record.acceptance.profile} />}<InfoRow label="Artifact" value={record.artifact.name} mono copy={record.artifact.path} />{report && <><InfoRow label="Correctness" value={report.correctness.passed ? 'Passed' : 'Not passed'} />{report.correctness.dataset && <InfoRow label="Dataset" value={`${report.correctness.dataset}${report.correctness.sampleCount ? ` · ${report.correctness.sampleCount} samples` : ''}`} />}{metrics.map((metric) => <InfoRow key={metric.name} label={metric.name} value={`${metric.value.toFixed(4)} ${metric.unit} · ${metric.comparator} ${metric.threshold}`} />)}<InfoRow label="Measured" value={report.performance.iterations ? `${report.performance.iterations} iterations` : 'No benchmark'} />{report.performance.p50LatencyMs ? <InfoRow label="Model latency" value={`p50 ${report.performance.p50LatencyMs.toFixed(2)} ms · p95 ${(report.performance.p95LatencyMs ?? 0).toFixed(2)} ms`} /> : null}{report.performance.endToEndP50Ms ? <InfoRow label="End-to-end" value={`p50 ${report.performance.endToEndP50Ms.toFixed(2)} ms · p95 ${(report.performance.endToEndP95Ms ?? 0).toFixed(2)} ms`} /> : null}{peak?.bpuUtilizationPercent ? <InfoRow label="Peak BPU" value={`${peak.bpuUtilizationPercent.toFixed(1)}%`} /> : null}{peak?.maxTemperatureC ? <InfoRow label="Peak temperature" value={`${peak.maxTemperatureC.toFixed(1)} C`} /> : null}{peak?.systemMemoryAvailableBytes ? <InfoRow label="Memory at peak" value={`${formatBytes(peak.systemMemoryAvailableBytes)} available${peak.aiAllocatedBytes ? ` · ${formatBytes(peak.aiAllocatedBytes)} ${(peak.aiAllocationSource || 'AI').toUpperCase()}` : peak.ionAllocatedBytes ? ` · ${formatBytes(peak.ionAllocatedBytes)} ION` : ''}`} /> : null}<div className="deployment-summary">{report.summary}</div></>}{status?.issue && <div className="deployment-issue"><AlertTriangle size={13} />{status.issue}</div>}<details className="deployment-report-path"><summary>Report path<ChevronRight size={12} /></summary><div>{record.reportPath}<CopyButton value={record.reportPath} /></div></details></InspectorSection>;
 }
 
-function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conversation' | 'project'; label: string; taskIds: string[]}; busy: boolean; onClose: () => void; onDelete: () => void}) {
+function DeleteDialog({target, busy, onClose, onDelete}: {target: {kind: 'conversation' | 'project'; label: string; taskIds: string[]; retainsWorktree?: boolean}; busy: boolean; onClose: () => void; onDelete: () => void}) {
   const project = target.kind === 'project';
-  return <div className="modal-backdrop"><div className="modal confirm-modal"><div className="confirm-icon"><Trash2 size={18} /></div><h2>{project ? 'Remove project?' : 'Delete conversation?'}</h2><p>{project ? `This removes ${target.taskIds.length} conversation${target.taskIds.length === 1 ? '' : 's'} from ${target.label}.` : `This permanently removes ${target.label} from Hobot Code.`}</p><small>Running agents will stop. Files in the board workspace will not be deleted.</small><div className="modal-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="danger-button" onClick={onDelete} disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}Delete</button></div></div></div>;
+  return <div className="modal-backdrop"><div className="modal confirm-modal"><div className="confirm-icon"><Trash2 size={18} /></div><h2>{project ? 'Remove project?' : 'Delete conversation?'}</h2><p>{project ? `This removes ${target.taskIds.length} conversation${target.taskIds.length === 1 ? '' : 's'} from ${target.label}.` : `This permanently removes ${target.label} from Hobot Code.`}</p><small>Running agents will stop. {target.retainsWorktree ? 'The isolated code workspace is retained on the board and can be reviewed or cleaned separately.' : 'Files in the board workspace will not be deleted.'}</small><div className="modal-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="danger-button" onClick={onDelete} disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}Delete</button></div></div></div>;
 }
 
 function BoardMonitor({connection, connectionState, snapshot, task}: {connection: Connection; connectionState: 'connecting' | 'online' | 'offline'; snapshot: SystemSnapshot | null; task: Task | null}) {
@@ -1136,7 +1301,8 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
   const orphanedION = orphanedIONNotice(snapshot.aiMemory?.ionOrphanedBytes ?? 0);
   const bandwidth = activeDDRBandwidth(snapshot);
   const acceleratorProcesses = snapshot.accelerator?.available ? snapshot.accelerator.processes ?? [] : [];
-  const taskAlerts = [task?.lastError ? {tone: 'danger', label: task.lastError} : null, task?.logTruncated ? {tone: 'warning', label: 'Older task events were truncated.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
+  const recovery = taskRecovery(task);
+  const taskAlerts = [recovery ? {tone: 'danger', label: recovery.message} : null, task?.logTruncated ? {tone: 'warning', label: 'Older task events were truncated.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
   const alerts = [...health.issues, ...taskAlerts];
   return <>
     <CompatibilityPanel connection={connection} />
@@ -1151,6 +1317,7 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
     </InspectorSection>
     <InspectorSection title="Resources"><div className="resource-list">{resources.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} percent={metric.percent} tone={metric.tone} />)}</div></InspectorSection>
     {snapshot.hardwareLeases?.length ? <InspectorSection title="Hardware in use"><div className="hardware-leases">{snapshot.hardwareLeases.map((lease) => <div className="hardware-lease" key={lease.resource}><Cpu size={13} /><span><strong>{hardwareResourceLabel(lease.resource)}</strong><small>{lease.taskId} · PID {lease.pid}</small></span></div>)}</div></InspectorSection> : null}
+    {snapshot.workspaceWrites?.length ? <InspectorSection title="Workspaces being changed"><div className="hardware-leases">{snapshot.workspaceWrites.map((lease) => <div className="hardware-lease" key={`${lease.taskId}:${lease.cwd}`}><FilePenLine size={13} /><span><strong>{lease.cwd}</strong><small>{lease.taskId} · PID {lease.pid}</small></span></div>)}</div></InspectorSection> : null}
     <InspectorSection title="Hbmem">
       {memoryMetrics.length ? <><div className="resource-list compact">{memoryMetrics.map((metric) => <ResourceBar key={metric.key} label={metric.label} value={metric.value} detail={metric.detail} percent={metric.percent} available={metric.available} />)}</div>{!snapshot.accelerator?.available && <p className="memory-footnote">Upgrade the board service for reserved capacity and process attribution.</p>}{snapshot.accelerator?.source === 'hrt_ucp_monitor-estimate' && <p className="memory-footnote">Estimated by the board monitor; process ownership may be incomplete.</p>}{orphanedION && <div className={`memory-warning${orphanedION.warning ? '' : ' minor'}`}>{orphanedION.warning && <AlertTriangle size={13} />}{orphanedION.label}</div>}</> : <div className="snapshot-empty">Hbmem counters are not exposed by this RDK OS.</div>}
     </InspectorSection>
@@ -1162,11 +1329,22 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
 function CompatibilityPanel({connection}: {connection: Connection}) {
   const compatibility = connection.compatibility;
   if (!compatibility) return null;
-  const label = compatibility.status === 'supported' ? 'Supported' : compatibility.status === 'limited' ? 'Limited' : 'Upgrade required';
-  return <InspectorSection title="Compatibility"><div className={`compatibility-summary compatibility-${compatibility.status}`}><span>{label}</span><strong>{compatibility.summary}</strong></div><InfoRow label="Studio / board" value={`${compatibility.appVersion} / ${compatibility.agentdVersion}`} /><InfoRow label="Protocol / events" value={`${compatibility.protocol} / ${compatibility.eventSchema}`} />{compatibility.boardId && <InfoRow label="Validated target" value={compatibility.validatedTarget ? `${compatibility.boardId.toUpperCase()} · ${compatibility.rdkOsVersion}` : 'Not fully validated'} />}{compatibility.issues.length > 0 && <div className="compatibility-issues">{compatibility.issues.map((issue) => <div key={issue.code} className={issue.severity}><AlertTriangle size={13} /><span><strong>{issue.message}</strong>{issue.action && <small>{issue.action}</small>}</span></div>)}</div>}</InspectorSection>;
+  const presentation = compatibilityPresentation(compatibility);
+  const statusIcon = presentation.tone === 'healthy' ? <ShieldCheck size={15} /> : presentation.tone === 'danger' ? <XCircle size={15} /> : <AlertTriangle size={15} />;
+  return <InspectorSection title="Compatibility">
+    <div className={`compatibility-summary compatibility-${presentation.tone}`}>{statusIcon}<div><span>{presentation.label}</span><strong>{presentation.title}</strong><small>{presentation.description}</small></div></div>
+    {presentation.action && <div className={`compatibility-action ${presentation.tone}`}><ChevronRight size={13} /><span>{presentation.action}</span></div>}
+    <details className="compatibility-details"><summary>Technical details<ChevronRight className="details-chevron" size={13} /></summary><div><InfoRow label="Studio / board" value={`${compatibility.appVersion} / ${compatibility.agentdVersion}`} /><InfoRow label="Protocol / events" value={`${compatibility.protocol} / ${compatibility.eventSchema}`} /><InfoRow label="Target" value={compatibilityTargetLabel(compatibility)} />{compatibility.issues.length > 0 && <div className="compatibility-issues">{compatibility.issues.map((issue) => <div key={issue.code} className={issue.severity}><AlertTriangle size={13} /><span><strong>{issue.message}</strong>{issue.action && issue.action !== presentation.action && <small>{issue.action}</small>}</span></div>)}</div>}</div></details>
+  </InspectorSection>;
 }
 
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
+
+function TaskSandboxInspector({task}: {task: Task}) {
+  const sandbox = task.sandbox;
+  if (!sandbox) return null;
+  return <InspectorSection title="Agent boundary"><InfoRow label="Profile" value={`${task.sandboxMode || sandbox.effective} · ${sandbox.backend}`} /><InfoRow label="File writes" value={sandbox.filesystemRestricted ? 'Restricted' : 'Host access'} /><InfoRow label="Devices" value={sandbox.devicesRestricted ? 'Minimal devices' : task.sandboxMode === 'off' ? 'Host access' : 'Board hardware'} /><InfoRow label="Privileges" value={sandbox.capabilitiesDropped ? 'Dropped' : 'Host privileges'} /><InfoRow label="Network" value={sandbox.networkRestricted ? 'Restricted' : 'Shared for model access'} />{sandbox.reason && <div className="deployment-summary">{sandbox.reason}</div>}</InspectorSection>;
+}
 function InfoRow({label, value, mono, copy}: {label: string; value: string; mono?: boolean; copy?: string}) { return <div className="info-row"><span>{label}</span><div><strong className={mono ? 'mono' : ''}>{value}</strong>{copy && <CopyButton value={copy} />}</div></div>; }
 function CopyButton({value}: {value: string}) { const [copied, setCopied] = useState(false); return <button type="button" className="copy-button" title={copied ? 'Copied' : 'Copy'} onClick={() => void navigator.clipboard.writeText(value).then(() => {setCopied(true); window.setTimeout(() => setCopied(false), 1200);})}>{copied ? <Check size={13} /> : <Clipboard size={13} />}</button>; }
 function ResourceBar({label, value, detail, percent, available = false, tone = ''}: {label: string; value: string; detail?: string; percent?: number; available?: boolean; tone?: string}) {
@@ -1182,7 +1360,7 @@ function friendlyError(value: string) {
   if (/context deadline exceeded|operation timed out|connect to host .* timed out/i.test(message)) return 'Could not reach the board. Check the network or VPN and try again.';
   if (/requires a newer Hobot Code event schema/i.test(message)) return 'Update the board-side Hobot Code and reconnect.';
   if (/has no resumable Hobot Code session/i.test(message)) return 'This task has no saved session. Start a new session instead.';
-  if (/background task limit reached.*all agents are currently working/i.test(message)) return 'Both background slots are busy. Stop a working agent, or wait for one to finish.';
+  if (/background task limit reached.*all agents are currently working/i.test(message)) return 'This older board service cannot queue tasks. Update Hobot Code on the board, or stop a working agent.';
   return message;
 }
 

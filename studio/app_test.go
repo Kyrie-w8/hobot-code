@@ -4,11 +4,64 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/bryant-w/hobot-code/sdk/go/hobot"
 )
+
+type handshakeFixture struct {
+	Info     hobot.DaemonInfo      `json:"info"`
+	Snapshot *hobot.SystemSnapshot `json:"snapshot"`
+	Expected struct {
+		Status          string   `json:"status"`
+		ValidatedTarget bool     `json:"validatedTarget"`
+		IssueCodes      []string `json:"issueCodes"`
+	} `json:"expected"`
+}
+
+func TestRecordedHandshakeCompatibility(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "handshakes", "*.json"))
+	if err != nil || len(paths) != 3 {
+		t.Fatalf("handshake fixtures: paths=%v err=%v", paths, err)
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixture handshakeFixture
+			decoder := json.NewDecoder(strings.NewReader(string(content)))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&fixture); err != nil {
+				t.Fatal(err)
+			}
+			var snapshotErr error
+			if fixture.Snapshot == nil {
+				snapshotErr = os.ErrNotExist
+			}
+			result, err := assessConnectionCompatibility(fixture.Info, fixture.Snapshot, snapshotErr)
+			if err != nil || result.Status != fixture.Expected.Status || result.ValidatedTarget != fixture.Expected.ValidatedTarget {
+				t.Fatalf("compatibility=%+v err=%v expected=%+v", result, err, fixture.Expected)
+			}
+			codes := make([]string, 0, len(result.Issues))
+			for _, issue := range result.Issues {
+				codes = append(codes, issue.Code)
+			}
+			for _, code := range fixture.Expected.IssueCodes {
+				if !containsValue(codes, code) {
+					t.Fatalf("required issue %q missing from %v", code, codes)
+				}
+			}
+			sort.Strings(codes)
+			if fixture.Expected.Status == "supported" && len(codes) != 0 {
+				t.Fatalf("supported fixture has warnings: %v", codes)
+			}
+		})
+	}
+}
 
 func TestBoardConnectionSerializesReconnectState(t *testing.T) {
 	encoded, err := json.Marshal(BoardConnection{Connected: true, Reconnected: true})
@@ -31,19 +84,43 @@ func TestProbeBoardRejectsInvalidCandidateWithoutPersistingIt(t *testing.T) {
 	}
 }
 
+func TestWorkspaceChangesRejectsInvalidTaskIDBeforeConnecting(t *testing.T) {
+	app := NewApp()
+	if _, err := app.GetWorkspaceChanges("", "not-a-task"); err == nil || !strings.Contains(err.Error(), "task id is invalid") {
+		t.Fatalf("invalid task id was accepted: %v", err)
+	}
+	if _, err := app.InspectWorkspaceDelivery("", "not-a-task"); err == nil || !strings.Contains(err.Error(), "task id is invalid") {
+		t.Fatalf("invalid delivery task id was accepted: %v", err)
+	}
+	if _, err := app.ApplyWorkspace("", "not-a-task", strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "task id is invalid") {
+		t.Fatalf("invalid apply task id was accepted: %v", err)
+	}
+	if _, err := app.ApplyWorkspace("", "00112233445566778899aabb", "bad"); err == nil || !strings.Contains(err.Error(), "digest is invalid") {
+		t.Fatalf("invalid apply digest was accepted: %v", err)
+	}
+}
+
 func TestConnectionCompatibilityMatrix(t *testing.T) {
 	allCapabilities := []string{
-		"tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "system.snapshot",
-		"support.bundle.v1", "deployments.v1", "tasks.fork", "workspaces.browse",
+		"extensions.catalog.v1", "tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "models.conformance.v1", "system.snapshot",
+		"support.bundle.v1", "deployments.v1", "tasks.fork", "tasks.queue.v1", "tasks.failure.v1", "tasks.turn-evidence.v1", "events.items.v1", "workspaces.browse", "workspaces.changes.v1", "workspaces.isolation.v1", "workspaces.write-leases.v1", "workspaces.delivery.v1", "tasks.sandbox.v1", "build.identity.v1",
 	}
+	dirty := false
 	info := hobot.DaemonInfo{
-		Version: "0.25.0", Protocol: hobot.ProtocolVersion,
-		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 3, Capabilities: allCapabilities},
+		Version: "0.26.0", Protocol: hobot.ProtocolVersion,
+		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 4, Capabilities: allCapabilities, Sandbox: hobot.SandboxCapability{Available: true, Backend: "bubblewrap", Profiles: []string{"review", "workspace", "system", "off"}}},
+		Build:        hobot.BuildIdentity{Status: "verified", Commit: strings.Repeat("a", 40), Dirty: &dirty, Target: "linux-arm64", PiVersion: "0.84.1"},
 	}
 	snapshot := &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5"}
 	compatible, err := assessConnectionCompatibility(info, snapshot, nil)
 	if err != nil || compatible.Status != "supported" || !compatible.ValidatedTarget {
 		t.Fatalf("validated S100 was not supported: result=%+v err=%v", compatible, err)
+	}
+	sandboxUnavailable := info
+	sandboxUnavailable.Capabilities.Sandbox = hobot.SandboxCapability{Profiles: []string{"off"}, Reason: "bubblewrap is not installed"}
+	sandboxLimited, err := assessConnectionCompatibility(sandboxUnavailable, snapshot, nil)
+	if err != nil || sandboxLimited.Status != "limited" || sandboxLimited.Issues[0].Code != "sandbox-unavailable" {
+		t.Fatalf("unavailable sandbox was not surfaced: result=%+v err=%v", sandboxLimited, err)
 	}
 	beta, err := assessConnectionCompatibility(info, &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5-Beta"}, nil)
 	if err != nil || beta.Status != "supported" || !beta.ValidatedTarget || len(beta.Issues) != 0 {
@@ -52,6 +129,19 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 	unknownPrerelease, err := assessConnectionCompatibility(info, &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5-RC1"}, nil)
 	if err != nil || unknownPrerelease.Status != "limited" || unknownPrerelease.ValidatedTarget || len(unknownPrerelease.Issues) != 1 || unknownPrerelease.Issues[0].Code != "rdk-os-unvalidated-version" {
 		t.Fatalf("unknown S100 prerelease was accepted: result=%+v err=%v", unknownPrerelease, err)
+	}
+	dirty = true
+	dirtyBuild := info
+	dirtyBuild.Build.Dirty = &dirty
+	dirtyResult, err := assessConnectionCompatibility(dirtyBuild, snapshot, nil)
+	if err != nil || dirtyResult.Status != "limited" || dirtyResult.Issues[0].Code != "unreleased-board-build" {
+		t.Fatalf("dirty board build was not surfaced: result=%+v err=%v", dirtyResult, err)
+	}
+	invalidBuild := info
+	invalidBuild.Build.Status = "invalid"
+	invalidResult, err := assessConnectionCompatibility(invalidBuild, snapshot, nil)
+	if err != nil || invalidResult.Status != "limited" || invalidResult.Issues[0].Code != "invalid-build-identity" {
+		t.Fatalf("invalid board build identity was not surfaced: result=%+v err=%v", invalidResult, err)
 	}
 
 	limitedInfo := info
@@ -86,13 +176,13 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.25.0" {
+	if currentStudioVersion() != "0.26.0" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {
 		t.Fatalf("exposed Studio version = %q, want %q", app.GetAppVersion(), currentStudioVersion())
 	}
-	if !differentReleaseLine("0.25.0", "0.24.9") || differentReleaseLine("0.25.0", "0.25.1") {
+	if !differentReleaseLine("0.26.0", "0.25.9") || differentReleaseLine("0.26.0", "0.26.1") {
 		t.Fatal("release line comparison is incorrect")
 	}
 	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {
@@ -210,7 +300,7 @@ func TestSafeExternalURL(t *testing.T) {
 }
 
 func TestStudioTaskIsLive(t *testing.T) {
-	for _, status := range []string{"starting", "idle", "running", "waiting", "stopping"} {
+	for _, status := range []string{"queued", "starting", "idle", "running", "waiting", "stopping"} {
 		if !studioTaskIsLive(status) {
 			t.Fatalf("status %q should be live", status)
 		}

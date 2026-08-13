@@ -38,7 +38,7 @@ studio-macos-release: studio-check
 
 pi-check:
 	sh -n scripts/package-pi.sh scripts/install-pi.sh scripts/rollback-pi.sh scripts/hobot-release.sh scripts/uninstall-pi.sh scripts/validate-tar-archive.sh packaging/pi/hobot-launcher
-	node -e 'for (const f of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(f, "utf8"))' pi-runtime/package.json packaging/pi/settings.json packaging/pi/models.json packaging/pi/permissions.json packaging/pi/memory.json packaging/pi/goals.json packaging/pi/hooks.json packaging/pi/notifications.json packaging/pi/lsp.json
+	node -e 'for (const f of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(f, "utf8"))' pi-runtime/package.json extensions/catalog.json packaging/pi/settings.json packaging/pi/models.json packaging/pi/permissions.json packaging/pi/memory.json packaging/pi/goals.json packaging/pi/hooks.json packaging/pi/notifications.json packaging/pi/lsp.json
 	node --test tests/*.test.mjs
 	node scripts/validate-knowledge.mjs
 	node scripts/validate-expert-prompt.mjs

@@ -9,6 +9,14 @@ test('projects group conversations beneath their workspace', () => {
   assert.deepEqual(groups.map((group) => [group.name, group.tasks.length]), [['General', 1], ['project', 2]]);
 });
 
+test('isolated task worktrees remain grouped under the selected project', () => {
+  const groups = groupTasksByProject([
+    task('shared'),
+    task('isolated', {cwd: '/root/.local/state/hobot-code/agentd/worktrees/isolated/workspace', projectCwd: '/root/project', workspaceMode: 'worktree'}),
+  ]);
+  assert.deepEqual(groups.map((group) => [group.name, group.tasks.length]), [['project', 2]]);
+});
+
 test('side tasks remain siblings even when created from another side task', () => {
   const arranged = arrangeTasks([
     task('main'),

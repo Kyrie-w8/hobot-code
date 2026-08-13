@@ -11,6 +11,7 @@ import {
   applyPermissionPreset,
   describeToolCall,
   fingerprintWorkspace,
+  fingerprintWorkspaceMetadata,
   initializeProject,
   knowledgeQueryTerms,
   loadHookConfig,
@@ -353,12 +354,34 @@ test("workspace fingerprint changes after a source edit", async () => {
   try {
     await writeFile(join(root, "source.txt"), "one\n");
     const before = await fingerprintWorkspace(root);
+	const metadataBefore = await fingerprintWorkspaceMetadata(root);
     await writeFile(join(root, "source.txt"), "two\n");
     const after = await fingerprintWorkspace(root);
+	const metadataAfter = await fingerprintWorkspaceMetadata(root);
     assert.notEqual(before.digest, after.digest);
+	assert.notEqual(metadataBefore.digest, metadataAfter.digest);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("workspace metadata fingerprint is bounded and ignores generated trees", async () => {
+	const root = await mkdtemp(join(tmpdir(), "hobot-metadata-fingerprint-"));
+	try {
+		await mkdir(join(root, "dist"));
+		await writeFile(join(root, "dist", "generated.js"), "one\n");
+		await writeFile(join(root, "one.txt"), "one\n");
+		await writeFile(join(root, "two.txt"), "two\n");
+		const before = await fingerprintWorkspaceMetadata(root);
+		await writeFile(join(root, "dist", "generated.js"), "two\n");
+		const after = await fingerprintWorkspaceMetadata(root);
+		assert.equal(before.digest, after.digest);
+		const bounded = await fingerprintWorkspaceMetadata(root, {maximumEntries: 1});
+		assert.equal(bounded.truncated, true);
+		await assert.rejects(() => fingerprintWorkspaceMetadata(root, {maximumEntries: 0}), /between 1 and 50000/);
+	} finally {
+		await rm(root, {recursive: true, force: true});
+	}
 });
 
 test("workspace fingerprint ignores generated trees and rejects oversized source files", async () => {

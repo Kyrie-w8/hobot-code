@@ -1,0 +1,22 @@
+{
+  "info": {
+    "version": "0.24.0",
+    "protocol": 1,
+    "pid": 102,
+    "startedAt": "2026-08-11T00:00:00Z",
+    "activeTasks": 0,
+    "maximumTasks": 2,
+    "backgroundTasks": true,
+    "capabilities": {
+      "protocolMin": 1,
+      "protocolMax": 1,
+      "eventSchema": 2,
+      "capabilities": ["tasks.lifecycle", "tasks.page", "events.page"]
+    }
+  },
+  "expected": {
+    "status": "limited",
+    "validatedTarget": false,
+    "issueCodes": ["legacy-event-schema", "snapshot-unavailable", "version-line-mismatch"]
+  }
+}

@@ -50,13 +50,25 @@ var recommendedStudioCapabilities = []struct {
 	Name   string
 	Impact string
 }{
+	{Name: "extensions.catalog.v1", Impact: "Installed capabilities and their trust boundaries cannot be inspected from Studio."},
 	{Name: "models.capabilities.v1", Impact: "Model input capabilities cannot be negotiated; image attachments stay disabled."},
+	{Name: "build.identity.v1", Impact: "This board service cannot prove which source build and Pi runtime are installed."},
 	{Name: "models.health.v1", Impact: "Model routes cannot be checked before starting a task."},
+	{Name: "models.conformance.v1", Impact: "Models cannot be verified for streaming, tools, continuation, and declared input modes."},
 	{Name: "system.snapshot", Impact: "Board health and hardware telemetry are unavailable."},
 	{Name: "support.bundle.v1", Impact: "One-click support bundles are unavailable."},
 	{Name: "deployments.v1", Impact: "The guided model deployment workflow is unavailable."},
 	{Name: "tasks.fork", Impact: "Side agents and edit-from-history are unavailable."},
+	{Name: "tasks.queue.v1", Impact: "Busy Agent requests cannot wait safely for a board worker slot."},
+	{Name: "tasks.failure.v1", Impact: "Task failures cannot provide safe, structured recovery actions."},
+	{Name: "tasks.turn-evidence.v1", Impact: "Interrupted tasks cannot show whether tools completed or the Git workspace changed."},
+	{Name: "events.items.v1", Impact: "Rich command and task lifecycle details are unavailable."},
 	{Name: "workspaces.browse", Impact: "Project folders cannot be browsed from Studio."},
+	{Name: "workspaces.changes.v1", Impact: "Current workspace changes cannot be reviewed in Studio."},
+	{Name: "workspaces.isolation.v1", Impact: "New tasks cannot use an isolated Git worktree."},
+	{Name: "workspaces.write-leases.v1", Impact: "Concurrent workspace writes cannot be identified before they overlap."},
+	{Name: "workspaces.delivery.v1", Impact: "Isolated changes cannot be safely applied to the original project from Studio."},
+	{Name: "tasks.sandbox.v1", Impact: "Background Agents cannot expose or select their board-side OS isolation boundary."},
 }
 
 func currentStudioVersion() string {
@@ -117,6 +129,26 @@ func assessConnectionCompatibility(info hobot.DaemonInfo, snapshot *hobot.System
 		if !containsValue(capabilities.Capabilities, capability.Name) {
 			addWarning("missing-"+capability.Name, capability.Impact, "Update Hobot Code on the board to enable this feature.")
 		}
+	}
+	if containsValue(capabilities.Capabilities, "build.identity.v1") {
+		switch info.Build.Status {
+		case "verified":
+			if info.Build.Dirty != nil && *info.Build.Dirty {
+				addWarning("unreleased-board-build", "The board is running an unreleased build from a modified worktree.", "Install a clean signed Hobot Code release before production use.")
+			}
+		case "invalid":
+			addWarning("invalid-build-identity", "The board executable and its release metadata cannot be trusted as one build.", "Reinstall Hobot Code from a verified release archive.")
+		default:
+			addWarning("missing-build-identity", "The board service could not verify its release provenance.", "Reinstall or update Hobot Code on the board before production use.")
+		}
+	}
+	sandboxReported := capabilities.Sandbox.Backend != "" || capabilities.Sandbox.Reason != "" || len(capabilities.Sandbox.Profiles) > 0
+	if containsValue(capabilities.Capabilities, "tasks.sandbox.v1") && sandboxReported && !capabilities.Sandbox.Available {
+		reason := strings.TrimSpace(capabilities.Sandbox.Reason)
+		if reason == "" {
+			reason = "The board could not validate its OS sandbox backend."
+		}
+		addWarning("sandbox-unavailable", reason, "Install or repair bubblewrap on the board, restart agentd, and run Hobot Code diagnostics.")
 	}
 	if capabilities.EventSchema < 3 {
 		addWarning("legacy-event-schema", "The board uses a legacy event schema; some live activity details may be incomplete.", "Update Hobot Code on the board for normalized event schema 3.")

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,12 +85,21 @@ func daemonCallTimeout(method string) time.Duration {
 	if method == "models.health" {
 		return modelHealthRequestTimeout + 3*time.Second
 	}
+	if method == "models.conformance" {
+		return modelConformanceRequestTimeout + 5*time.Second
+	}
+	if method == "task.start" || method == "workspace.cleanup" || method == "workspace.delivery" || method == "workspace.apply" {
+		return workspaceWorktreeTimeout + 10*time.Second
+	}
+	if method == "workspace.isolation" {
+		return workspaceIsolationTimeout + 3*time.Second
+	}
 	return 10 * time.Second
 }
 
 func daemonMethodNeedsCurrentConfiguration(method string) bool {
 	switch method {
-	case "models.list", "models.health", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork":
+	case "models.list", "models.health", "models.conformance", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork":
 		return true
 	default:
 		return false
@@ -186,11 +196,24 @@ func (client daemonClient) subscribe(taskID string, after uint64, follow, human 
 }
 
 func (client daemonClient) subscribeWithIO(taskID string, after uint64, follow, human bool, input io.Reader, output io.Writer, interactive bool) error {
+	return client.subscribeWithContext(context.Background(), taskID, after, follow, human, input, output, interactive, nil)
+}
+
+func (client daemonClient) subscribeWithContext(ctx context.Context, taskID string, after uint64, follow, human bool, input io.Reader, output io.Writer, interactive bool, progress func(uint64) error) error {
 	connection, err := net.DialTimeout("unix", client.cfg.SocketPath, time.Second)
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
+	stopCancellation := make(chan struct{})
+	defer close(stopCancellation)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = connection.Close()
+		case <-stopCancellation:
+		}
+	}()
 	requestID := fmt.Sprintf("cli-%d", time.Now().UnixNano())
 	req := request{
 		Protocol: protocolVersion, ID: requestID, Method: "task.subscribe",
@@ -202,7 +225,7 @@ func (client daemonClient) subscribeWithIO(taskID string, after uint64, follow, 
 	scanner := bufio.NewScanner(connection)
 	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
 	first := true
-	renderer := newHumanEventRenderer(taskID, input, output, interactive, func(command json.RawMessage) error {
+	renderer := newHumanEventRendererWithContext(ctx, taskID, input, output, interactive, func(command json.RawMessage) error {
 		return protocolCommand(client, taskID, command)
 	})
 	for scanner.Scan() {
@@ -232,11 +255,20 @@ func (client daemonClient) subscribeWithIO(taskID string, after uint64, follow, 
 		} else {
 			fmt.Fprintln(output, string(line))
 		}
+		if progress != nil {
+			if err := progress(event.Sequence); err != nil {
+				return err
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	return scanner.Err()
 }
 
 type humanEventRenderer struct {
+	ctx         context.Context
 	stream      string
 	taskID      string
 	input       *bufio.Scanner
@@ -246,9 +278,13 @@ type humanEventRenderer struct {
 }
 
 func newHumanEventRenderer(taskID string, input io.Reader, output io.Writer, interactive bool, respond func(json.RawMessage) error) *humanEventRenderer {
+	return newHumanEventRendererWithContext(context.Background(), taskID, input, output, interactive, respond)
+}
+
+func newHumanEventRendererWithContext(ctx context.Context, taskID string, input io.Reader, output io.Writer, interactive bool, respond func(json.RawMessage) error) *humanEventRenderer {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 1024), 16*1024)
-	return &humanEventRenderer{taskID: taskID, input: scanner, output: output, interactive: interactive, respond: respond}
+	return &humanEventRenderer{ctx: ctx, taskID: taskID, input: scanner, output: output, interactive: interactive, respond: respond}
 }
 
 func (renderer *humanEventRenderer) render(record taskEvent) error {
@@ -258,6 +294,34 @@ func (renderer *humanEventRenderer) render(record taskEvent) error {
 	}
 	eventType, _ := event["type"].(string)
 	switch eventType {
+	case "hobot_task_queued":
+		renderer.endStream()
+		operation, _ := event["operation"].(string)
+		fmt.Fprintf(renderer.output, "[queued] %s is waiting for an Agent slot\n", safeAttachText(operation, "task", 32))
+	case "hobot_task_dequeued":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[starting] Agent slot acquired\n")
+	case "hobot_task_queue_cancelled":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[cancelled] Queued task was not started\n")
+	case "hobot_task_failed", "hobot_task_interrupted":
+		renderer.endStream()
+		message, _ := event["message"].(string)
+		recovery, _ := event["recovery"].(string)
+		fmt.Fprintf(renderer.output, "[%s] %s\n", strings.TrimPrefix(eventType, "hobot_task_"), safeAttachText(message, "The task ended before completion.", 240))
+		switch recovery {
+		case "resume":
+			fmt.Fprintf(renderer.output, "[recovery] hobot task resume %s -- 'Review the last output and continue safely.'\n", shellQuote(renderer.taskID))
+		case "restart":
+			fmt.Fprintf(renderer.output, "[recovery] hobot task restart %s -- 'Start this task again safely.'\n", shellQuote(renderer.taskID))
+		case "check-model":
+			fmt.Fprint(renderer.output, "[recovery] Check the selected model route before retrying.\n")
+		case "diagnose":
+			fmt.Fprint(renderer.output, "[recovery] Run `hobot diagnose` and save the private support bundle.\n")
+		}
+	case "hobot_task_stopped":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[stopped]\n")
 	case "message_update":
 		update, _ := event["assistantMessageEvent"].(map[string]any)
 		delta, _ := update["delta"].(string)
@@ -401,10 +465,24 @@ func (renderer *humanEventRenderer) promptApproval(requestID, method string, opt
 }
 
 func (renderer *humanEventRenderer) scanInput() (string, bool) {
-	if !renderer.input.Scan() {
-		return "", false
+	type scanResult struct {
+		value string
+		ok    bool
 	}
-	return renderer.input.Text(), true
+	result := make(chan scanResult, 1)
+	go func() {
+		if !renderer.input.Scan() {
+			result <- scanResult{}
+			return
+		}
+		result <- scanResult{value: renderer.input.Text(), ok: true}
+	}()
+	select {
+	case <-renderer.ctx.Done():
+		return "", false
+	case scanned := <-result:
+		return scanned.value, scanned.ok
+	}
 }
 
 func (renderer *humanEventRenderer) printResponseCommand(requestID, method string) {

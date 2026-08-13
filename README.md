@@ -88,11 +88,13 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 ### Mac 桌面应用
 
+新任务会由板端检查工作区。干净且已有提交的 Git 项目在 Studio 中默认使用私有的独立 worktree；普通目录或存在未提交、未跟踪内容时保持共享，避免新 worktree 静默缺少本地内容。Side Agent 和编辑历史分支继承主任务的同一工作区。共享模式的 Changes 不会归因给单个 Agent，隔离模式在标题中明确标记 **Isolated**。
+
 从 [GitHub Releases](https://github.com/bryant-w/hobot-code/releases) 下载 `hobot-code-<version>-macos-arm64.dmg`，打开后将 **Hobot Code** 拖入 Applications。首次启动时添加板卡名称、IP、SSH 用户与可选私钥路径；应用使用 macOS 系统 OpenSSH 和 `known_hosts`，不保存 SSH 密码或板端模型密钥。
 
-桌面应用连接时会协商协议、event schema、功能能力、产品版本、板型与 RDK OS。最低要求是 event schema 2、任务生命周期/分页能力和 `hobot bridge --stdio`；不满足硬条件时拒绝半兼容连接，可降级能力则在板卡详情中明确提示。升级到 schema 3 后会额外持久化用户消息，并将 thinking、工具调用与最终回答组织成稳定的对话轮次。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.24.0 增加一键诊断与支持包下载。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。详细边界见[兼容矩阵](docs/compatibility.md)。
+桌面应用连接时会协商协议、event schema、功能能力、产品版本、构建身份、板型与 RDK OS。最低要求是 event schema 2、任务生命周期/分页能力和 `hobot bridge --stdio`；不满足硬条件时拒绝半兼容连接，可降级能力则在板卡详情中明确提示。schema 3 持久化用户消息并将 thinking、工具调用与最终回答组织成稳定轮次；schema 4 增加结构化 item、工具预览和可恢复的任务排队。0.22.4 及之后的板端还会向详情栏提供只读硬件快照，并对过热、低内存、低磁盘、BPU 或验证工具缺失给出就地提示；0.23.0 增加逐核 BPU、ION/Hbmem 与结构化模型部署能力，0.24.0 增加一键诊断与支持包下载。退出桌面应用、Mac 休眠或 VPN 短暂断开只会中断界面连接，`agentd` 托管的任务仍在板端继续；重新连接后会按事件序号重放缺失输出。详细边界见[兼容矩阵](docs/compatibility.md)。
 
-消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。网络中断时草稿保留但禁止误发送，按钮原位切换为重连。编辑历史用户消息会保留该消息之前的上下文，用修改后的内容替换原消息，并在同一主对话中隐藏后续旧时间线，不会创建可见的 Side Agent；原消息含图片时会明确要求重新附加或确认移除。左侧项目可以折叠，每个项目可创建多个对话；新对话先浏览板端目录、选择现有工作区或创建文件夹，再从首条指令生成可修改标题。后台任务完成、失败或等待审批时会显示未读标记和应用内提醒。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。标题栏版本入口显示 Studio、板端服务和兼容性；回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
+消息输入框使用 `Enter` 发送，`Shift+Enter` 换行；发送后同一按钮原位切换为停止，中文输入法确认候选词时不会误触发发送。网络中断时草稿保留但禁止误发送，按钮原位切换为重连。编辑历史用户消息会保留该消息之前的上下文，用修改后的内容替换原消息，并在同一主对话中隐藏后续旧时间线，不会创建可见的 Side Agent；原消息含图片时会明确要求重新附加或确认移除。左侧项目可以折叠，每个项目可创建多个对话；新对话先浏览板端目录、选择现有工作区或创建文件夹，再从首条指令生成可修改标题。后台任务完成、失败或等待审批时会显示未读标记和应用内提醒。对话和 Side Agent 作为项目子项展示，每一项的 `…` 菜单可删除单个对话或移除项目中的全部对话，但不会删除板端工作目录。任务标题右侧的 **Side Agent** 会从当前已稳定上下文创建独立多轮分支，多个 Side Agent 始终作为主对话的同级分支显示。任务开始后，标题栏的 **Changes** 可读取绑定工作区的 Git 文件状态与有界文本 Diff；未跟踪文件只列名称、不传内容。由于主任务、Side Agent 和人工操作可以共享目录，该视图只称为当前工作区快照，不会把所有改动错误归因给当前 Agent。输入框底部只展示 D-Robotics 模型，并可在任务 Ready 或停止后切换；停止后的选择会在下次 Resume 生效。终态任务有安全 session 时显示 Resume，没有 session 时显示 New session，并在同一任务记录中明确启动全新会话。标题栏版本入口显示 Studio、板端服务和兼容性；回复中的 HTTP/HTTPS 链接会交给 Mac 默认浏览器打开。
 
 Studio 添加板卡时会先验证 SSH、协议、能力与实际板型，成功后才保存；错误地址不会污染板卡列表。已保存板卡可直接编辑或删除，删除连接不会停止板端任务。版本页提供检查更新、升级和回滚命令；执行升级时仍由板端拒绝活跃 Agent、Studio bridge、并发安装和隐式降级，桌面端不能绕过这些保护。
 
@@ -117,6 +119,7 @@ hobot deploy status <task-id>
 ```bash
 hobot task model <task-id> drobotics/kimi-k3
 hobot task permissions <task-id> review|ask|developer
+hobot task sandbox <task-id> review|workspace|system|off
 ```
 
 `inspect` 只扫描候选，不运行模型；`start` 创建可断线续跑的持久任务；`status` 读取经过板端复核的验收状态。未声明目标的编译产物会显示为待验证，明确属于另一块板或 march 的产物会被拒绝。
@@ -164,9 +167,12 @@ API_TIMEOUT_MS=3000000
 
 ```bash
 hobot model check drobotics/kimi-k3
+hobot model verify drobotics/kimi-k3
 ```
 
-该命令发送无工具的最小文本请求，不创建 Agent 任务或会话；只返回可用状态、脱敏错误类别、首包和总耗时。同一模型结果缓存 5 分钟，使用 `--force` 强制重测。Studio 在模型菜单旁提供相同的 **Check** 控件，但连接板卡时不会自动调用模型或产生费用。健康通过只证明此刻的最小文本链路可用，不代表图像、长上下文、工具调用和生产配额均已验证。
+`check` 发送无工具的最小文本请求，不创建 Agent 任务或会话；只返回可用状态、脱敏错误类别、首包和总耗时。同一模型结果缓存 5 分钟。`verify` 进一步验收流式终态、结构化工具调用、工具结果续接，以及模型声明的图片输入，结果缓存 1 小时。`Verified` 表示原生流式闭环完整；`Compatible` 表示同一 Agent 闭环通过有界缓冲回退完成，但流式项存在已知降级。两者都只由用户显式触发，使用 `--force` 强制重测；Studio 模型菜单旁提供相同的 **Check** 与 **Verify** 控件。通过 `verify` 代表 Agent 协议闭环可用，不代表长上下文、推理质量、生产额度或 RDK 开发任务质量已经达标。
+
+带日期和环境边界的实测结果见[模型协议验证记录](docs/model-conformance-report.md)。该记录不是永久白名单；网关、模型版本或路由变化后应重新验证。
 
 安装器默认以 `0600` 创建该文件。启动器按纯 `KEY=VALUE` 数据解析，不执行 Shell 语法，并拒绝符号链接、非当前用户所有或向组/其他用户开放的凭据文件。Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Anthropic-compatible 路径；DeepSeek V4 Flash 和 Pro 使用 OpenAI-compatible 路径。两种路径都保留统一的 usage、工具调用、超时和安全语义。
 
@@ -190,6 +196,7 @@ hobot persistent
 |---|---|
 | `/model` | 选择已配置模型 |
 | `hobot model check <provider/model>` | 在任务外主动验证模型流式路由与延迟 |
+| `hobot model verify <provider/model>` | 显式验收模型的流式、工具、续接和声明输入能力 |
 | `/settings` | 调整 Pi 交互设置 |
 | `/new`、`/resume`、`/tree`、`/fork` | 管理会话与分支 |
 | `/compact` | 手动压缩上下文 |
@@ -229,14 +236,18 @@ hobot persistent stop main                 # 终止会话及受其终端托管�
 
 不需要保留完整 TUI 时，可把独立任务交给板端常驻服务：
 
+发行版安装器会安装或验证 `bubblewrap`。后台 Agent 默认使用 OS 级写入、设备和 capabilities 隔离；网络仍保留给模型网关与开发服务。只有明确的系统维护任务才应使用 `--sandbox off`。
+
 ```bash
-hobot task start --name build --model drobotics/kimi-k3 --permissions developer -- "检查项目、修复问题并运行测试"
+hobot workspace inspect .                    # 检查是否适合隔离运行
+hobot task start --name build --workspace worktree --model drobotics/kimi-k3 --permissions developer --sandbox workspace -- "检查项目、修复问题并运行测试"
 hobot task list
-hobot task attach <task-id>                 # 重放历史、持续查看输出并原地处理审批
+hobot task attach <task-id>                 # 首次显示全部，之后从上次断点继续并原地处理审批
+hobot task attach <task-id> --replay-all    # 明确要求从头回放全部历史
 hobot task send <task-id> "继续处理下一项"  # 同一 Agent 多轮续接
 hobot task abort <task-id>                  # 中断当前一轮，保留 worker
 hobot task respond <task-id> <request-id> yes
-hobot task approvals <task-id>              # 查看待处理或已失效的审批
+hobot task approvals <task-id>              # 默认只显示脱敏摘要；--details 显示完整记录
 hobot task resume <task-id> ["继续任务"]     # 从已落盘的 Pi 对话显式恢复
 hobot task restart <task-id> "重新开始"      # 保留任务记录，创建全新会话
 hobot task rename <task-id> build-rdk
@@ -244,11 +255,20 @@ hobot task archive <task-id>
 hobot task list --all
 hobot task delete <task-id> --yes            # 必须先停止并归档
 hobot task stop <task-id>
+hobot workspace list                        # 对话删除后仍保留隔离代码
+hobot workspace writes                      # 查看当前正在修改工作区的 Agent
+hobot workspace delivery <task-id>          # 预检隔离改动能否安全回写
+hobot workspace apply <task-id> --yes        # 停止空闲 Agent，并以 staged changes 回写原项目
+hobot workspace cleanup <task-id> --yes     # 仅清理无改动、无新提交且无对话引用的 worktree
 ```
 
-首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多保留两个常驻 worker；创建或恢复对话时，服务会自动挂起最久未使用的 Ready worker并保留其 session，只有所有槽位都正在工作或等待审批时才拒绝新任务。板卡重启、daemon 崩溃或强制停止会把未完成任务标记为 `interrupted`。此时 `resume` 只会重新打开同一 Pi 对话，不会自动重放 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
+首次执行 `hobot task` 会自动启动当前用户的 `agentd`；也可用 `hobot daemon start|status|stop|restart` 管理。命令行退出或 SSH 断开不影响后台 Agent。每个用户默认最多保留两个常驻 worker；创建或恢复对话时，服务会自动挂起最久未使用的 Ready worker并保留其 session。若所有槽位都正在工作或等待审批，新请求会在板端私有持久队列中等待，而不是报错；停止 queued 任务即可取消。板卡重启后尚未执行的队列项继续排队，已经开始的任务标记为 `interrupted`。板端还会为最近 32 轮保存脱敏恢复证据：工具是否全部结束、是否存在未闭合调用，以及 Git 工作区状态是否变化；不写入 Prompt、命令、输出、文件名或路径。终端和 Studio 据此显示完成、未知与需审查状态，并只建议 Resume、New session、Check model 或 Save diagnostics 中适用的一项；恢复仍需用户明确发送，不会自动重放已开始的 Prompt、审批或可能带副作用的工具调用。协议与恢复边界见 [agentd 协议](docs/agentd-protocol.md)。
 
-Hobot Code 桌面端通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。桌面端按工作目录组织项目和任务；新建任务时可浏览板端目录、新建文件夹，或选择不绑定项目的默认工作区，无需手输路径。
+多个 Hobot Code Agent 可以并行阅读不同或相同项目，但同一实际工作区的 `bash`、`write`、`edit`、质量门和 MCP 调用按 Agent 轮次互斥；冲突调用会立即指出正在占用的任务，而不会静默覆盖文件。每次写入前还会比较模型开始工作时及上次工具完成后的有界元数据快照，发现另一个 SSH、IDE 或脚本改过源码时要求 Agent 重新读取。大型项目的检查会有界降级并明确提示，不扫描 `.git`、构建输出、依赖树或模型数据内容。进程退出或崩溃后的陈旧租约自动回收。独立 worktree 具有不同实际路径，因此不同根任务仍可并行修改；同一根任务的 Side Agent 和编辑分支共享 worktree，会遵守同一写入互斥。
+
+隔离任务完成后，可在 Studio 的 Changes 中先复核再选择 **Apply to project**。板端会重新验证原项目未变化、隔离工作区没有新提交且所有 Agent 已结束当前轮次；随后锁住两侧工作区、停止空闲 Agent，并仅在 SHA-256 仍和用户审阅的快照一致时，把文本、新文件、删除和二进制变化作为 staged changes 放回原项目，留给用户最终审阅。它不会自动 commit 或 push，ignored artifacts 也不会静默交付。
+
+Hobot Code 桌面端通过 SSH 调用 `hobot bridge --stdio`，使用同一套板端任务、审批和权限判定。该桥接不监听 TCP，不会向 Mac 端返回模型凭据。桌面端按用户选定的项目目录组织任务，即使实际运行在私有 worktree 中也不会把内部状态路径暴露为新项目。新建任务时可浏览板端目录、新建文件夹，或选择不绑定项目的默认工作区，无需手输路径。删除对话不会删除代码；隔离工作区只能通过独立命令显式清理。
 
 输入框底部可切换板端已配置的 D-Robotics 模型和当前任务权限模式。发送后客户端会立即显示用户消息、当前阶段和已等待时间，发送按钮在原位置变为停止，而不是等到首个模型 token 才反馈。从历史用户消息编辑时，板端会在该消息之前的会话节点创建新分支，原任务和审计记录保留不变。侧边任务使用相同的安全分支机制继承主任务已稳定的上下文，两者可独立多轮继续，且都受每用户并发上限约束。
 
@@ -267,6 +287,15 @@ hobot --resume
 ```
 
 其他模型可通过 `/model`、`/login <provider>` 或 `~/.config/hobot-code/agent/models.json` 配置；第三方扩展包使用 `hobot install <package>` 安装。完整字段见[配置说明](docs/configuration.md)。
+
+查看当前版本随板端安装的内置扩展与 Skills：
+
+```bash
+hobot extensions
+hobot extensions --json
+```
+
+该目录是只读能力清单，展示来源、作用域、运行时、声明权限和适用板型；它不会加载代码，也不会授予工具权限。第三方 package 仍由 Pi 的安装机制管理，执行与最终审批始终留在板端。
 
 ## 侧边 Agent
 
@@ -340,6 +369,8 @@ make release
 | [agentd 协议](docs/agentd-protocol.md) | 后台任务协议、状态机、重连与安全边界 |
 | [模型能力契约](docs/model-capabilities.md) | 模型默认选择、推理与图像输入能力协商 |
 | [兼容矩阵](docs/compatibility.md) | Studio、agentd、板型与 RDK OS 的支持边界 |
+| [三板稳定性验证](docs/board-reliability.md) | X5、S100、S600 的只读基线、断点续测和空闲恢复验证 |
+| [产品基准与升级路线](docs/product-benchmark.md) | 与原生 Pi、Codex 的能力边界、差距和公开交付优先级 |
 | [用户目录布局](docs/user-directory-layout.md) | 配置、状态、迁移与安装目标用户 |
 | [缓存效率](docs/cache-efficiency.md) | 网关 usage、实机基线与适用边界 |
 | [发布流程](docs/releasing.md) | 版本、GitHub Release、来源证明与实机检查 |

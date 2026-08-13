@@ -41,6 +41,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "docs/architecture.md",
   "docs/agentd-protocol.md",
   "docs/cache-efficiency.md",
+  "docs/board-reliability.md",
   "docs/compatibility.md",
   "docs/configuration.md",
   "docs/model-capabilities.md",
@@ -52,6 +53,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "runtime/hobot",
   "runtime/package.json",
   "extensions/rdk/index.ts",
+  "extensions/catalog.json",
   "skills/rdk-board/SKILL.md",
   "skills/system-info/SKILL.md",
   "skills/workspace-coding/SKILL.md",
@@ -282,8 +284,9 @@ export async function validatePackageMetadata(rootDirectory) {
     TOOL_LOCK_FIELDS,
   );
 
-  if (buildInfo.schemaVersion !== 1) throw new Error("BUILD_INFO.json has an unsupported schemaVersion");
+  if (buildInfo.schemaVersion !== 2) throw new Error("BUILD_INFO.json has an unsupported schemaVersion");
   if (!/^[0-9a-f]{40}$/u.test(buildInfo.commit)) throw new Error("BUILD_INFO.json has an invalid commit");
+  if (!/^[0-9a-f]{64}$/u.test(buildInfo.agentdSha256)) throw new Error("BUILD_INFO.json has an invalid agentdSha256");
   if (typeof buildInfo.dirty !== "boolean") throw new Error("BUILD_INFO.json dirty must be boolean");
   if (buildInfo.target !== "linux-arm64") throw new Error(`BUILD_INFO.json has an invalid target: ${buildInfo.target}`);
   const builtAt = new Date(buildInfo.builtAt);
@@ -292,6 +295,10 @@ export async function validatePackageMetadata(rootDirectory) {
   }
   if (buildInfo.version !== version || runtimePackage.version !== version) {
     throw new Error(`release version mismatch: VERSION=${version}, build=${buildInfo.version}, runtime=${runtimePackage.version}`);
+  }
+  const installedAgentdSha256 = createHash("sha256").update(await readFile(resolve(root, "agentd"))).digest("hex");
+  if (buildInfo.agentdSha256 !== installedAgentdSha256) {
+    throw new Error("BUILD_INFO.json agentdSha256 does not match the packaged executable");
   }
   if (runtimeChangelog !== changelog) {
     throw new Error("runtime/CHANGELOG.md must match the Hobot Code CHANGELOG.md");

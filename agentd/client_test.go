@@ -16,10 +16,13 @@ func TestDaemonCallTimeoutOutlivesModelHealthServerTimeout(t *testing.T) {
 	if got := daemonCallTimeout("task.list"); got != 10*time.Second {
 		t.Fatalf("unexpected default daemon timeout: %s", got)
 	}
+	if got := daemonCallTimeout("models.conformance"); got <= modelConformanceRequestTimeout {
+		t.Fatalf("models.conformance client timeout %s must exceed server timeout %s", got, modelConformanceRequestTimeout)
+	}
 }
 
 func TestConfigurationDriftScope(t *testing.T) {
-	for _, method := range []string{"models.list", "models.health", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork"} {
+	for _, method := range []string{"models.list", "models.health", "models.conformance", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork"} {
 		if !daemonMethodNeedsCurrentConfiguration(method) {
 			t.Fatalf("%s should require current configuration", method)
 		}
@@ -28,6 +31,39 @@ func TestConfigurationDriftScope(t *testing.T) {
 		if daemonMethodNeedsCurrentConfiguration(method) {
 			t.Fatalf("%s must remain usable while configuration has drifted", method)
 		}
+	}
+}
+
+func TestHumanRendererShowsQueueLifecycle(t *testing.T) {
+	var output bytes.Buffer
+	renderer := newHumanEventRenderer("task-id", strings.NewReader(""), &output, false, func(json.RawMessage) error { return nil })
+	for sequence, raw := range []string{
+		`{"type":"hobot_task_queued","operation":"resume"}`,
+		`{"type":"hobot_task_dequeued","operation":"resume"}`,
+		`{"type":"hobot_task_queue_cancelled","operation":"resume"}`,
+	} {
+		if err := renderer.render(taskEvent{Sequence: uint64(sequence + 1), Event: json.RawMessage(raw)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text := output.String()
+	for _, expected := range []string{"[queued] resume", "[starting] Agent slot acquired", "[cancelled] Queued task was not started"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("queue lifecycle %q missing from attach output: %q", expected, text)
+		}
+	}
+}
+
+func TestHumanRendererShowsSanitizedFailureRecovery(t *testing.T) {
+	var output bytes.Buffer
+	renderer := newHumanEventRenderer("task-id", strings.NewReader(""), &output, false, func(json.RawMessage) error { return nil })
+	event := taskEvent{Event: json.RawMessage(`{"type":"hobot_task_failed","message":"The Agent worker exited before the task completed.","recovery":"resume"}`)}
+	if err := renderer.render(event); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	if !strings.Contains(text, "[failed]") || !strings.Contains(text, "hobot task resume") || strings.Contains(text, "token=") {
+		t.Fatalf("unsafe or incomplete recovery output: %q", text)
 	}
 }
 
@@ -151,13 +187,13 @@ func TestInteractiveEditorPreservesMultipleLines(t *testing.T) {
 func TestTaskStartOptions(t *testing.T) {
 	var help bytes.Buffer
 	options, err := parseTaskStartArgs([]string{
-		"--name", "inspect", "--model", " drobotics/kimi-k3 ", "--permissions", "developer", "--trust-project", "--", "check", "board",
+		"--name", "inspect", "--workspace", "worktree", "--model", " drobotics/kimi-k3 ", "--permissions", "developer", "--sandbox", "system", "--trust-project", "--", "check", "board",
 	}, "/workspace", &help)
 	if err != nil {
 		t.Fatal(err)
 	}
 	params := options.params
-	if params.Name != "inspect" || params.Cwd != "/workspace" || params.Prompt != "check board" || params.Model != "drobotics/kimi-k3" || params.PermissionMode != "developer" || !params.Approve {
+	if params.Name != "inspect" || params.Cwd != "/workspace" || params.Prompt != "check board" || params.Model != "drobotics/kimi-k3" || params.PermissionMode != "developer" || params.WorkspaceMode != "worktree" || params.SandboxMode != "system" || !params.Approve {
 		t.Fatalf("unexpected task start params: %+v", params)
 	}
 	if options.usedApproveAlias {
@@ -179,6 +215,12 @@ func TestTaskStartOptionsRejectInvalidModelAndPermission(t *testing.T) {
 	}
 	if _, err := parseTaskStartArgs([]string{"--permissions", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "review, ask, or developer") {
 		t.Fatalf("invalid permission mode was accepted: %v", err)
+	}
+	if _, err := parseTaskStartArgs([]string{"--workspace", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "shared or worktree") {
+		t.Fatalf("invalid workspace mode was accepted: %v", err)
+	}
+	if _, err := parseTaskStartArgs([]string{"--sandbox", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "review, workspace, system, or off") {
+		t.Fatalf("invalid sandbox mode was accepted: %v", err)
 	}
 }
 

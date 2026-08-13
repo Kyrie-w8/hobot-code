@@ -1,0 +1,62 @@
+{
+  "info": {
+    "version": "0.26.0",
+    "protocol": 1,
+    "pid": 100,
+    "startedAt": "2026-08-13T00:00:00Z",
+    "activeTasks": 0,
+    "queuedTasks": 0,
+    "maximumTasks": 2,
+    "backgroundTasks": true,
+    "capabilities": {
+      "protocolMin": 1,
+      "protocolMax": 1,
+      "eventSchema": 4,
+      "capabilities": [
+        "extensions.catalog.v1",
+        "tasks.lifecycle",
+        "tasks.page",
+        "events.page",
+        "models.capabilities.v1",
+        "models.health.v1",
+        "models.conformance.v1",
+        "system.snapshot",
+        "support.bundle.v1",
+        "deployments.v1",
+        "tasks.fork",
+        "tasks.queue.v1",
+        "tasks.failure.v1",
+        "tasks.turn-evidence.v1",
+        "events.items.v1",
+        "workspaces.browse",
+        "workspaces.changes.v1",
+        "workspaces.isolation.v1",
+        "workspaces.write-leases.v1",
+        "workspaces.delivery.v1",
+        "tasks.sandbox.v1",
+        "build.identity.v1"
+      ],
+      "sandbox": {
+        "available": true,
+        "backend": "bubblewrap",
+        "profiles": ["review", "workspace", "system", "off"],
+        "filesystemWritesRestricted": true,
+        "devicesRestricted": true,
+        "capabilitiesDropped": true,
+        "networkRestricted": false
+      }
+    },
+    "build": {
+      "status": "verified",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dirty": false,
+      "builtAt": "2026-08-13T00:00:00Z",
+      "target": "linux-arm64",
+      "binarySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "piVersion": "0.84.1",
+      "piCommit": "cccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "snapshot": {"boardId": "s100", "rdkOsVersion": "4.0.5-Beta"},
+  "expected": {"status": "supported", "validatedTarget": true, "issueCodes": []}
+}
