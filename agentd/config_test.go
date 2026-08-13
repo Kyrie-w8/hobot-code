@@ -54,3 +54,20 @@ func TestConfigUsesBoundedStorageDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("out-of-range values did not fall back safely: %+v", bounded)
 	}
 }
+
+func TestConfigUsesOneCanonicalAgentDirectory(t *testing.T) {
+	home := t.TempDir()
+	configRoot := filepath.Join(home, "managed-config")
+	agentDir := filepath.Join(home, "managed-agent")
+	t.Setenv("HOME", home)
+	t.Setenv("HOBOT_CODE_CONFIG_DIR", configRoot)
+	t.Setenv("HOBOT_CODING_AGENT_DIR", agentDir)
+	t.Setenv("HOBOT_CODE_AGENT_BINARY", "/usr/local/bin/hobot-test")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConfigRoot != configRoot || cfg.AgentDir != agentDir {
+		t.Fatalf("agent configuration paths diverged: %+v", cfg)
+	}
+}

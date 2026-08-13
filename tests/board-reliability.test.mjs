@@ -91,7 +91,26 @@ setInterval(() => {}, 1000);
   const second = await runReliability(resumed);
   assert.equal(second.boards[0].attempts, 2);
   assert.equal(second.boards[0].samples.length, 2);
+  assert.equal(second.checks[0].status, "pass");
   assert.equal((await stat(reportPath)).mode & 0o077, 0);
   const encoded = await readFile(reportPath, "utf8");
   assert.doesNotMatch(encoded, /private-host|private-task|private\/project|secret prompt|untrusted remote text|secret-zone/);
+});
+
+test("fleet consistency never treats uniformly missing build identities as one release", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "hobot-reliability-missing-build-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const ssh = join(directory, "fake-ssh.mjs");
+  await writeFile(ssh, `#!/usr/bin/env node
+let input = '';
+for await (const chunk of process.stdin) input += chunk;
+const request = JSON.parse(input);
+const result = request.method === 'ping' ? {version: '0.25.0', protocol: 1, pid: 1, startedAt: '2026-08-13T00:00:00Z', capabilities: {eventSchema: 3, capabilities: []}} : request.method === 'system.snapshot' ? {boardId: 'x5', rdkOsVersion: '3.4.1', architecture: 'arm64'} : {tasks: []};
+process.stdout.write(JSON.stringify({protocol: 1, id: request.id, ok: true, result}) + '\\n');
+`);
+  await chmod(ssh, 0o755);
+  const options = parseArguments(["--board", "x5=root@board", "--expected-version", "0.26.0", "--samples", "1", "--ssh", ssh]);
+  const report = await runReliability(options);
+  assert.equal(report.checks[0].status, "fail");
+  assert.match(report.checks[0].summary, /verified, clean, and complete/);
 });

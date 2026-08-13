@@ -13,7 +13,7 @@
 - **开放模型与扩展**：内置 D-Robotics Kimi K3、Qwen 3.8 Max、GLM 5.2、DeepSeek V4 Flash 和 Pro，同时兼容 Pi Provider、MCP、packages、extensions、Skills、Prompt templates 和 themes。
 - **缓存效率可观测**：直接读取网关 usage，展示命中率、冷热输入和前缀稳定性；S100 实机验证中，GLM 5.2 与 Kimi K3 的稳定长前缀均达到 **99%+** 热轮命中率。
 - **工程上下文与质量门**：项目初始化、持久记忆、持久目标、Hook 和资源受限 LSP 共同保留开发约定；完成状态与工作区指纹和验证命令绑定。
-- **板端安全边界**：权限策略、项目信任、受保护路径、危险 Shell 检测和硬件资源租约均在板端执行，桌面客户端无法绕过。
+- **板端安全边界**：前台 TUI 与后台任务默认使用板端 OS 文件、设备和 capability 隔离，并叠加权限策略、项目信任、危险 Shell 检测与硬件租约；桌面客户端无法绕过。
 - **诊断与可支持性**：`hobot diagnose` 生成私有、脱敏、带校验值的支持包，Studio 可通过既有 SSH 连接保存到 Mac。
 
 ### 实机验证

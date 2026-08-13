@@ -313,7 +313,14 @@ async function launcherFixture(t) {
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
   await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf 'umask=%s\\nliteral=%s\\nfingerprint=%s\\nargs=%s\\n' \"$(umask)\" \"${LITERAL_VALUE:-}\" \"${HOBOT_CODE_CONFIG_FINGERPRINT:-}\" \"$*\"\n");
-  await writeFile(join(runtime, "agentd"), "#!/bin/sh\nfor arg in \"$@\"; do printf 'agentd=<%s>\\n' \"$arg\"; done\n");
+  await writeFile(join(runtime, "agentd"), `#!/bin/sh
+if [ "\${1:-}" = tui ]; then
+  shift
+  [ "\${1:-}" = -- ] && shift
+  exec "\${0%/*}/hobot" "$@"
+fi
+for arg in "$@"; do printf 'agentd=<%s>\\n' "$arg"; done
+`);
   await writeFile(join(runtime, "release.sh"), "#!/bin/sh\nprintf 'release:%s\\n' \"$*\"\n");
   await writeFile(join(runtime, "uninstall.sh"), "#!/bin/sh\nprintf 'uninstall:%s\\n' \"$*\"\n");
   await Promise.all(["hobot", "agentd", "release.sh", "uninstall.sh"].map((name) => chmod(join(runtime, name), 0o755)));

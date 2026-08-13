@@ -143,4 +143,6 @@ Pi JSONL 会话位于 `~/.local/state/hobot-code/sessions`。Hobot Code 在同�
 
 升级前，旧命令与运行时会写入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`。回滚同样需要 root，并且只接受同时包含旧运行时与旧启动命令的完整备份；首次安装没有前一版本时不可回滚。成功恢复的备份会以 `.hobot-restored` 标记并拒绝再次使用，避免同一备份重复切换运行时。回滚不删除当前用户的配置、会话、记忆或目标。
 
-启动器的 `persistent` 子命令把同一个 Hobot Code TUI 置于当前用户的专用 `tmux -L hobot-code` 服务中。终端连接只是可分离的客户端，因此 SSH 断开不触发 Agent 或工具进程退出；重新附着后继续使用同一个进程和屏幕状态。专用服务从只读的随包配置启用鼠标、扩展按键、焦点事件和 256 色终端，不读取或修改普通 `tmux` 服务。会话名经过严格约束并统一添加 `hobot-code-` 前缀。该层不承担板卡重启或进程崩溃恢复。
+启动器的默认 `hobot` 和 `persistent` 子命令都通过 agentd 的前台执行入口进入版本化 Pi TUI。Linux RDK 默认使用 `system` bubblewrap 档位：宿主文件系统只读，只将当前工作区与 Hobot Code 自身状态重新开放为可写，并按白名单映射 BPU 与多媒体设备；`review`、`workspace` 和显式 `off` 的边界见配置文档。网络仍与宿主共享，不能把该层描述为网络隔离。
+
+`persistent` 把同一个前台入口置于当前用户的专用 `tmux -L hobot-code` 服务中。终端连接只是可分离的客户端，因此 SSH 断开不触发 Agent 或工具进程退出；重新附着后继续使用同一个进程和屏幕状态。专用服务从只读的随包配置启用鼠标、扩展按键、焦点事件和 256 色终端，不读取或修改普通 `tmux` 服务。会话名经过严格约束并统一添加 `hobot-code-` 前缀。该层不承担板卡重启或进程崩溃恢复。

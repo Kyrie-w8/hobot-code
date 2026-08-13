@@ -21,6 +21,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Hobot Code background task service
 
 Usage:
+  hobot tui [--sandbox review|workspace|system|off] [-- PI_OPTIONS...]
   hobot daemon start|status
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
@@ -76,6 +77,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "serve":
 		return runServer(cfg)
+	case "tui":
+		return runTUICLI(cfg, args[1:])
 	case "daemon":
 		return runDaemonCLI(cfg, args[1:])
 	case "task":
@@ -108,6 +111,59 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func parseTUIArgs(args []string) (string, []string, error) {
+	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	defaultMode := strings.TrimSpace(os.Getenv("HOBOT_CODE_TUI_SANDBOX"))
+	if defaultMode == "" {
+		defaultMode = sandboxModeSystem
+	}
+	sandbox := flags.String("sandbox", defaultMode, "OS sandbox: review, workspace, system, or off")
+	if err := flags.Parse(args); err != nil {
+		return "", nil, err
+	}
+	mode, err := normalizeSandboxMode(*sandbox)
+	if err != nil {
+		return "", nil, err
+	}
+	return mode, flags.Args(), nil
+}
+
+func runTUICLI(cfg config, args []string) error {
+	requested, agentArgs, err := parseTUIArgs(args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve TUI working directory: %w", err)
+	}
+	mode, status, err := resolveForegroundSandbox(cfg, requested)
+	if err != nil {
+		return err
+	}
+	commandName := cfg.AgentBinary
+	commandArgs := agentArgs
+	if mode != sandboxModeOff {
+		if err := probeSandboxBackend(cfg.SandboxBinary); err != nil {
+			return fmt.Errorf("OS sandbox self-test failed: %w; fix bubblewrap or explicitly choose --sandbox off", err)
+		}
+		commandName, commandArgs, err = foregroundSandboxCommand(cfg, workingDirectory, mode, agentArgs)
+		if err != nil {
+			return err
+		}
+	}
+	environment := append(os.Environ(),
+		"HOBOT_CODE_SANDBOX_SCOPE=foreground",
+		"HOBOT_CODE_SANDBOX_MODE="+mode,
+		"HOBOT_CODE_SANDBOX_BACKEND="+status.Backend,
+	)
+	return replaceProcess(commandName, commandArgs, environment)
 }
 
 func runExtensionsCLI(cfg config, args []string) error {

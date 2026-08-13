@@ -57,7 +57,14 @@ async function createLauncherFixture(prefix) {
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
   await copyFile(new URL("../packaging/pi/tmux.conf", import.meta.url), join(runtime, "tmux.conf"));
   await writeFile(join(runtime, "hobot"), "#!/bin/sh\nprintf '%s\\n' \"$HOBOT_CODING_AGENT_DIR\" \"$HOBOT_CODING_AGENT_SESSION_DIR\" \"$HOBOT_CODE_MEMORY_DB\"\nfor hobot_arg in \"$@\"; do printf 'arg=<%s>\\n' \"$hobot_arg\"; done\n");
-  await writeFile(join(runtime, "agentd"), "#!/bin/sh\nfor hobot_arg in \"$@\"; do printf 'agentd=<%s>\\n' \"$hobot_arg\"; done\n");
+  await writeFile(join(runtime, "agentd"), `#!/bin/sh
+if [ "\${1:-}" = tui ]; then
+  shift
+  [ "\${1:-}" = -- ] && shift
+  exec "\${0%/*}/hobot" "$@"
+fi
+for hobot_arg in "$@"; do printf 'agentd=<%s>\\n' "$hobot_arg"; done
+`);
   await Promise.all(["hobot", "agentd"].map((name) => chmod(join(runtime, name), 0o755)));
   const source = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
   const launcher = join(root, "hobot-launcher");
@@ -219,6 +226,18 @@ test("launcher initializes an isolated user without system configuration", async
       join(fixture.home, ".local/state/hobot-code/memory/memory.db"),
     ]);
     assert.equal(JSON.parse(await readFile(join(paths[0], "settings.json"), "utf8")).defaultProvider, "drobotics");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("launcher routes explicit TUI sandbox selection through agentd", async () => {
+  const fixture = await createLauncherFixture("hobot-tui-route-");
+  try {
+    const { stdout } = await execFileAsync(fixture.launcher, ["tui", "--sandbox", "review", "--", "--resume"], {
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    assert.match(stdout, /arg=<--sandbox>\narg=<review>\narg=<-->\narg=<--resume>\n?$/);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

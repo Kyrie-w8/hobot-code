@@ -199,6 +199,19 @@ interface PromptSnapshot {
 
 type QualityGateStatus = "disabled" | "missing" | "running" | "passed" | "failed" | "stale";
 
+function sandboxRuntimeStatus() {
+  const mode = String(process.env.HOBOT_CODE_SANDBOX_MODE ?? "off").trim() || "off";
+  const backend = String(process.env.HOBOT_CODE_SANDBOX_BACKEND ?? "none").trim() || "none";
+  const scope = String(process.env.HOBOT_CODE_SANDBOX_SCOPE ?? (process.env.HOBOT_CODE_BACKGROUND_TASK ? "background" : "unmanaged")).trim();
+  return {
+    scope,
+    mode,
+    backend,
+    network: "shared",
+    managed: backend !== "none" && mode !== "off",
+  };
+}
+
 async function readText(paths: string[]): Promise<string | undefined> {
   for (const path of paths) {
     try {
@@ -1867,6 +1880,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           `Policy: ${permissionPolicyPath()}`,
           `Root mode: ${permissionPolicy.rootMode}`,
           `Default: ${permissionPolicy.default}`,
+          `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}; network shared)`,
           permissionPolicyError ? `Fallback: ${permissionPolicyError}` : undefined,
           `Hidden tools: ${hidden.length > 0 ? hidden.join(", ") : "none"}`,
           "Effective tool permissions:",
@@ -2309,6 +2323,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           },
           lsp: lspManager?.status(),
           legacySessions: resolve(resolveUserPaths().stateRoot, "legacy-sessions"),
+          sandbox: sandboxRuntimeStatus(),
         },
       };
       if (String(args ?? "").trim() === "json") {
@@ -2338,6 +2353,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         `Hooks: ${hookConfig.enabled ? `${hookConfig.hooks.length} enabled (${hookConfig.failurePolicy})` : "off"}`,
         `LSP processes: ${((lspManager?.status().running as unknown[] | undefined) ?? []).length}`,
         `Legacy sessions: ${resolve(resolveUserPaths().stateRoot, "legacy-sessions")}`,
+        `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}) | network shared`,
         warnings.length > 0 ? `Warnings:\n- ${warnings.join("\n- ")}` : "Warnings: none",
         "Use /doctor json for the complete machine-readable report.",
       ].join("\n"), warnings.length > 0 ? "warning" : "info");

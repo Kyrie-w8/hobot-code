@@ -20,6 +20,8 @@ const (
 	sandboxUnavailable   = "unavailable"
 )
 
+var protectedSandboxRoots = []string{"/boot", "/dev", "/etc", "/proc", "/sys", "/usr", "/var/lib"}
+
 type taskSandboxStatus struct {
 	Requested            string `json:"requested"`
 	Effective            string `json:"effective"`
@@ -150,6 +152,165 @@ func (manager *taskManager) resolveTaskSandbox(requested, permissionMode string,
 	return mode, sandboxStatus(mode, "bubblewrap", "host network remains available for model and developer services"), nil
 }
 
+func resolveForegroundSandbox(cfg config, requested string) (string, taskSandboxStatus, error) {
+	mode, err := normalizeSandboxMode(requested)
+	if err != nil {
+		return "", taskSandboxStatus{}, err
+	}
+	if mode == sandboxModeOff {
+		return mode, sandboxStatus(mode, "none", "disabled explicitly for this foreground session"), nil
+	}
+	if cfg.SandboxBinary == "" {
+		return sandboxModeOff, sandboxStatus(sandboxModeOff, "none", "OS sandboxing is available on Linux board targets"), nil
+	}
+	if cfg.SandboxBinary == sandboxUnavailable {
+		return "", taskSandboxStatus{}, fmt.Errorf("OS sandbox is unavailable: install bubblewrap or explicitly choose --sandbox off")
+	}
+	if err := validateSandboxBinary(cfg.SandboxBinary); err != nil {
+		return "", taskSandboxStatus{}, err
+	}
+	return mode, sandboxStatus(mode, "bubblewrap", "host network remains available for model and developer services"), nil
+}
+
+func foregroundSandboxCommand(cfg config, cwd, mode string, agentArgs []string) (string, []string, error) {
+	writable, err := foregroundSandboxWritableDirectories(cfg, cwd, mode)
+	if err != nil {
+		return "", nil, err
+	}
+	args := []string{
+		"--unshare-user", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
+		"--die-with-parent", "--cap-drop", "ALL",
+		"--ro-bind", "/", "/", "--dev", "/dev",
+	}
+	if mode == sandboxModeSystem {
+		for _, device := range sandboxHardwareDevices() {
+			args = append(args, "--dev-bind", device, device)
+		}
+	}
+	if foregroundCanMaskTemporaryRoot(cfg, cwd, "/tmp") {
+		args = append(args, "--tmpfs", "/tmp")
+	}
+	if foregroundCanMaskTemporaryRoot(cfg, cwd, "/var/tmp") {
+		args = append(args, "--tmpfs", "/var/tmp")
+	}
+	if mode == sandboxModeWorkspace || mode == sandboxModeSystem {
+		args = append(args, "--bind", cwd, cwd)
+	}
+	// A broad workspace such as /root must not make credentials or agentd's
+	// control state writable. Re-apply those boundaries before mounting the
+	// small set of foreground state directories that the TUI actually owns.
+	readOnly := []string{cfg.ConfigRoot, cfg.StateRoot}
+	manager := taskManager{cfg: cfg}
+	readOnly = append(readOnly, manager.sandboxReadOnlyPaths()...)
+	readOnly = uniqueSandboxPaths(readOnly)
+	for _, path := range readOnly {
+		if pathIsSafeSandboxMount(path) {
+			args = append(args, "--ro-bind", path, path)
+		}
+	}
+	for _, path := range writable {
+		args = append(args, "--bind", path, path)
+	}
+	args = append(args, "--chdir", cwd, "--", cfg.AgentBinary)
+	args = append(args, agentArgs...)
+	return cfg.SandboxBinary, args, nil
+}
+
+func foregroundSandboxWritableDirectories(cfg config, cwd, mode string) ([]string, error) {
+	mode, err := normalizeSandboxMode(mode)
+	if err != nil || mode == sandboxModeOff {
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	cwd = filepath.Clean(cwd)
+	if mode == sandboxModeWorkspace || mode == sandboxModeSystem {
+		if cwd == string(filepath.Separator) {
+			return nil, fmt.Errorf("refusing to use the filesystem root as a writable Hobot Code workspace; change to a project directory")
+		}
+		for _, root := range protectedSandboxRoots {
+			if sandboxPathWithin(cwd, root) {
+				return nil, fmt.Errorf("refusing to make protected system path writable in the foreground sandbox: %s", cwd)
+			}
+		}
+	}
+	info, statErr := os.Lstat(cwd)
+	if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("foreground sandbox workspace must be an existing non-symbolic-link directory: %s", cwd)
+	}
+	paths := []string{
+		cfg.AgentDir,
+		cfg.SessionDir,
+		filepath.Join(cfg.StateRoot, "memory"),
+		filepath.Join(cfg.StateRoot, "goals"),
+		filepath.Join(cfg.StateRoot, "audit"),
+		filepath.Join(cfg.StateRoot, "side-agent-leases"),
+		filepath.Join(cfg.StateRoot, "workspace-write-leases"),
+		filepath.Join(cfg.StateRoot, "hardware-leases"),
+		filepath.Join(cfg.StateRoot, "legacy-sessions"),
+	}
+	for _, variable := range []string{"HOBOT_CODE_PERMISSION_POLICY", "HOBOT_CODE_MEMORY_DB", "HOBOT_CODE_GOAL_DB", "HOBOT_CODE_HOOK_AUDIT"} {
+		if value := strings.TrimSpace(os.Getenv(variable)); value != "" {
+			if !filepath.IsAbs(value) {
+				return nil, fmt.Errorf("%s must be absolute for a sandboxed foreground session", variable)
+			}
+			paths = append(paths, filepath.Dir(filepath.Clean(value)))
+		}
+	}
+	result := make([]string, 0, len(paths))
+	for _, path := range uniqueSandboxPaths(paths) {
+		if reason := unsafeForegroundWritablePath(path); reason != "" {
+			return nil, fmt.Errorf("refusing to make %s writable in the foreground sandbox: %s", reason, path)
+		}
+		if err := ensurePrivateDir(path); err != nil {
+			return nil, fmt.Errorf("prepare foreground sandbox directory %s: %w", path, err)
+		}
+		result = append(result, path)
+	}
+	return result, nil
+}
+
+func unsafeForegroundWritablePath(path string) string {
+	path = filepath.Clean(path)
+	if path == string(filepath.Separator) {
+		return "filesystem root"
+	}
+	for _, root := range protectedSandboxRoots {
+		if sandboxPathWithin(path, root) {
+			return "protected system path"
+		}
+	}
+	return ""
+}
+
+func uniqueSandboxPaths(paths []string) []string {
+	unique := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if !filepath.IsAbs(path) {
+			continue
+		}
+		path = filepath.Clean(path)
+		if _, exists := unique[path]; exists {
+			continue
+		}
+		unique[path] = struct{}{}
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func foregroundCanMaskTemporaryRoot(cfg config, cwd, root string) bool {
+	for _, path := range []string{cwd, cfg.ConfigRoot, cfg.AgentDir, cfg.StateRoot, cfg.SessionDir, cfg.AgentBinary} {
+		if filepath.IsAbs(path) && sandboxPathWithin(path, root) {
+			return false
+		}
+	}
+	return true
+}
+
 func (manager *taskManager) sandboxCommand(metadata taskMetadata, agentArgs []string) (string, []string, taskSandboxStatus, error) {
 	mode, status, err := manager.resolveTaskSandbox(metadata.SandboxMode, metadata.PermissionMode, metadata.Deployment != nil)
 	if err != nil {
@@ -235,6 +396,11 @@ func sandboxPathWithin(path, root string) bool {
 func pathIsDirectory(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
+}
+
+func pathIsSafeSandboxMount(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink == 0 && (info.IsDir() || info.Mode().IsRegular())
 }
 
 func sandboxHardwareDevices() []string {
@@ -357,7 +523,15 @@ func (manager *taskManager) sandboxReadOnlyPaths() []string {
 			}
 			configRoot = filepath.Join(configHome, "hobot-code")
 		}
-		paths = append(paths, configRoot, filepath.Join(home, ".ssh"), filepath.Join(home, ".gnupg"))
+		paths = append(paths,
+			configRoot,
+			filepath.Join(home, ".ssh"), filepath.Join(home, ".gnupg"),
+			filepath.Join(home, ".aws"), filepath.Join(home, ".kube"), filepath.Join(home, ".docker"),
+			filepath.Join(home, ".config", "gh"), filepath.Join(home, ".config", "gcloud"),
+			filepath.Join(home, ".config", "huggingface"), filepath.Join(home, ".cache", "huggingface", "token"),
+			filepath.Join(home, ".git-credentials"), filepath.Join(home, ".netrc"),
+			filepath.Join(home, ".npmrc"), filepath.Join(home, ".pypirc"),
+		)
 	}
 	unique := make(map[string]struct{}, len(paths))
 	result := make([]string, 0, len(paths))

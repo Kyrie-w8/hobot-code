@@ -300,6 +300,9 @@ function assessFleet(report) {
   if (latest.length !== report.boards.length) {
     return [{ name: "fleet-build-consistency", status: "fail", summary: "Not every board produced release identity evidence." }];
   }
+  if (latest.some((sample) => sample.service.build?.status !== "verified" || sample.service.build?.dirty !== false || !sample.service.build?.commit || !sample.service.build?.binarySha256 || !sample.service.build?.piVersion || !sample.service.build?.piCommit)) {
+    return [{ name: "fleet-build-consistency", status: "fail", summary: "Not every board reports a verified, clean, and complete release identity." }];
+  }
   const identities = new Set(latest.map((sample) => [
     sample.service.version, sample.service.build?.commit, sample.service.build?.binarySha256,
     sample.service.build?.piVersion, sample.service.build?.piCommit,

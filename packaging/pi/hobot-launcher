@@ -321,7 +321,7 @@ handle_setup_command() {
     exec "$0" model check "drobotics/$setup_model"
   fi
   printf 'Verify the route when ready: hobot model check drobotics/%s\n' "$setup_model"
-  printf 'Start Hobot Code: hobot\n'
+  printf 'Start Hobot Code from a project directory: cd /path/to/project && hobot\n'
   exit 0
 }
 
@@ -637,9 +637,9 @@ export PATH="/usr/local/lib/hobot-code/bin:$PATH"
 
 umask "$original_umask"
 case "${1:-}" in
-  daemon|deploy|task|bridge|diagnose|extensions|model|workspace) exec /usr/local/lib/hobot-code/agentd "$@" ;;
+  tui|daemon|deploy|task|bridge|diagnose|extensions|model|workspace) exec /usr/local/lib/hobot-code/agentd "$@" ;;
 esac
 if [ "${1:-}" = persistent ]; then
   handle_persistent_command "$@"
 fi
-exec /usr/local/lib/hobot-code/hobot "$@"
+exec /usr/local/lib/hobot-code/agentd tui -- "$@"

@@ -129,6 +129,7 @@ cacheRead / (input + cacheRead + cacheWrite)
 | `HOBOT_CODING_AGENT_DIR` | `<config-root>/agent` |
 | `HOBOT_CODING_AGENT_SESSION_DIR` | `<state-root>/sessions` |
 | `HOBOT_CODE_BWRAP` | 自动发现 `/usr/bin/bwrap` 或 `/bin/bwrap`；仅在自定义安装路径时设置绝对路径 |
+| `HOBOT_CODE_TUI_SANDBOX` | 前台 TUI 默认 OS 隔离档位：`system`（默认）、`workspace`、`review` 或 `off` |
 | `HOBOT_CODE_PERMISSION_POLICY` | 权限策略文件 |
 | `HOBOT_CODE_MEMORY_CONFIG`、`HOBOT_CODE_MEMORY_DB` | 记忆配置与数据库 |
 | `HOBOT_CODE_GOAL_CONFIG`、`HOBOT_CODE_GOAL_DB` | 目标配置与数据库 |
@@ -146,6 +147,17 @@ hobot
 ```
 
 `PI_SKIP_VERSION_CHECK=1` 默认开启，避免 Pi 的自更新提示绕过 Hobot Code 的版本锁。升级 Pi 运行时必须更新 `pi-runtime/pi.lock`、重新构建并完成板端回归。
+
+前台直接运行 `hobot` 与 `hobot persistent` 时默认使用 `system` 档位：宿主根文件系统只读，当前工作目录和 Hobot Code 自身的会话、配置、记忆与租约可写，只映射已识别的 RDK BPU、多媒体和加速设备，并丢弃 Linux capabilities。可为单次会话显式选择其他档位：
+
+```bash
+hobot tui --sandbox review
+hobot tui --sandbox workspace
+hobot tui --sandbox system
+hobot tui --sandbox off
+```
+
+`review` 保持当前目录只读；`workspace` 允许当前目录写入但不开放 RDK 硬件设备；`system` 在同一文件边界上开放受支持设备白名单；`off` 关闭 OS 隔离，必须由用户明确选择。`workspace` 与 `system` 拒绝把 `/` 或受保护系统目录当作工作区；从 `$HOME` 启动仍可工作，但 SSH/GPG、常见云凭据、Git 凭据、Hobot 配置和 daemon 状态会重新锁为只读。建议进入具体项目目录，以缩小 Agent 的可写范围。四档都继续使用 Pi 参数，例如 `hobot tui --sandbox system -- --resume`。当前网络仍与宿主共享，以便访问模型网关、软件源和开发服务；工具级权限会继续审批网络命令，但这不等价于域名级网络沙箱。
 
 知识库与专家 Prompt 可在开发时覆盖：
 

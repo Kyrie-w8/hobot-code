@@ -20,7 +20,7 @@ Hobot Code 应定位为 **运行在 RDK 上、能持续完成真实开发与部�
 | 会话与分支 | JSONL 树、分支、fork 和 compaction | 增加持久任务、Side Agent、编辑历史、断线续读、显式恢复和有界回合证据 | 分页 thread/item、fork、resume、archive、delete、compact 和 rollback | 主要语义与基础恢复证据已具备；大量历史分页、独立验证项和后台终端仍落后 |
 | 后台任务 | 默认是前台进程，可由用户自行结合终端复用工具 | `agentd` 托管、持久 FIFO、重连补流、板卡重启后的保守恢复 | 并行长任务、后台终端、计划任务和多环境 | 这是 Hobot Code 相对 Pi 的核心增量；仍缺计划任务和完整进程控制面 |
 | 代码审阅 | 可由命令或扩展实现，不是默认产品控制面 | Studio 已有任务绑定的 Changes、二进制安全交付预检和经摘要确认的 staged 回写 | 内置 Git review、跨仓库项目、逐 hunk 操作和 reviewer | 隔离任务已有可靠交付；共享目录归因、选择性暂存/回滚和专用 reviewer 仍缺失 |
-| 工作区隔离 | 默认共享当前目录；可由扩展增加 sandbox | 干净 Git 项目可选每任务 worktree；所有 Agent 的工作区写入按轮次互斥；后台 worker 使用板端 bubblewrap profile | worktree 与 sandbox 是一等能力 | Git 隔离、交付与后台 OS 文件边界已闭环；前台 TUI 和网络策略仍有差距 |
+| 工作区隔离 | 默认共享当前目录；可由扩展增加 sandbox | 干净 Git 项目可选每任务 worktree；所有 Agent 的工作区写入按轮次互斥；前台 TUI 与后台 worker 共用板端 bubblewrap 档位 | worktree 与 sandbox 是一等能力 | Git、前后台文件/设备边界已闭环；域名级网络策略仍有差距 |
 | 权限与安全 | 默认继承启动用户权限，扩展示例提供权限门与可选 sandbox | 板端权限策略、路径保护、危险 Shell、项目信任、Hook、硬件租约，以及文件/设备/capability 隔离 | sandbox、权限档位、网络/文件审批和受管策略 | 已明显强于 Pi 默认值；仍缺域名级出站控制、组织策略与普通用户基线 |
 | RDK 专业能力 | 无板卡语义 | X5/S100/S600 识别、27 个官方来源主题、硬件快照、部署与支持包 | 通用软件开发，不提供 RDK 专用闭环 | Hobot Code 的主要不可替代价值 |
 | 桌面体验 | 无官方板卡桌面控制面 | Mac Studio 已支持项目、任务、Side Agent、审批、图片、硬件监控和 Changes | 项目、多目录、review、worktree、终端、Skills、automations 和文件预览 | 可用原型已经形成，但工作流完整度和细节成熟度仍有明显差距 |
@@ -41,7 +41,7 @@ Hobot Code 相对 Pi 的明确增量是板端 `agentd`、Side Agent、D-Robotics
 
 Codex 的领先并不只是界面更精致，而是统一控制协议把会话、回合、项目、执行、权限和扩展都做成可查询、可分页、可恢复的产品对象：
 
-1. **安全执行层。** Codex 有文件系统与网络 sandbox、权限 profile、命令规则和受管约束；Hobot Code 的后台 worker 已用 bubblewrap 约束文件、设备和 Linux capability，但网络仍共享主机命名空间，前台 Pi TUI 也尚未统一进入同一边界。
+1. **安全执行层。** Codex 有文件系统与网络 sandbox、权限 profile、命令规则和受管约束；Hobot Code 的前台 TUI 与后台 worker 已统一用 bubblewrap 约束文件、设备和 Linux capability，但网络仍共享主机命名空间，也尚无组织级受管策略。
 2. **会话与执行协议。** Codex 提供分页 thread/turn/item、steer、interrupt、compact、fork、后台终端和状态通知；Hobot Code 已有任务、schema-4 item 和有界恢复证据，但大历史分页、独立验证项、终端进程和非 Git 副作用证据仍较粗。
 3. **代码工作流。** Codex 把 review、worktree、Diff、逐 hunk 操作和项目多目录放在同一工作流中；Hobot Code 目前适合“检查并完整交付一个隔离任务”，还不适合复杂人工挑选和跨仓库修改。
 4. **扩展控制面。** Codex 能列出 Skills、hooks、MCP 工具/资源/认证和 Provider 能力，并正在形成插件市场协议；Hobot Code 运行能力多，但缺少统一清单、启停、信任、诊断和版本契约。
@@ -59,7 +59,7 @@ Codex 的领先并不只是界面更精致，而是统一控制协议把会话�
 
 ### P0：公开 Beta 前必须完成
 
-1. **完成安全执行闭环。** `review`、`workspace`、`system` 三档 bubblewrap 文件/设备/capability 隔离已在 X5、S100、S600 验证；下一步是把前台 TUI 纳入同一执行入口，默认引导普通开发用户，并为 Agent 子进程增加域名级出站策略。网络尚未隔离时必须在 Studio 和诊断中保持明确可见。
+1. **完成安全执行闭环。** `review`、`workspace`、`system` 三档 bubblewrap 已覆盖前台 TUI 与后台 worker；下一步是在 X5、S100、S600 补齐普通用户、工作目录边界和硬件设备矩阵，并为 Agent 子进程增加域名级出站策略。网络尚未隔离时必须在 Studio 和诊断中保持明确可见。
 2. **模型适配等级。** 建立无凭据泄露的 Provider conformance suite：流式文本、thinking、单/并行工具、非法参数修复、审批、图片、长会话压缩、断流恢复和 RDK 代表任务。Studio 只将通过完整门槛的模型标为“已验证”，其余显示实验性及失败项。
 3. **任务级恢复证据。** 最近 32 轮的工具终态、未闭合工具数和脱敏 Git 工作区摘要已由板端持久化，CLI 摘要、Studio 恢复卡和支持包可以区分“完成、部分证据、需审查”，且不会自动重放。下一步仍需把测试/验证结果变成独立证据项，并覆盖非 Git 副作用与后台终端。
 4. **三板稳定性矩阵。** 在 X5、S100、S600 上覆盖首次安装、升级/回滚、24 小时任务、SSH/VPN 抖动、daemon 重启、板卡重启、磁盘紧张、日志截断、审批和模型故障，并发布可复核结果。

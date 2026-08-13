@@ -21,6 +21,8 @@ const (
 )
 
 type config struct {
+	ConfigRoot        string
+	AgentDir          string
 	StateRoot         string
 	AgentdRoot        string
 	TasksRoot         string
@@ -44,6 +46,24 @@ func loadConfig() (config, error) {
 	home := os.Getenv("HOME")
 	if !filepath.IsAbs(home) {
 		return config{}, fmt.Errorf("HOME must be an absolute path")
+	}
+	configRoot := os.Getenv("HOBOT_CODE_CONFIG_DIR")
+	if configRoot == "" {
+		configHome := os.Getenv("XDG_CONFIG_HOME")
+		if configHome == "" {
+			configHome = filepath.Join(home, ".config")
+		}
+		configRoot = filepath.Join(configHome, "hobot-code")
+	}
+	if !filepath.IsAbs(configRoot) {
+		return config{}, fmt.Errorf("HOBOT_CODE_CONFIG_DIR must be an absolute path")
+	}
+	agentDir := os.Getenv("HOBOT_CODING_AGENT_DIR")
+	if agentDir == "" {
+		agentDir = filepath.Join(configRoot, "agent")
+	}
+	if !filepath.IsAbs(agentDir) {
+		return config{}, fmt.Errorf("HOBOT_CODING_AGENT_DIR must be an absolute path")
 	}
 	stateRoot := os.Getenv("HOBOT_CODE_STATE_DIR")
 	if stateRoot == "" {
@@ -109,6 +129,8 @@ func loadConfig() (config, error) {
 	}
 
 	return config{
+		ConfigRoot:        filepath.Clean(configRoot),
+		AgentDir:          filepath.Clean(agentDir),
 		StateRoot:         filepath.Clean(stateRoot),
 		AgentdRoot:        filepath.Clean(agentdRoot),
 		TasksRoot:         filepath.Join(agentdRoot, "tasks"),
