@@ -162,3 +162,20 @@ export function recentEventsAfter(lastSequence, windowSize = 400) {
   const window = Number.isFinite(windowSize) ? Math.max(1, Math.floor(windowSize)) : 400;
   return Math.max(0, sequence - window);
 }
+
+export function eventRetentionPresentation(retention) {
+  if (!retention?.historyTruncated) return null;
+  const retainedFrom = Number.isSafeInteger(retention.retainedFrom) && retention.retainedFrom > 0 ? retention.retainedFrom : 0;
+  const retainedThrough = Number.isSafeInteger(retention.retainedThrough) && retention.retainedThrough > 0 ? retention.retainedThrough : 0;
+  const latest = Number.isSafeInteger(retention.latestSequence) && retention.latestSequence > 0 ? retention.latestSequence : 0;
+  if (latest > retainedThrough) {
+    return {
+      title: 'Some recent activity could not be recovered.',
+      detail: 'New activity will continue in a fresh durable history window.',
+    };
+  }
+  return {
+    title: retention.cursorExpired ? 'Earlier activity is outside this retained window.' : 'This long task is retaining its newest activity.',
+    detail: retainedFrom ? `Conversation history currently begins at event ${retainedFrom}.` : '',
+  };
+}

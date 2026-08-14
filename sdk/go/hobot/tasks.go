@@ -22,10 +22,25 @@ func (client *Client) GetCapabilities(ctx context.Context) (Capabilities, error)
 	return capabilities, err
 }
 
-func (client *Client) Extensions(ctx context.Context) (ExtensionCatalog, error) {
+func (client *Client) Extensions(ctx context.Context, taskIDs ...string) (ExtensionCatalog, error) {
 	var catalog ExtensionCatalog
-	err := client.Call(ctx, "extensions.list", struct{}{}, &catalog)
-	return catalog, err
+	if len(taskIDs) > 1 {
+		return catalog, fmt.Errorf("extensions accepts at most one task ID")
+	}
+	taskID := ""
+	if len(taskIDs) == 1 {
+		taskID = taskIDs[0]
+		if taskID != "" && !sdkTaskIDPattern.MatchString(taskID) {
+			return catalog, fmt.Errorf("task ID is invalid")
+		}
+	}
+	if err := client.Call(ctx, "extensions.list", map[string]string{"taskId": taskID}, &catalog); err != nil {
+		return catalog, err
+	}
+	if err := validateExtensionCatalogResult(catalog); err != nil {
+		return ExtensionCatalog{}, fmt.Errorf("invalid extension catalog: %w", err)
+	}
+	return catalog, nil
 }
 
 func (client *Client) SystemSnapshot(ctx context.Context) (SystemSnapshot, error) {
@@ -36,8 +51,41 @@ func (client *Client) SystemSnapshot(ctx context.Context) (SystemSnapshot, error
 
 func (client *Client) SupportBundle(ctx context.Context, includeContent bool) (SupportBundle, error) {
 	var bundle SupportBundle
-	err := client.Call(ctx, "support.bundle", map[string]bool{"includeContent": includeContent}, &bundle)
-	return bundle, err
+	if err := client.Call(ctx, "support.bundle", map[string]bool{"includeContent": includeContent}, &bundle); err != nil {
+		return bundle, err
+	}
+	if err := validateSupportBundle(bundle); err != nil {
+		return SupportBundle{}, fmt.Errorf("board returned invalid support bundle: %w", err)
+	}
+	return bundle, nil
+}
+
+func (client *Client) Diagnostics(ctx context.Context) (DiagnosticReport, error) {
+	var report DiagnosticReport
+	if err := client.Call(ctx, "diagnostics.inspect", struct{}{}, &report); err != nil {
+		return report, err
+	}
+	if err := validateDiagnosticReport(report); err != nil {
+		return DiagnosticReport{}, fmt.Errorf("board returned invalid diagnostics: %w", err)
+	}
+	return report, nil
+}
+
+func (client *Client) RepairDiagnostics(ctx context.Context, action string, confirmed bool) (DiagnosticRepairResult, error) {
+	var result DiagnosticRepairResult
+	if !confirmed {
+		return result, fmt.Errorf("diagnostic repair requires explicit confirmation")
+	}
+	if action != "private-runtime-permissions" {
+		return result, fmt.Errorf("unsupported board-side diagnostic repair action")
+	}
+	if err := client.Call(ctx, "diagnostics.repair", map[string]any{"action": action, "confirm": true}, &result); err != nil {
+		return result, err
+	}
+	if err := validateDiagnosticRepairResult(result); err != nil {
+		return DiagnosticRepairResult{}, fmt.Errorf("board returned invalid diagnostic repair result: %w", err)
+	}
+	return result, nil
 }
 
 func (client *Client) InspectDeployment(ctx context.Context, cwd string) (DeploymentInspection, error) {
@@ -107,6 +155,12 @@ func (client *Client) SetSandboxMode(ctx context.Context, taskID, mode string) (
 	return task, err
 }
 
+func (client *Client) SetNetworkMode(ctx context.Context, taskID, mode string) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.network", map[string]any{"taskId": taskID, "mode": mode}, &task)
+	return task, err
+}
+
 func (client *Client) RenameTask(ctx context.Context, taskID, name string) (Task, error) {
 	var task Task
 	err := client.Call(ctx, "task.rename", map[string]any{"taskId": taskID, "name": name}, &task)
@@ -129,6 +183,64 @@ func (client *Client) ModelConformance(ctx context.Context, model string, force 
 	var result ModelConformance
 	err := client.Call(ctx, "models.conformance", map[string]any{"model": model, "force": force}, &result)
 	return result, err
+}
+
+func (client *Client) ModelRuntimeProbe(ctx context.Context, model string) (ModelRuntimeProbe, error) {
+	var result ModelRuntimeProbe
+	err := client.Call(ctx, "models.runtime-probe", map[string]any{"model": model}, &result)
+	return result, err
+}
+
+func (client *Client) ModelRDKProbe(ctx context.Context, model string, profiles ...string) (ModelRDKProbe, error) {
+	var result ModelRDKProbe
+	provider, modelID, validModel := qualificationModelIdentity(model)
+	if !validModel {
+		return result, fmt.Errorf("model must use provider/model format")
+	}
+	if len(profiles) > 1 {
+		return result, fmt.Errorf("RDK probe accepts at most one profile")
+	}
+	profile := "read-only-rdk-diagnostic-v1"
+	if len(profiles) == 1 {
+		profile = profiles[0]
+	}
+	if _, ok := qualificationRDKProfiles[profile]; !ok || !qualificationRDKProfileRunnable[profile] {
+		return result, fmt.Errorf("RDK profile is not runnable: %s", profile)
+	}
+	if err := client.Call(ctx, "models.rdk-probe", map[string]any{"model": model, "profile": profile}, &result); err != nil {
+		return result, err
+	}
+	if result.Provider != provider || result.Model != modelID || result.Profile != profile || !validQualificationRDK(result, provider, modelID) {
+		return ModelRDKProbe{}, fmt.Errorf("board returned invalid RDK profile evidence")
+	}
+	return result, nil
+}
+
+func (client *Client) ModelRDKMatrix(ctx context.Context, model string) (ModelRDKMatrix, error) {
+	provider, modelID, validModel := qualificationModelIdentity(model)
+	if !validModel {
+		return ModelRDKMatrix{}, fmt.Errorf("model must use provider/model format")
+	}
+	var raw json.RawMessage
+	if err := client.Call(ctx, "models.rdk-matrix", map[string]any{"model": model}, &raw); err != nil {
+		return ModelRDKMatrix{}, err
+	}
+	result, err := decodeModelRDKMatrix(raw)
+	if err != nil {
+		return ModelRDKMatrix{}, err
+	}
+	if result.Provider != provider || result.Model != modelID {
+		return ModelRDKMatrix{}, fmt.Errorf("board returned RDK profile evidence for a different model")
+	}
+	return result, nil
+}
+
+func (client *Client) ModelQualification(ctx context.Context, model string) (ModelQualification, error) {
+	var raw json.RawMessage
+	if err := client.Call(ctx, "models.qualification", map[string]any{"model": model}, &raw); err != nil {
+		return ModelQualification{}, err
+	}
+	return decodeModelQualification(raw)
 }
 
 func (client *Client) BrowseWorkspace(ctx context.Context, path string) (WorkspaceListing, error) {
@@ -253,13 +365,24 @@ func (client *Client) Events(ctx context.Context, taskID string, after uint64, l
 }
 
 func (client *Client) Subscribe(ctx context.Context, taskID string, after uint64, handler func(Event) error) error {
-	return client.SubscribeWithReady(ctx, taskID, after, nil, handler)
+	return client.SubscribeWithState(ctx, taskID, after, nil, handler)
 }
 
 // SubscribeWithReady reports a completed subscription handshake before event
 // delivery begins. Callers can distinguish a healthy quiet stream from one
 // that is still retrying after a transport interruption.
 func (client *Client) SubscribeWithReady(ctx context.Context, taskID string, after uint64, ready func(), handler func(Event) error) error {
+	var callback func(SubscriptionState)
+	if ready != nil {
+		callback = func(SubscriptionState) { ready() }
+	}
+	return client.SubscribeWithState(ctx, taskID, after, callback, handler)
+}
+
+// SubscribeWithState also reports the durable event range negotiated by the
+// board. Clients can disclose an expired cursor instead of silently presenting
+// a retained tail as complete history.
+func (client *Client) SubscribeWithState(ctx context.Context, taskID string, after uint64, ready func(SubscriptionState), handler func(Event) error) error {
 	if handler == nil {
 		return fmt.Errorf("event handler is required")
 	}
@@ -300,13 +423,14 @@ func (client *Client) SubscribeWithReady(ctx context.Context, taskID string, aft
 		}
 		return transientSubscriptionError(fmt.Errorf("SSH subscription closed before acknowledgement"))
 	}
-	if err := decodeResponse(scanner.Bytes(), id, nil); err != nil {
+	var state SubscriptionState
+	if err := decodeResponse(scanner.Bytes(), id, &state); err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		return err
 	}
 	if ready != nil {
-		ready()
+		ready(state)
 	}
 	for scanner.Scan() {
 		var event Event

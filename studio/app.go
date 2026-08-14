@@ -22,17 +22,21 @@ import (
 )
 
 const (
-	requestTimeout           = 20 * time.Second
-	workspaceTaskTimeout     = 3 * time.Minute
-	modelHealthTimeout       = 18 * time.Second
-	modelVerifyTimeout       = 55 * time.Second
-	deploymentStatusTimeout  = 10 * time.Minute
-	deleteTimeout            = 45 * time.Second
-	boardUpdateCheckTimeout  = 15 * time.Second
-	boardUpdateTimeout       = 20 * time.Minute
-	boardUpdateReconnectWait = 30 * time.Second
-	maximumBoards            = 64
-	maximumBoardFileSize     = 1024 * 1024
+	requestTimeout            = 20 * time.Second
+	workspaceTaskTimeout      = 3 * time.Minute
+	modelHealthTimeout        = 18 * time.Second
+	modelVerifyTimeout        = 55 * time.Second
+	modelRuntimeTimeout       = 16 * time.Minute
+	modelRDKTimeout           = 6 * time.Minute
+	modelQualificationTimeout = 20 * time.Second
+	deploymentStatusTimeout   = 10 * time.Minute
+	deleteTimeout             = 45 * time.Second
+	providerMutationTimeout   = 45 * time.Second
+	boardUpdateCheckTimeout   = 15 * time.Second
+	boardUpdateTimeout        = 20 * time.Minute
+	boardUpdateReconnectWait  = 30 * time.Second
+	maximumBoards             = 64
+	maximumBoardFileSize      = 1024 * 1024
 )
 
 var (
@@ -66,11 +70,22 @@ type TaskEventEnvelope struct {
 }
 
 type TaskWatchStatus struct {
-	BoardID string `json:"boardId"`
-	TaskID  string `json:"taskId"`
-	State   string `json:"state"`
-	Attempt int    `json:"attempt,omitempty"`
-	Message string `json:"message,omitempty"`
+	BoardID          string `json:"boardId"`
+	TaskID           string `json:"taskId"`
+	State            string `json:"state"`
+	Attempt          int    `json:"attempt,omitempty"`
+	Message          string `json:"message,omitempty"`
+	RetainedFrom     uint64 `json:"retainedFrom,omitempty"`
+	RetainedThrough  uint64 `json:"retainedThrough,omitempty"`
+	LatestSequence   uint64 `json:"latestSequence,omitempty"`
+	HistoryTruncated bool   `json:"historyTruncated,omitempty"`
+	CursorExpired    bool   `json:"cursorExpired,omitempty"`
+}
+
+type ProviderMutationResult struct {
+	Saved   bool   `json:"saved"`
+	Applied bool   `json:"applied"`
+	Message string `json:"message"`
 }
 
 type BoardUpdateResult struct {
@@ -94,14 +109,13 @@ type App struct {
 	boards      map[string]Board
 	clients     map[string]*hobot.Client
 	watchers    map[string]taskWatcher
-	updating    map[string]struct{}
 	nextWatcher uint64
 }
 
 func NewApp() *App {
 	return &App{
 		boards: make(map[string]Board), clients: make(map[string]*hobot.Client),
-		watchers: make(map[string]taskWatcher), updating: make(map[string]struct{}),
+		watchers: make(map[string]taskWatcher),
 	}
 }
 
@@ -164,15 +178,10 @@ func (app *App) CheckBoardUpdate(boardID string) (hobot.BoardUpdateCheck, error)
 	return client.CheckBoardUpdate(ctx)
 }
 
-// InstallBoardUpdate closes Studio's bridge before invoking the board's
-// transactional updater over a separate fixed SSH command. Task/process checks,
-// archive verification and rollback remain enforced on the board.
+// InstallBoardUpdate closes every Studio bridge before invoking the board's
+// transactional updater over a separate fixed SSH command. The board remains
+// responsible for task/process checks, archive verification and rollback.
 func (app *App) InstallBoardUpdate(boardID string) (BoardUpdateResult, error) {
-	if err := app.beginBoardUpdate(boardID); err != nil {
-		return BoardUpdateResult{}, err
-	}
-	defer app.finishBoardUpdate(boardID)
-
 	client, err := app.client(boardID)
 	if err != nil {
 		return BoardUpdateResult{}, err
@@ -214,7 +223,6 @@ func (app *App) InstallBoardUpdate(boardID string) (BoardUpdateResult, error) {
 	}
 	updater, err := hobot.NewClient(boardConfig(board))
 	if err != nil {
-		_, _ = app.reconnectBoardAfterUpdate(boardID, 5*time.Second)
 		return BoardUpdateResult{}, err
 	}
 	updateContext, updateCancel := context.WithTimeout(base, boardUpdateTimeout)
@@ -243,22 +251,6 @@ func (app *App) InstallBoardUpdate(boardID string) (BoardUpdateResult, error) {
 	}, nil
 }
 
-func (app *App) beginBoardUpdate(boardID string) error {
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	if _, exists := app.updating[boardID]; exists {
-		return fmt.Errorf("a board update is already running")
-	}
-	app.updating[boardID] = struct{}{}
-	return nil
-}
-
-func (app *App) finishBoardUpdate(boardID string) {
-	app.mu.Lock()
-	delete(app.updating, boardID)
-	app.mu.Unlock()
-}
-
 func (app *App) reconnectBoardAfterUpdate(boardID string, maximumWait time.Duration) (BoardConnection, error) {
 	deadline := time.Now().Add(maximumWait)
 	var lastErr error
@@ -271,19 +263,7 @@ func (app *App) reconnectBoardAfterUpdate(boardID string, maximumWait time.Durat
 		if time.Now().After(deadline) {
 			return BoardConnection{}, lastErr
 		}
-		base := app.ctx
-		if base == nil {
-			base = context.Background()
-		}
-		timer := time.NewTimer(500 * time.Millisecond)
-		select {
-		case <-base.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return BoardConnection{}, base.Err()
-		case <-timer.C:
-		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -511,6 +491,64 @@ func (app *App) GetSystemSnapshot(boardID string) (hobot.SystemSnapshot, error) 
 	return client.SystemSnapshot(ctx)
 }
 
+func (app *App) GetDiagnostics(boardID string) (hobot.DiagnosticReport, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.DiagnosticReport{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.Diagnostics(ctx)
+}
+
+func (app *App) RepairDiagnostics(boardID, action string, confirmed bool) (hobot.DiagnosticReport, error) {
+	if !confirmed {
+		return hobot.DiagnosticReport{}, fmt.Errorf("diagnostic repair requires explicit confirmation")
+	}
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.DiagnosticReport{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, providerMutationTimeout)
+	defer cancel()
+	report, err := client.Diagnostics(ctx)
+	if err != nil {
+		return hobot.DiagnosticReport{}, err
+	}
+	var selected *hobot.DiagnosticRepairAction
+	for index := range report.Repairs {
+		if report.Repairs[index].ID == action {
+			selected = &report.Repairs[index]
+			break
+		}
+	}
+	if selected == nil || selected.Status != "available" || !selected.RequiresConfirmation {
+		return hobot.DiagnosticReport{}, fmt.Errorf("diagnostic repair is not currently available")
+	}
+	switch selected.Executor {
+	case "agentd":
+		result, err := client.RepairDiagnostics(ctx, action, true)
+		if err != nil {
+			return hobot.DiagnosticReport{}, err
+		}
+		return result.Report, nil
+	case "client":
+		if action != "restart-daemon" {
+			return hobot.DiagnosticReport{}, fmt.Errorf("unsupported client diagnostic repair")
+		}
+		if err := client.RestartDaemon(ctx); err != nil {
+			return hobot.DiagnosticReport{}, err
+		}
+		app.disconnect(boardID)
+		if _, err := app.ConnectBoard(boardID); err != nil {
+			return hobot.DiagnosticReport{}, fmt.Errorf("agentd restarted but Studio could not reconnect: %w", err)
+		}
+		return app.GetDiagnostics(boardID)
+	default:
+		return hobot.DiagnosticReport{}, fmt.Errorf("unsupported diagnostic repair executor")
+	}
+}
+
 func (app *App) SaveSupportBundle(boardID string) (hobot.SupportBundle, error) {
 	client, err := app.client(boardID)
 	if err != nil {
@@ -697,6 +735,16 @@ func (app *App) SetTaskSandboxMode(boardID, taskID, mode string) (hobot.Task, er
 	return client.SetSandboxMode(ctx, taskID, mode)
 }
 
+func (app *App) SetTaskNetworkMode(boardID, taskID, mode string) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SetNetworkMode(ctx, taskID, mode)
+}
+
 func (app *App) RenameTask(boardID, taskID, name string) (hobot.Task, error) {
 	client, err := app.client(boardID)
 	if err != nil {
@@ -741,14 +789,113 @@ func (app *App) ListModels(boardID string) ([]hobot.ModelOption, error) {
 	return studioModels(models), nil
 }
 
-func (app *App) ListExtensions(boardID string) (hobot.ExtensionCatalog, error) {
+func (app *App) ListManagedProviders(boardID string) ([]hobot.ManagedProvider, error) {
+	board, err := app.connectedBoard(boardID)
+	if err != nil {
+		return nil, err
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.ManagedProviders(ctx)
+}
+
+func (app *App) AddManagedProvider(boardID string, request hobot.AddManagedProviderRequest, apiKey string) (ProviderMutationResult, error) {
+	board, err := app.connectedBoard(boardID)
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, providerMutationTimeout)
+	defer cancel()
+	if err := client.AddManagedProvider(ctx, request, apiKey); err != nil {
+		return ProviderMutationResult{}, err
+	}
+	return app.applyProviderConfiguration(ctx, boardID, client, "Provider saved")
+}
+
+func (app *App) RemoveManagedProvider(boardID, providerID string, keepCredential bool) (ProviderMutationResult, error) {
+	board, err := app.connectedBoard(boardID)
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, providerMutationTimeout)
+	defer cancel()
+	if err := client.RemoveManagedProvider(ctx, providerID, keepCredential); err != nil {
+		return ProviderMutationResult{}, err
+	}
+	return app.applyProviderConfiguration(ctx, boardID, client, "Provider removed")
+}
+
+func (app *App) RotateManagedProviderCredential(boardID, providerID, apiKey string, allowShared bool) (ProviderMutationResult, error) {
+	board, err := app.connectedBoard(boardID)
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, providerMutationTimeout)
+	defer cancel()
+	if err := client.RotateManagedProviderCredential(ctx, providerID, apiKey, allowShared); err != nil {
+		return ProviderMutationResult{}, err
+	}
+	return app.applyProviderConfiguration(ctx, boardID, client, "Provider key rotated")
+}
+
+func (app *App) ApplyProviderConfiguration(boardID string) (ProviderMutationResult, error) {
+	board, err := app.connectedBoard(boardID)
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return ProviderMutationResult{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, providerMutationTimeout)
+	defer cancel()
+	return app.applyProviderConfiguration(ctx, boardID, client, "Provider configuration")
+}
+
+func (app *App) applyProviderConfiguration(ctx context.Context, boardID string, client *hobot.Client, prefix string) (ProviderMutationResult, error) {
+	if err := client.RestartDaemon(ctx); err != nil {
+		message := prefix + "; the board could not apply it yet. Retry Apply after checking the connection."
+		if strings.Contains(err.Error(), "tasks_active") || strings.Contains(err.Error(), "background task(s) are active") {
+			message = prefix + "; active Agent work prevented a safe restart. Apply after tasks are idle."
+		}
+		return ProviderMutationResult{Saved: true, Applied: false, Message: message}, nil
+	}
+	app.disconnect(boardID)
+	if _, err := app.ConnectBoard(boardID); err != nil {
+		return ProviderMutationResult{Saved: true, Applied: true, Message: prefix + " and applied. Reconnect the board to refresh Studio."}, nil
+	}
+	return ProviderMutationResult{Saved: true, Applied: true, Message: prefix + " and applied."}, nil
+}
+
+func (app *App) ListExtensions(boardID, taskID string) (hobot.ExtensionCatalog, error) {
 	client, err := app.client(boardID)
 	if err != nil {
 		return hobot.ExtensionCatalog{}, err
 	}
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
-	return client.Extensions(ctx)
+	return client.Extensions(ctx, taskID)
 }
 
 func (app *App) CheckModelHealth(boardID, model string, force bool) (hobot.ModelHealth, error) {
@@ -785,6 +932,74 @@ func (app *App) VerifyModel(boardID, model string, force bool) (hobot.ModelConfo
 	return client.ModelConformance(ctx, model, force)
 }
 
+func (app *App) ProbeModelRuntime(boardID, model string) (hobot.ModelRuntimeProbe, error) {
+	app.mu.Lock()
+	board, ok := app.boards[boardID]
+	app.mu.Unlock()
+	if !ok {
+		return hobot.ModelRuntimeProbe{}, fmt.Errorf("board does not exist")
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return hobot.ModelRuntimeProbe{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, modelRuntimeTimeout)
+	defer cancel()
+	return client.ModelRuntimeProbe(ctx, model)
+}
+
+func (app *App) ProbeModelRDK(boardID, model, profile string) (hobot.ModelRDKProbe, error) {
+	app.mu.Lock()
+	board, ok := app.boards[boardID]
+	app.mu.Unlock()
+	if !ok {
+		return hobot.ModelRDKProbe{}, fmt.Errorf("board does not exist")
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return hobot.ModelRDKProbe{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, modelRDKTimeout)
+	defer cancel()
+	return client.ModelRDKProbe(ctx, model, profile)
+}
+
+func (app *App) GetModelRDKMatrix(boardID, model string) (hobot.ModelRDKMatrix, error) {
+	app.mu.Lock()
+	board, ok := app.boards[boardID]
+	app.mu.Unlock()
+	if !ok {
+		return hobot.ModelRDKMatrix{}, fmt.Errorf("board does not exist")
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return hobot.ModelRDKMatrix{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, modelQualificationTimeout)
+	defer cancel()
+	return client.ModelRDKMatrix(ctx, model)
+}
+
+func (app *App) GetModelQualification(boardID, model string) (hobot.ModelQualification, error) {
+	app.mu.Lock()
+	board, ok := app.boards[boardID]
+	app.mu.Unlock()
+	if !ok {
+		return hobot.ModelQualification{}, fmt.Errorf("board does not exist")
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return hobot.ModelQualification{}, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(app.ctx, modelQualificationTimeout)
+	defer cancel()
+	return client.ModelQualification(ctx, model)
+}
+
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
 	allowed := map[string]int{
 		"kimi-k3":                    0,
@@ -800,9 +1015,24 @@ func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
 				continue
 			}
 			filtered = append(filtered, model)
+		} else if model.Managed {
+			filtered = append(filtered, model)
 		}
 	}
-	sort.Slice(filtered, func(i, j int) bool { return allowed[filtered[i].ID] < allowed[filtered[j].ID] })
+	sort.SliceStable(filtered, func(i, j int) bool {
+		left, leftBuiltIn := allowed[filtered[i].ID]
+		right, rightBuiltIn := allowed[filtered[j].ID]
+		if leftBuiltIn != rightBuiltIn {
+			return leftBuiltIn
+		}
+		if leftBuiltIn {
+			return left < right
+		}
+		if filtered[i].Provider != filtered[j].Provider {
+			return filtered[i].Provider < filtered[j].Provider
+		}
+		return filtered[i].ID < filtered[j].ID
+	})
 	return filtered
 }
 
@@ -1017,10 +1247,13 @@ func (app *App) WatchTask(boardID, taskID string, after uint64) error {
 		attempt := 0
 		for {
 			connectedAt := time.Time{}
-			err := client.SubscribeWithReady(ctx, taskID, nextAfter, func() {
+			err := client.SubscribeWithState(ctx, taskID, nextAfter, func(state hobot.SubscriptionState) {
 				connectedAt = time.Now()
 				runtime.EventsEmit(app.ctx, "task:watch-status", TaskWatchStatus{
 					BoardID: boardID, TaskID: taskID, State: "connected",
+					RetainedFrom: state.RetainedFrom, RetainedThrough: state.RetainedThrough,
+					LatestSequence: state.LatestSequence, HistoryTruncated: state.HistoryTruncated,
+					CursorExpired: state.CursorExpired,
 				})
 			}, func(event hobot.Event) error {
 				attempt = 0
@@ -1100,6 +1333,16 @@ func (app *App) client(boardID string) (*hobot.Client, error) {
 		return nil, fmt.Errorf("board is not connected")
 	}
 	return client, nil
+}
+
+func (app *App) connectedBoard(boardID string) (Board, error) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	board, exists := app.boards[boardID]
+	if !exists || app.clients[boardID] == nil {
+		return Board{}, fmt.Errorf("board is not connected")
+	}
+	return board, nil
 }
 
 func (app *App) board(boardID string) Board {

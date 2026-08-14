@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,7 @@ func testConfig(t *testing.T) config {
 		t.Fatal(err)
 	}
 	cfg := config{
+		ConfigRoot: filepath.Join(root, "config"), AgentDir: filepath.Join(root, "config", "agent"),
 		StateRoot: root, AgentdRoot: filepath.Join(root, "agentd"),
 		TasksRoot: filepath.Join(root, "agentd", "tasks"), WorktreesRoot: filepath.Join(root, "agentd", "worktrees"),
 		AttachCursorRoot: filepath.Join(root, "agentd", "attach-cursors"),
@@ -178,20 +180,20 @@ func TestImagePromptPersistsOnlyAttachmentMetadata(t *testing.T) {
 	}
 	current, _ := manager.get(metadata.ID)
 	waitForStatus(t, current, statusIdle)
-	events, _, cancel, err := current.subscribe(0, false)
+	page, _, cancel, err := current.subscribe(0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancel()
 	found := false
-	for _, event := range events {
+	for _, event := range page.Events {
+		if bytes.Contains(event.Event, secretPayload) || bytes.Contains(event.Event, []byte(base64.StdEncoding.EncodeToString(secretPayload))) {
+			t.Fatal("image payload leaked into the event log")
+		}
 		if event.Normalized == nil || event.Normalized.Type != "user.message" {
 			continue
 		}
 		found = true
-		if bytes.Contains(event.Event, secretPayload) || bytes.Contains(event.Event, []byte(base64.StdEncoding.EncodeToString(secretPayload))) {
-			t.Fatal("image payload leaked into the event log")
-		}
 		attachments, ok := event.Normalized.Data["attachments"].([]any)
 		if !ok || len(attachments) != 1 {
 			t.Fatalf("attachment metadata missing: %+v", event.Normalized.Data)
@@ -259,20 +261,20 @@ func TestTaskLifecyclePersistsEventsAndBoundsConcurrency(t *testing.T) {
 	}
 	waitForStatus(t, current, statusStopped)
 	waitForStatus(t, queued, statusIdle)
-	events, _, cancel, err := current.subscribe(0, false)
+	page, _, cancel, err := current.subscribe(0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancel()
 	settled := false
-	for _, event := range events {
+	for _, event := range page.Events {
 		if string(event.Event) == `{"type":"agent_settled"}` {
 			settled = true
 			break
 		}
 	}
-	if len(events) < 4 || !settled {
-		t.Fatalf("unexpected persisted events: %+v", events)
+	if len(page.Events) < 4 || !settled {
+		t.Fatalf("unexpected persisted events: %+v", page.Events)
 	}
 	if err := queued.stop(); err != nil {
 		t.Fatal(err)
@@ -771,6 +773,86 @@ func TestEventLogRejectsBrokenSequence(t *testing.T) {
 	}
 }
 
+func TestEventLogRollsNewestEventsAndExpiresOldCursor(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const maximumBytes = int64(1800)
+	id := "00112233445566778899aabb"
+	current := &task{
+		manager: &taskManager{cfg: config{MaxEventSize: maximumBytes}}, dir: dir, events: path,
+		metadata:    taskMetadata{ID: id, Name: "retained", Cwd: dir, Status: statusIdle},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	for index := 0; index < 18; index++ {
+		current.recordEvent(mustJSON(map[string]any{
+			"type": "hobot_user_prompt", "message": fmt.Sprintf("turn-%02d-%s", index, strings.Repeat("x", 220)),
+		}))
+	}
+	state := current.snapshot()
+	if !state.LogTruncated || state.LastSequence != 18 {
+		t.Fatalf("event retention state was not recorded: %+v", state)
+	}
+	page, err := current.eventPage(0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) == 0 || !page.HistoryTruncated || !page.CursorExpired || page.RetainedFrom <= 1 {
+		t.Fatalf("retained event page did not disclose its history boundary: %+v", page)
+	}
+	if page.RetainedThrough != state.LastSequence || page.LatestSequence != state.LastSequence || page.Events[len(page.Events)-1].Sequence != state.LastSequence {
+		t.Fatalf("newest event was not durably retained: %+v", page)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() > maximumBytes || info.Mode().Perm() != 0o600 {
+		t.Fatalf("retained event file is unsafe: info=%+v err=%v", info, err)
+	}
+	if _, _, _, err := recoverEventLog(path, id, maximumBytes, true); err != nil {
+		t.Fatalf("retained event log did not survive recovery: %v", err)
+	}
+	current.recordEvent(mustJSON(map[string]any{"type": "agent_start"}))
+	continued, err := current.eventPage(page.RetainedThrough, 10)
+	if err != nil || len(continued.Events) != 1 || continued.Events[0].Sequence != 19 || continued.CursorExpired {
+		t.Fatalf("new activity did not continue after retention: page=%+v err=%v", continued, err)
+	}
+	if matches, err := filepath.Glob(path + ".retained-*"); err != nil || len(matches) != 0 {
+		t.Fatalf("retention left temporary files: %v err=%v", matches, err)
+	}
+}
+
+func TestLegacyStoppedEventLogStartsFreshDurableTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	id := "00112233445566778899aabb"
+	var content bytes.Buffer
+	for sequence := uint64(1); sequence <= 3; sequence++ {
+		event := taskEvent{Protocol: protocolVersion, Kind: "event", TaskID: id, Sequence: sequence, Time: time.Now().UTC(), Event: json.RawMessage(`{"type":"message_update"}`)}
+		encoded, _ := json.Marshal(event)
+		content.Write(encoded)
+		content.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, content.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{
+		manager: &taskManager{cfg: config{MaxEventSize: 4096}}, dir: dir, events: path, eventBytes: int64(content.Len()), eventLastSequence: 3,
+		metadata:    taskMetadata{ID: id, Name: "legacy", Cwd: dir, Status: statusIdle, LastSequence: 9, LogTruncated: true},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	current.recordEvent(json.RawMessage(`{"type":"agent_start"}`))
+	page, err := current.eventPage(0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].Sequence != 10 || page.RetainedFrom != 10 || page.RetainedThrough != 10 || page.LatestSequence != 10 || !page.CursorExpired {
+		t.Fatalf("legacy durability gap was not replaced by a fresh tail: %+v", page)
+	}
+	if _, last, _, err := recoverEventLog(path, id, 4096, true); err != nil || last != 10 {
+		t.Fatalf("fresh legacy tail did not recover: last=%d err=%v", last, err)
+	}
+}
+
 func TestRecoveryUsesDurableEventSequenceAndRepairsRestartRollback(t *testing.T) {
 	cfg := testConfig(t)
 	id := "00112233445566778899aabb"
@@ -840,7 +922,7 @@ func TestRecoveryRejectsEventGap(t *testing.T) {
 	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := recoverEventLog(path, event.TaskID, 1024*1024); err == nil {
+	if _, _, _, err := recoverEventLog(path, event.TaskID, 1024*1024, false); err == nil {
 		t.Fatal("event gap was repaired instead of rejected")
 	}
 }
@@ -902,6 +984,18 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if !containsString(ping.Capabilities.Capabilities, "models.conformance.v1") {
 		t.Fatalf("model conformance capability is missing: %+v", ping.Capabilities.Capabilities)
 	}
+	if !containsString(ping.Capabilities.Capabilities, "models.runtime-probe.v1") {
+		t.Fatalf("model runtime probe capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
+	if !containsString(ping.Capabilities.Capabilities, "models.rdk-probe.v1") {
+		t.Fatalf("model RDK probe capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
+	if !containsString(ping.Capabilities.Capabilities, "models.rdk-matrix.v1") {
+		t.Fatalf("model RDK matrix capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
+	if !containsString(ping.Capabilities.Capabilities, "models.qualification.v1") {
+		t.Fatalf("persistent model qualification capability is missing: %+v", ping.Capabilities.Capabilities)
+	}
 	server.health.probe = func(context.Context, modelOption) modelHealthResult {
 		return modelHealthResult{Status: "available", Category: "ok", Message: modelHealthMessage("ok"), Transport: "sse", FirstByteMS: 12, LatencyMS: 18, Attempts: 1}
 	}
@@ -924,8 +1018,24 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 		t.Fatalf("model conformance failed: %v", err)
 	}
 	var verification modelConformanceResult
-	if err := json.Unmarshal(verificationResult, &verification); err != nil || verification.Status != "verified" || verification.Model != "kimi-k3" {
+	if err := json.Unmarshal(verificationResult, &verification); err != nil || verification.Status != "verified" || verification.Scope != "gateway-protocol" || verification.RuntimeStatus != "not-tested" || verification.RDKTaskStatus != "not-tested" || verification.Model != "kimi-k3" {
 		t.Fatalf("unexpected model conformance: result=%+v err=%v", verification, err)
+	}
+	qualificationResult, err := client.call("models.qualification", modelQualificationParams{Model: "drobotics/kimi-k3"})
+	if err != nil {
+		t.Fatalf("model qualification read failed: %v", err)
+	}
+	var qualification modelQualificationResult
+	if err := json.Unmarshal(qualificationResult, &qualification); err != nil || qualification.State != "current" || qualification.Level != "protocol" || qualification.Health == nil || qualification.Conformance == nil {
+		t.Fatalf("unexpected persistent model qualification: result=%+v err=%v", qualification, err)
+	}
+	matrixResult, err := client.call("models.rdk-matrix", modelRDKMatrixParams{Model: "drobotics/kimi-k3"})
+	if err != nil {
+		t.Fatalf("model RDK matrix read failed: %v", err)
+	}
+	var matrix modelRDKMatrixResult
+	if err := json.Unmarshal(matrixResult, &matrix); err != nil || len(matrix.Profiles) != len(rdkProbeProfiles) || matrix.Profiles[len(matrix.Profiles)-1].Availability != "planned" {
+		t.Fatalf("unexpected model RDK matrix: result=%+v err=%v", matrix, err)
 	}
 	snapshotResult, err := client.call("system.snapshot", struct{}{})
 	if err != nil {
@@ -953,6 +1063,9 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	if err := json.Unmarshal(result, &metadata); err != nil {
 		t.Fatal(err)
 	}
+	if metadata.NetworkMode != networkModeShared || metadata.Sandbox.NetworkRestricted {
+		t.Fatalf("new tasks must default to shared networking: %+v", metadata)
+	}
 	current, _ := server.manager.get(metadata.ID)
 	waitForStatus(t, current, statusIdle)
 	permissionResult, err := client.call("task.permissions", setTaskPermissionParams{TaskID: metadata.ID, Mode: "developer"})
@@ -973,6 +1086,16 @@ func TestServerProtocolAndPrivateSocket(t *testing.T) {
 	}
 	if _, err := client.call("task.stop", taskIDParams{TaskID: metadata.ID}); err != nil {
 		t.Fatal(err)
+	}
+	networkResult, err := client.call("task.network", setTaskNetworkParams{TaskID: metadata.ID, Mode: networkModeShared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(networkResult, &metadata); err != nil || metadata.NetworkMode != networkModeShared {
+		t.Fatalf("network mode was not returned: metadata=%+v err=%v", metadata, err)
+	}
+	if _, err := client.call("task.network", setTaskNetworkParams{TaskID: metadata.ID, Mode: networkModeOffline}); err == nil || !strings.Contains(err.Error(), "requires an active bubblewrap sandbox") {
+		t.Fatalf("offline networking was accepted without an OS sandbox: %v", err)
 	}
 }
 
@@ -1315,7 +1438,7 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForStatus(t, current, statusIdle)
-	events, _, cancel, err := current.subscribe(0, false)
+	page, _, cancel, err := current.subscribe(0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1324,7 +1447,7 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 	foundUserMessage := false
 	foundApproval := false
 	foundResolved := false
-	for _, event := range events {
+	for _, event := range page.Events {
 		if event.Normalized == nil || event.Normalized.Schema != eventSchemaVersion {
 			continue
 		}
@@ -1344,9 +1467,9 @@ func TestNormalizedEventsApprovalsAndSessionResume(t *testing.T) {
 	if !foundUserMessage || !foundApproval || !foundResolved {
 		t.Fatalf("normalized conversation lifecycle missing: user=%v requested=%v resolved=%v", foundUserMessage, foundApproval, foundResolved)
 	}
-	page, err := readEventPage(current.events, metadata.ID, 0, 2)
-	if err != nil || len(page.Events) != 2 || !page.HasMore || page.NextAfter != page.Events[1].Sequence {
-		t.Fatalf("unexpected event page: page=%+v err=%v", page, err)
+	eventPage, err := readEventPage(current.events, metadata.ID, 0, 2)
+	if err != nil || len(eventPage.Events) != 2 || !eventPage.HasMore || eventPage.NextAfter != eventPage.Events[1].Sequence {
+		t.Fatalf("unexpected event page: page=%+v err=%v", eventPage, err)
 	}
 	_ = foundThinkingOrText
 	if err := current.stop(); err != nil {

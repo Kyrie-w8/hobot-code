@@ -19,4 +19,8 @@ export type ConversationItem = UserConversationItem | AssistantConversationItem;
 export function buildConversation(events: TaskEvent[]): ConversationItem[];
 export function elapsedLabel(start: string, end: string): string;
 export function recentEventsAfter(lastSequence: number, windowSize?: number): number;
+export function eventRetentionPresentation(retention: {
+  retainedFrom?: number; retainedThrough?: number; latestSequence?: number;
+  historyTruncated?: boolean; cursorExpired?: boolean;
+} | null): {title: string; detail: string} | null;
 export function failurePresentation(value: string): {category: string; title: string; message: string};

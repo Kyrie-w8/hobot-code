@@ -19,9 +19,13 @@ var protocolCapabilities = []string{
 	"events.normalized.v3",
 	"events.normalized.v4",
 	"events.items.v1",
+	"events.retention.v1",
 	"extensions.catalog.v1",
 	"system.snapshot",
+	"diagnostics.inspect.v1",
+	"diagnostics.repair.v1",
 	"support.bundle.v1",
+	"support.bundle.v2",
 	"deployments.v1",
 	"approvals.list",
 	"tasks.lifecycle",
@@ -37,12 +41,19 @@ var protocolCapabilities = []string{
 	"tasks.models",
 	"tasks.permissions",
 	"tasks.sandbox.v1",
+	"tasks.network.v1",
 	"tasks.images",
 	"models.capabilities.v1",
 	"models.health.v1",
 	"models.conformance.v1",
+	"models.runtime-probe.v1",
+	"models.rdk-probe.v1",
+	"models.rdk-matrix.v1",
+	"models.qualification.v1",
+	"providers.manage.v1",
 	"configuration.fingerprint.v1",
 	"build.identity.v1",
+	"pi.compatibility.v1",
 	"workspaces.browse",
 	"workspaces.changes.v1",
 	"workspaces.isolation.v1",
@@ -116,6 +127,7 @@ type sandboxCapability struct {
 	Available        bool     `json:"available"`
 	Backend          string   `json:"backend,omitempty"`
 	Profiles         []string `json:"profiles,omitempty"`
+	NetworkModes     []string `json:"networkModes,omitempty"`
 	FilesystemWrites bool     `json:"filesystemWritesRestricted"`
 	Devices          bool     `json:"devicesRestricted"`
 	Capabilities     bool     `json:"capabilitiesDropped"`

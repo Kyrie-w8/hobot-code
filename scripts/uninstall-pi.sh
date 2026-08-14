@@ -36,7 +36,61 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo env \
     "HOBOT_CODE_UNINSTALL_USER=$uninstall_user" \
     "HOBOT_CODE_UNINSTALL_HOME=$uninstall_home" \
+    "HOBOT_CODE_TESTING=${HOBOT_CODE_TESTING:-0}" \
+    "HOBOT_CODE_TEST_INSTALL_ROOT=${HOBOT_CODE_TEST_INSTALL_ROOT:-}" \
+    "HOBOT_CODE_TEST_PROC_ROOT=${HOBOT_CODE_TEST_PROC_ROOT:-}" \
     "$0" "$@"
+fi
+
+testing=${HOBOT_CODE_TESTING:-0}
+install_root=
+if [ -n "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" ]; then
+  if [ "$testing" != 1 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT requires HOBOT_CODE_TESTING=1\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_INSTALL_ROOT" in
+    /|''|*[!A-Za-z0-9_./-]*)
+      printf 'HOBOT_CODE_TEST_INSTALL_ROOT is unsafe: %s\n' "$HOBOT_CODE_TEST_INSTALL_ROOT" >&2
+      exit 1
+      ;;
+    /*) ;;
+    *) printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be absolute\n' >&2; exit 1 ;;
+  esac
+  if [ -L "$HOBOT_CODE_TEST_INSTALL_ROOT" ] || [ ! -d "$HOBOT_CODE_TEST_INSTALL_ROOT" ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
+  install_root_logical=$(CDPATH= cd -L -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -L)
+  install_root=$(CDPATH= cd -P -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -P)
+  if [ "$install_root_logical" != "$install_root" ] || [ "$(stat -c %u "$install_root")" -ne 0 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not traverse links and must be owned by root\n' >&2
+    exit 1
+  fi
+  install_root_mode=$(stat -c %a "$install_root")
+  if [ $((0$install_root_mode & 022)) -ne 0 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not be writable by group or other users\n' >&2
+    exit 1
+  fi
+fi
+
+local_lib_root="$install_root/usr/local/lib"
+runtime_root="$local_lib_root/hobot-code"
+backup_root="$local_lib_root/hobot-code-backups"
+launcher_path="$install_root/usr/local/bin/hobot"
+rollback_path="$install_root/usr/local/sbin/hobot-rollback"
+lock_dir="$local_lib_root/hobot-code.install.lock"
+proc_root=/proc
+if [ -n "${HOBOT_CODE_TEST_PROC_ROOT:-}" ]; then
+  if [ "$testing" != 1 ] || [ -z "$install_root" ]; then
+    printf 'HOBOT_CODE_TEST_PROC_ROOT requires an isolated test install root\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_PROC_ROOT" in /*) proc_root=$HOBOT_CODE_TEST_PROC_ROOT ;; *) printf 'HOBOT_CODE_TEST_PROC_ROOT must be absolute\n' >&2; exit 1 ;; esac
+  if [ -L "$proc_root" ] || [ ! -d "$proc_root" ]; then
+    printf 'HOBOT_CODE_TEST_PROC_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
 fi
 
 uninstall_user=${HOBOT_CODE_UNINSTALL_USER:-${SUDO_USER:-root}}
@@ -60,13 +114,19 @@ if [ "$uninstall_home_logical" != "$uninstall_home_physical" ]; then
   exit 1
 fi
 uninstall_home=$uninstall_home_physical
+if [ -n "$install_root" ]; then
+  case "$uninstall_home" in
+    "$install_root"/*) ;;
+    *) printf 'Isolated uninstall home must stay under HOBOT_CODE_TEST_INSTALL_ROOT\n' >&2; exit 1 ;;
+  esac
+fi
 uninstall_uid=$(id -u "$uninstall_user")
 if [ "$(stat -c %u "$uninstall_home")" != "$uninstall_uid" ]; then
   printf 'Home directory is not owned by %s: %s\n' "$uninstall_user" "$uninstall_home" >&2
   exit 1
 fi
 
-for managed_path in /usr/local/lib/hobot-code /usr/local/bin/hobot /usr/local/sbin/hobot-rollback /usr/local/lib/hobot-code-backups; do
+for managed_path in "$runtime_root" "$launcher_path" "$rollback_path" "$backup_root"; do
   if [ -L "$managed_path" ]; then
     printf 'Refusing to uninstall through symbolic link: %s\n' "$managed_path" >&2
     exit 1
@@ -86,12 +146,12 @@ fi
 
 active_hobot_pids() {
   detected_pids=
-  for process_path in /proc/[0-9]*; do
+  for process_path in "$proc_root"/[0-9]*; do
     [ -r "$process_path/exe" ] || continue
     executable=$(readlink "$process_path/exe" 2>/dev/null || true)
     executable=${executable% (deleted)}
     case "$executable" in
-      /usr/local/lib/hobot-code/hobot|/usr/local/lib/hobot-code/agentd)
+      "$runtime_root/hobot"|"$runtime_root/agentd")
         process_id=${process_path##*/}
         detected_pids="${detected_pids}${detected_pids:+ }$process_id"
         ;;
@@ -121,7 +181,6 @@ if [ "$assume_yes" -ne 1 ]; then
   case "$answer" in y|Y|yes|YES) ;; *) printf 'Uninstall cancelled.\n'; exit 1 ;; esac
 fi
 
-lock_dir=/usr/local/lib/hobot-code.install.lock
 acquire_lock() {
   if mkdir "$lock_dir" 2>/dev/null; then return; fi
   lock_pid=$(sed -n '1p' "$lock_dir/pid" 2>/dev/null || true)
@@ -149,11 +208,11 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 printf '%s\n' "$$" > "$lock_dir/pid"
 
-rm -rf /usr/local/lib/hobot-code
-rm -f /usr/local/bin/hobot /usr/local/sbin/hobot-rollback
+rm -rf "$runtime_root"
+rm -f "$launcher_path" "$rollback_path"
 
 if [ "$purge" -eq 1 ]; then
-  rm -rf "$config_root" "$state_root" /usr/local/lib/hobot-code-backups
+  rm -rf "$config_root" "$state_root" "$backup_root"
   printf 'Uninstalled Hobot Code and purged data for %s.\n' "$uninstall_user"
 else
   printf 'Uninstalled Hobot Code. User data and backups were preserved.\n'

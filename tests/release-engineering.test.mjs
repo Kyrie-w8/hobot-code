@@ -107,6 +107,7 @@ test("release metadata is derived from the repository version and pinned inputs"
   await copyFile(join(repository, "CHANGELOG.md"), join(stage, "CHANGELOG.md"));
   await copyFile(join(repository, "CHANGELOG.md"), join(stage, "runtime/CHANGELOG.md"));
   await copyFile(join(repository, "pi-runtime/pi.lock"), join(stage, "PI_RUNTIME"));
+  await copyFile(join(repository, "pi-runtime/compatibility.json"), join(stage, "PI_COMPATIBILITY.json"));
   await copyFile(join(repository, "pi-runtime/tools.lock"), join(stage, "TOOLS_RUNTIME"));
   await validatePackageMetadata(stage);
   await writeFile(join(stage, "runtime/CHANGELOG.md"), "# Changelog\n\n## 99.0.0\n\n- Upstream entry.\n");
@@ -166,12 +167,15 @@ test("release layout covers installer inputs and linked documentation", async (t
   const installerInputs = [
     "agentd",
     "runtime/hobot",
+    "PI_COMPATIBILITY.json",
     "extensions/rdk/index.ts",
+    "runtime-probes/model-runtime.ts",
     "skills/rdk-board/SKILL.md",
     "knowledge/manifest.json",
     "prompts/rdk-expert.md",
     "config/settings.json",
     "config/models.json",
+    "config/providers.json",
     "config/permissions.json",
     "config/memory.json",
     "config/goals.json",
@@ -193,9 +197,11 @@ test("release layout covers installer inputs and linked documentation", async (t
     "rollback.sh",
     "release.sh",
     "uninstall.sh",
+    "verify-install-lifecycle.py",
+    "verify-model-egress-runtime.py",
   ];
   for (const name of installerInputs) assert.ok(REQUIRED_PACKAGE_PATHS.includes(name), `missing package contract: ${name}`);
-  for (const name of ["extensions", "skills", "knowledge", "prompts", "licenses"]) {
+  for (const name of ["extensions", "runtime-probes", "skills", "knowledge", "prompts", "licenses"]) {
     assert.ok(REQUIRED_PACKAGE_DIRECTORIES.includes(name), `missing package directory contract: ${name}`);
   }
   for (const name of [
@@ -206,6 +212,8 @@ test("release layout covers installer inputs and linked documentation", async (t
     "compatibility.md",
     "configuration.md",
     "model-capabilities.md",
+    "model-adaptation-levels.md",
+    "pi-compatibility.md",
     "releasing.md",
     "user-directory-layout.md",
   ]) {
@@ -230,6 +238,12 @@ test("release layout covers installer inputs and linked documentation", async (t
   })}\n`);
   for (const name of REQUIRED_EXECUTABLE_PATHS) await chmod(join(root, name), 0o755);
   await validateRequiredPackageLayout(root);
+  await chmod(join(root, "config/hobot.env.example"), 0o600);
+  await assert.rejects(
+    () => validateRequiredPackageLayout(root),
+    /config\/hobot\.env\.example must have mode 0644/,
+  );
+  await chmod(join(root, "config/hobot.env.example"), 0o644);
   await rm(join(root, "knowledge/common/fixture.md"));
   await assert.rejects(() => validatePackagedKnowledgeLayout(root), /missing knowledge\/common\/fixture\.md/);
   await writeFile(join(root, "knowledge/common/fixture.md"), "# Fixture\n\nPackaged knowledge fixture.\n");
@@ -287,6 +301,7 @@ test("extension validation catches missing relative imports and TypeScript synta
   const root = await mkdtemp(join(tmpdir(), "hobot-imports-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "extensions"));
+  await mkdir(join(root, "runtime-probes"));
   const source = join(root, "extensions/index.ts");
   await writeFile(source, 'import "./missing.mjs";\n');
   await assert.rejects(() => validateRelativeImports(root), /missing\.mjs/);
@@ -308,7 +323,7 @@ async function launcherFixture(t) {
   await mkdir(join(runtime, "bin"), { recursive: true });
   await mkdir(defaults, { recursive: true });
   await mkdir(home, { recursive: true });
-  for (const name of ["settings.json", "models.json", "permissions.json", "memory.json", "goals.json", "hooks.json", "notifications.json", "lsp.json"]) {
+  for (const name of ["settings.json", "models.json", "providers.json", "permissions.json", "memory.json", "goals.json", "hooks.json", "notifications.json", "lsp.json"]) {
     await copyFile(new URL(`../packaging/pi/${name}`, import.meta.url), join(defaults, name));
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
@@ -732,13 +747,13 @@ test("launcher treats environment values literally and restores the caller umask
   await mkdir(configRoot, { recursive: true });
   await writeFile(join(configRoot, "hobot.env"), `LITERAL_VALUE=$(printf unsafe > ${marker})\n`);
   await chmod(join(configRoot, "hobot.env"), 0o600);
-  const { stdout } = await execFileAsync("/bin/sh", ["-c", 'umask 0022; exec "$1"', "sh", fixture.launcher], {
+  const { stdout } = await execFileAsync("/bin/sh", ["-c", 'umask 0022; exec "$1" tui', "sh", fixture.launcher], {
     env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
   });
   assert.match(stdout, /^umask=0022$/m);
   assert.match(stdout, /literal=\$\(printf unsafe/);
   const agentRoot = join(configRoot, "agent");
-  const contents = await Promise.all(["hobot.env", "agent/settings.json", "agent/models.json"].map((name) => readFile(join(configRoot, name))));
+  const contents = await Promise.all(["hobot.env", "agent/settings.json", "agent/models.json", "agent/providers.json"].map((name) => readFile(join(configRoot, name))));
   assert.match(stdout, new RegExp(`^fingerprint=${configurationFingerprint(contents)}$`, "m"));
   const originalFingerprint = stdout.match(/^fingerprint=([0-9a-f]{64})$/m)?.[1];
   await writeFile(join(agentRoot, "models.json"), '{"providers":{"changed":{}}}\n');
@@ -771,7 +786,7 @@ test("launcher setup writes a private model configuration without exposing the t
 
   const launched = await execFileAsync(fixture.launcher, [], { env: environment });
   const configRoot = join(fixture.home, ".config/hobot-code");
-  const fingerprint = configurationFingerprint(await Promise.all(["hobot.env", "agent/settings.json", "agent/models.json"].map((name) => readFile(join(configRoot, name)))));
+  const fingerprint = configurationFingerprint(await Promise.all(["hobot.env", "agent/settings.json", "agent/models.json", "agent/providers.json"].map((name) => readFile(join(configRoot, name)))));
   assert.match(launched.stdout, new RegExp(`^fingerprint=${fingerprint}$`, "m"));
 });
 
@@ -880,6 +895,11 @@ test("launcher rejects process-injection variables and managed symlinks", async 
     () => execFileAsync(fixture.launcher, [], { env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" } }),
     /must set launcher path variable HOBOT_CODE_CONFIG_DIR before invoking hobot/,
   );
+  await writeFile(join(configRoot, "hobot.env"), "HOBOT_CODE_GATEWAY_TOKEN_FILE=/tmp/spoofed-token\n");
+  await assert.rejects(
+    () => execFileAsync(fixture.launcher, [], { env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" } }),
+    /cannot set reserved credential transport variable HOBOT_CODE_GATEWAY_TOKEN_FILE/,
+  );
   await writeFile(join(configRoot, "hobot.env"), "ANTHROPIC_AUTH_TOKEN=token\n");
   const outside = join(fixture.root, "outside-agent");
   await mkdir(outside);
@@ -928,7 +948,7 @@ test("launcher rejects non-regular managed configuration files", async (t) => {
 });
 
 test("release scripts preserve transaction and provenance invariants", async () => {
-  const [makefile, packager, installer, rollback, launcher, releaseInstaller, uninstaller, workflow, studioPackager] = await Promise.all([
+  const [makefile, packager, installer, rollback, launcher, releaseInstaller, uninstaller, workflow, promotionWorkflow, studioPackager] = await Promise.all([
     readFile(join(repository, "Makefile"), "utf8"),
     readFile(join(repository, "scripts/package-pi.sh"), "utf8"),
     readFile(join(repository, "scripts/install-pi.sh"), "utf8"),
@@ -937,6 +957,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
     readFile(join(repository, "scripts/hobot-release.sh"), "utf8"),
     readFile(join(repository, "scripts/uninstall-pi.sh"), "utf8"),
     readFile(join(repository, ".github/workflows/release.yml"), "utf8"),
+    readFile(join(repository, ".github/workflows/promote-release.yml"), "utf8"),
     readFile(join(repository, "scripts/package-studio-macos.sh"), "utf8"),
   ]);
   assert.doesNotMatch(makefile, /package-pi\.sh\s+\$\(VERSION\)/);
@@ -957,12 +978,17 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(packager, /SECURITY\.md/);
   assert.match(packager, /LICENSE/);
   assert.match(packager, /stage_dir\/runtime\/CHANGELOG\.md/);
+  assert.match(packager, /install -m 0644 .*hobot\.env\.example.*stage_dir\/config\/hobot\.env\.example/);
+  assert.match(packager, /verify-model-egress-runtime\.py/);
+  assert.match(makefile, /model-egress-board-check:/);
   assert.match(installer, /MANIFEST\.sha256/);
   assert.match(installer, /must not contain symbolic links/);
   assert.match(installer, /Install home must not traverse symbolic links/);
   assert.match(installer, /install_home_owner/);
   assert.match(installer, /refuse_tree_symlinks "\$config_root"/);
-  assert.match(installer, /refuse_tree_symlinks \/usr\/local\/lib\/hobot-code/);
+  assert.match(installer, /refuse_tree_symlinks "\$runtime_root"/);
+  assert.match(installer, /HOBOT_CODE_TEST_INSTALL_ROOT requires HOBOT_CODE_TESTING=1/);
+  assert.match(installer, /Isolated install home must stay under HOBOT_CODE_TEST_INSTALL_ROOT/);
   assert.match(installer, /Expected a managed command file or an absent path/);
   assert.match(installer, /Installed command validation failed/);
   assert.match(installer, /TOOLS_RUNTIME/);
@@ -980,7 +1006,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /Installed component version mismatch/);
   assert.match(installer, /Configure your model first: hobot setup/);
   assert.match(installer, /ANTHROPIC_AUTH_TOKEN=/);
-  assert.match(installer, /for process_path in \/proc\/\[0-9\]\*;/);
+  assert.match(installer, /for process_path in "\$proc_root"\/\[0-9\]\*;/);
   assert.equal((installer.match(/active_pids=\$\(active_hobot_pids\)/g) ?? []).length, 2);
   assert.doesNotMatch(installer, /pgrep -f/);
   assert.doesNotMatch(installer, /chown\s+-R|find\s+"\$config_root"/);
@@ -993,17 +1019,19 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(rollback, /Backup must not contain symbolic links/);
   assert.match(rollback, /Expected a managed command file or an absent path/);
   assert.match(rollback, /Restored launcher validation failed/);
-  assert.match(rollback, /rm -f \/usr\/local\/sbin\/hobot-rollback/);
+  assert.match(rollback, /rm -f "\$rollback_path"/);
   assert.match(rollback, /chmod 0755 "\$staged_runtime"/);
   assert.match(rollback, /runtime_device=.*stat -c %d/);
-  assert.match(rollback, /check_available_space "\$runtime_required_kib" \/usr\/local\/lib 'rollback'/);
+  assert.match(rollback, /check_available_space "\$runtime_required_kib" "\$local_lib_root" 'rollback'/);
   assert.match(rollback, /readlink "\$process_path\/exe"/);
+  assert.match(rollback, /HOBOT_CODE_TEST_INSTALL_ROOT requires HOBOT_CODE_TESTING=1/);
   assert.doesNotMatch(rollback, /pgrep -f/);
   assert.doesNotMatch(launcher, /^\s*\.\s+.*hobot\.env/m);
   assert.match(launcher, /umask "\$original_umask"/);
-  assert.match(launcher, /release\.sh update/);
+  assert.match(launcher, /hobot_runtime_root\/release\.sh" update/);
   assert.match(launcher, /hobot-code\.install\.lock/);
   assert.match(launcher, /uninstall\.sh/);
+  assert.match(launcher, /cannot set reserved launcher test variable/);
   assert.match(launcher, /HOBOT_CODE_CONFIG_FINGERPRINT/);
   assert.match(launcher, /hobot setup --token-stdin/);
   assert.match(launcher, /stty -echo <\/dev\/tty/);
@@ -1020,6 +1048,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(uninstaller, /--purge/);
   assert.match(uninstaller, /Stop active Hobot Code processes/);
   assert.match(uninstaller, /readlink "\$process_path\/exe"/);
+  assert.match(uninstaller, /Isolated uninstall home must stay under HOBOT_CODE_TEST_INSTALL_ROOT/);
   assert.doesNotMatch(uninstaller, /pgrep -f/);
   assert.match(workflow, /attest-build-provenance@v2/);
   assert.match(workflow, /test "\$\{GITHUB_REF_NAME\}" = "v\$\{version\}"/);
@@ -1032,7 +1061,26 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(workflow, /diff -u expected-assets\.txt actual-assets\.txt/);
   assert.match(workflow, /verify_checksum "hobot-code-\$version-linux-arm64\.tar\.gz\.sha256"/);
   assert.match(workflow, /verify_checksum "hobot-code-\$version-macos-arm64\.dmg\.sha256"/);
-  assert.match(workflow, /gh release edit "v\$version" --draft=false/);
+  assert.match(workflow, /test "\$\(gh release view "v\$version" --json isDraft/);
+  assert.doesNotMatch(workflow, /gh release edit .*--draft=false/);
+  assert.match(promotionWorkflow, /workflow_dispatch:/);
+  assert.match(promotionWorkflow, /environment: production/);
+  assert.match(promotionWorkflow, /test "\$GITHUB_REF" = "refs\/heads\/\$DEFAULT_BRANCH"/);
+  assert.match(promotionWorkflow, /git cat-file -t "\$tag"/);
+  assert.match(promotionWorkflow, /isStrictSemVer/);
+  assert.doesNotMatch(promotionWorkflow, /git checkout .*refs\/tags/);
+  assert.match(promotionWorkflow, /gh attestation verify "hobot-code-\$RELEASE_VERSION-linux-arm64\.tar\.gz"/);
+  assert.match(promotionWorkflow, /gh attestation verify "hobot-code-\$RELEASE_VERSION-macos-arm64\.dmg"/);
+  assert.match(promotionWorkflow, /validate-release-candidate\.mjs/);
+  assert.match(promotionWorkflow, /validate-tar-archive\.sh/);
+  assert.match(promotionWorkflow, /hobot-code-\$RELEASE_VERSION-board-acceptance\.json/);
+  assert.match(promotionWorkflow, /hobot-code-\$RELEASE_VERSION-release-evidence\.json/);
+  assert.match(promotionWorkflow, /attest-build-provenance@v2/);
+  assert.match(promotionWorkflow, /cmp "\$generated" "\$evidence"/);
+  assert.match(promotionWorkflow, /test "\$\(gh release view "v\$RELEASE_VERSION" --json isDraft/);
+  assert.match(promotionWorkflow, /gh release edit "v\$RELEASE_VERSION" --draft=false/);
+  assert.equal((`${workflow}\n${promotionWorkflow}`.match(/gh release edit .*--draft=false/g) ?? []).length, 1);
+  assert.match(makefile, /release-candidate-check:/);
   assert.match(studioPackager, /codesign --force --deep --options runtime --timestamp/);
   assert.match(studioPackager, /notarytool submit/);
   assert.match(studioPackager, /stapler validate/);

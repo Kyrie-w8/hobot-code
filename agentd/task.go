@@ -68,6 +68,7 @@ type taskMetadata struct {
 	Model          string             `json:"model,omitempty"`
 	PermissionMode string             `json:"permissionMode,omitempty"`
 	SandboxMode    string             `json:"sandboxMode"`
+	NetworkMode    string             `json:"networkMode"`
 	Sandbox        taskSandboxStatus  `json:"sandbox"`
 	ParentTaskID   string             `json:"parentTaskId,omitempty"`
 	ForkSequence   uint64             `json:"forkSequence,omitempty"`
@@ -106,6 +107,7 @@ type task struct {
 	stopping              bool
 	interrupted           bool
 	eventBytes            int64
+	eventLastSequence     uint64
 	subscribers           map[uint64]chan taskEvent
 	nextSubID             uint64
 	pendingSessionFile    string
@@ -118,13 +120,15 @@ type task struct {
 }
 
 type taskManager struct {
-	cfg          config
-	mu           sync.RWMutex
-	startMu      sync.Mutex
-	tasks        map[string]*task
-	modelsOnce   sync.Once
-	models       map[string]modelOption
-	modelListErr error
+	cfg                 config
+	mu                  sync.RWMutex
+	startMu             sync.Mutex
+	runtimeProbeMu      sync.Mutex
+	runtimeProbeRunning bool
+	tasks               map[string]*task
+	modelsOnce          sync.Once
+	models              map[string]modelOption
+	modelListErr        error
 }
 
 type queuedLaunch struct {
@@ -148,6 +152,7 @@ type startTaskParams struct {
 	PermissionMode string            `json:"permissionMode,omitempty"`
 	WorkspaceMode  string            `json:"workspaceMode,omitempty"`
 	SandboxMode    string            `json:"sandboxMode,omitempty"`
+	NetworkMode    string            `json:"networkMode,omitempty"`
 	Deployment     *deploymentRecord `json:"-"`
 }
 
@@ -161,6 +166,7 @@ type forkTaskParams struct {
 	Model          string         `json:"model,omitempty"`
 	PermissionMode string         `json:"permissionMode,omitempty"`
 	SandboxMode    string         `json:"sandboxMode,omitempty"`
+	NetworkMode    string         `json:"networkMode,omitempty"`
 }
 
 type resumeTaskParams struct {
@@ -218,6 +224,11 @@ type setTaskSandboxParams struct {
 	Mode   string `json:"mode"`
 }
 
+type setTaskNetworkParams struct {
+	TaskID string `json:"taskId"`
+	Mode   string `json:"mode"`
+}
+
 type taskIDParams struct {
 	TaskID string `json:"taskId"`
 }
@@ -235,9 +246,24 @@ type eventPageParams struct {
 }
 
 type eventPage struct {
-	Events    []taskEvent `json:"events"`
-	NextAfter uint64      `json:"nextAfter,omitempty"`
-	HasMore   bool        `json:"hasMore"`
+	Events           []taskEvent `json:"events"`
+	NextAfter        uint64      `json:"nextAfter,omitempty"`
+	HasMore          bool        `json:"hasMore"`
+	RetainedFrom     uint64      `json:"retainedFrom,omitempty"`
+	RetainedThrough  uint64      `json:"retainedThrough,omitempty"`
+	LatestSequence   uint64      `json:"latestSequence,omitempty"`
+	HistoryTruncated bool        `json:"historyTruncated"`
+	CursorExpired    bool        `json:"cursorExpired"`
+}
+
+type subscriptionResult struct {
+	Replayed         int    `json:"replayed"`
+	Following        bool   `json:"following"`
+	RetainedFrom     uint64 `json:"retainedFrom,omitempty"`
+	RetainedThrough  uint64 `json:"retainedThrough,omitempty"`
+	LatestSequence   uint64 `json:"latestSequence,omitempty"`
+	HistoryTruncated bool   `json:"historyTruncated"`
+	CursorExpired    bool   `json:"cursorExpired"`
 }
 
 func newTaskManager(cfg config) (*taskManager, error) {
@@ -261,8 +287,10 @@ func newTaskManager(cfg config) (*taskManager, error) {
 		}
 		metadata.PermissionMode, _ = normalizePermissionMode(metadata.PermissionMode)
 		previousSandboxMode, previousSandbox := metadata.SandboxMode, metadata.Sandbox
+		previousNetworkMode := metadata.NetworkMode
 		metadata.SandboxMode, metadata.Sandbox = normalizePersistedSandbox(metadata.SandboxMode, metadata.Sandbox, metadata.PermissionMode, metadata.Deployment != nil)
-		legacyMetadataCleared := previousSandboxMode != metadata.SandboxMode || previousSandbox != metadata.Sandbox
+		metadata.NetworkMode, metadata.Sandbox = normalizePersistedNetwork(metadata.NetworkMode, metadata.SandboxMode, metadata.Sandbox)
+		legacyMetadataCleared := previousSandboxMode != metadata.SandboxMode || previousSandbox != metadata.Sandbox || previousNetworkMode != metadata.NetworkMode
 		failureDetail := ""
 		workspaceMode, workspaceErr := normalizeWorkspaceMode(metadata.WorkspaceMode)
 		workspaceInvalid := workspaceErr != nil || (workspaceMode == workspaceModeWorktree && metadata.WorktreePath == "")
@@ -371,17 +399,19 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			subscribers:   make(map[uint64]chan taskEvent),
 			pendingLaunch: pendingLaunch,
 		}
-		eventBytes, lastSequence, repaired, err := recoverEventLog(current.events, metadata.ID, cfg.MaxEventSize)
+		eventBytes, lastSequence, repaired, err := recoverEventLog(current.events, metadata.ID, cfg.MaxEventSize, metadata.LogTruncated)
 		if err != nil {
 			continue
 		}
 		current.eventBytes = eventBytes
+		current.eventLastSequence = lastSequence
 		if info, statErr := os.Stat(current.stderr); statErr == nil && info.Mode().IsRegular() {
 			current.stderrBytes = info.Size()
 		}
 		current.appendFailureDetail(failureDetail)
-		sequenceRecovered := !metadata.LogTruncated && metadata.LastSequence != lastSequence
-		if !metadata.LogTruncated {
+		sequenceRecovered := false
+		if !metadata.LogTruncated || metadata.LastSequence < lastSequence {
+			sequenceRecovered = metadata.LastSequence != lastSequence
 			metadata.LastSequence = lastSequence
 			current.metadata.LastSequence = lastSequence
 		}
@@ -438,6 +468,36 @@ func (manager *taskManager) validateImagesForModel(selection string, images []im
 	}
 	if !model.Capabilities.ImageInput {
 		return fmt.Errorf("model %s does not declare image input support", selection)
+	}
+	return nil
+}
+
+func (manager *taskManager) validateNetworkModel(mode, selection string) error {
+	if mode != networkModeModelOnly {
+		return nil
+	}
+	if !modelEgressAvailable(manager.cfg) {
+		return fmt.Errorf("model-only network mode requires a configured supported model provider and model egress broker")
+	}
+	models, err := manager.availableModels()
+	if err != nil {
+		return fmt.Errorf("cannot verify model-only compatibility: %w", err)
+	}
+	selection = normalizeModelSelection(selection)
+	if selection == "" {
+		for key, model := range models {
+			if model.Default {
+				selection = key
+				break
+			}
+		}
+	}
+	model, ok := models[selection]
+	if !ok {
+		return fmt.Errorf("model-only network mode cannot resolve model %q", selection)
+	}
+	if !modelEgressProviderAvailable(manager.cfg, model.Provider, model.ID) {
+		return fmt.Errorf("model-only network mode does not support %s; use shared networking or configure a supported managed provider", selection)
 	}
 	return nil
 }
@@ -745,12 +805,12 @@ func (current *task) queuedPromptRecorded(queued queuedLaunch) bool {
 	if queued.Prompt == "" {
 		return true
 	}
-	events, err := readEvents(current.events, current.metadata.ID, 0)
+	page, err := readEventPageWithRetention(current.events, current.metadata.ID, 0, 0, current.metadata.LogTruncated)
 	if err != nil {
 		return false
 	}
 	marker := false
-	for _, event := range events {
+	for _, event := range page.Events {
 		var raw struct {
 			Type      string    `json:"type"`
 			Message   string    `json:"message"`
@@ -913,6 +973,13 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if err != nil {
 		return taskMetadata{}, err
 	}
+	networkMode, sandbox, err := manager.resolveTaskNetworkMode(params.NetworkMode, sandboxMode, sandbox)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	if err := manager.validateNetworkModel(networkMode, params.Model); err != nil {
+		return taskMetadata{}, err
+	}
 	manager.mu.RLock()
 	retained := len(manager.tasks)
 	manager.mu.RUnlock()
@@ -979,7 +1046,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 			WorkspaceID: id, WorktreePath: worktreePath, WorktreeBase: worktreeBase, Status: statusStopped,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
 			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode,
-			SandboxMode: sandboxMode, Sandbox: sandbox, Deployment: params.Deployment,
+			SandboxMode: sandboxMode, NetworkMode: networkMode, Sandbox: sandbox, Deployment: params.Deployment,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
@@ -1059,6 +1126,11 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	}
 	if params.SandboxMode != "" {
 		if _, err := normalizeSandboxMode(params.SandboxMode); err != nil {
+			return taskMetadata{}, err
+		}
+	}
+	if params.NetworkMode != "" {
+		if _, err := normalizeNetworkMode(params.NetworkMode); err != nil {
 			return taskMetadata{}, err
 		}
 	}
@@ -1170,6 +1242,17 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if err != nil {
 		return taskMetadata{}, err
 	}
+	networkMode := params.NetworkMode
+	if networkMode == "" {
+		networkMode = parent.NetworkMode
+	}
+	networkMode, sandbox, err = manager.resolveTaskNetworkMode(networkMode, sandboxMode, sandbox)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	if err := manager.validateNetworkModel(networkMode, model); err != nil {
+		return taskMetadata{}, err
+	}
 	projectCwd := parent.ProjectCwd
 	if projectCwd == "" {
 		projectCwd = parent.Cwd
@@ -1201,17 +1284,18 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			WorktreePath: parent.WorktreePath, WorktreeBase: parent.WorktreeBase, Status: status,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
 			SessionFile: forkFile, Model: model, PermissionMode: permissionMode,
-			SandboxMode: sandboxMode, Sandbox: sandbox, ParentTaskID: parentTaskID,
+			SandboxMode: sandboxMode, NetworkMode: networkMode, Sandbox: sandbox, ParentTaskID: parentTaskID,
 			ForkSequence: params.Sequence, BranchKind: params.Kind, AwaitingPrompt: awaitingPrompt,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
 	}
 	if params.Kind == "edit" {
-		eventBytes, lastSequence, err := writeEditEventHistory(current.events, source.events, parent.ID, id, params.Sequence, manager.cfg.MaxEventSize)
+		eventBytes, lastSequence, err := writeEditEventHistory(current.events, source.events, parent.ID, id, source.metadata.LogTruncated, params.Sequence, manager.cfg.MaxEventSize)
 		if err != nil {
 			return taskMetadata{}, fmt.Errorf("copy edited conversation history: %w", err)
 		}
 		current.eventBytes = eventBytes
+		current.eventLastSequence = lastSequence
 		current.metadata.LastSequence = lastSequence
 	} else if err := os.WriteFile(current.events, nil, 0o600); err != nil {
 		return taskMetadata{}, err
@@ -1251,14 +1335,14 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 // Editing creates a new session branch internally, but it remains the same
 // conversation to the user. Preserve the visible timeline before the selected
 // prompt and let launch() append the replacement prompt as the next event.
-func writeEditEventHistory(targetPath, sourcePath, sourceTaskID, targetTaskID string, before uint64, maximumBytes int64) (int64, uint64, error) {
-	events, err := readEvents(sourcePath, sourceTaskID, 0)
+func writeEditEventHistory(targetPath, sourcePath, sourceTaskID, targetTaskID string, sourceTruncated bool, before uint64, maximumBytes int64) (int64, uint64, error) {
+	events, err := readEventPageWithRetention(sourcePath, sourceTaskID, 0, 0, sourceTruncated)
 	if err != nil {
 		return 0, 0, err
 	}
 	prefix := make([]taskEvent, 0)
 	foundBoundary := false
-	for _, event := range events {
+	for _, event := range events.Events {
 		if event.Sequence == before {
 			foundBoundary = true
 			break
@@ -1316,12 +1400,12 @@ func writeEditEventHistory(targetPath, sourcePath, sourceTaskID, targetTaskID st
 }
 
 func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLine) (string, error) {
-	events, err := readEvents(current.events, current.metadata.ID, 0)
+	page, err := readEventPageWithRetention(current.events, current.metadata.ID, 0, 0, current.metadata.LogTruncated)
 	if err != nil {
 		return "", err
 	}
 	prompt := ""
-	for _, event := range events {
+	for _, event := range page.Events {
 		if event.Sequence == sequence {
 			if event.Normalized == nil || event.Normalized.Type != "user.message" {
 				break
@@ -1355,6 +1439,9 @@ func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLin
 
 func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string, promptRecorded bool) error {
 	metadata := current.snapshot()
+	if err := current.manager.validateNetworkModel(metadata.NetworkMode, metadata.Model); err != nil {
+		return err
+	}
 	if err := current.manager.validateManagedTaskWorkspace(metadata); err != nil {
 		return fmt.Errorf("validate task workspace: %w", err)
 	}
@@ -1364,6 +1451,10 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	taskSessionDir, sessionFile, err := current.prepareTaskSession(sessionFile)
 	if err != nil {
 		return fmt.Errorf("prepare private task session: %w", err)
+	}
+	taskAgentDir, err := current.prepareTaskAgentConfiguration(metadata.NetworkMode)
+	if err != nil {
+		return fmt.Errorf("prepare private task agent configuration: %w", err)
 	}
 	args := []string{"--mode", "rpc", "--session-dir", taskSessionDir, "--name", metadata.Name}
 	if sessionFile != "" {
@@ -1383,13 +1474,24 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	}
 	command := exec.Command(commandName, commandArgs...)
 	command.Dir = metadata.Cwd
-	command.Env = append(os.Environ(),
+	command.Env = append(environmentWithoutGatewayCredential(os.Environ()),
 		"HOBOT_CODE_BACKGROUND_TASK=1",
 		"HOBOT_CODE_BACKGROUND_TASK_ID="+metadata.ID,
+		"HOBOT_CODING_AGENT_DIR="+taskAgentDir,
 		"HOBOT_CODE_PERMISSION_POLICY="+current.permissionPolicyPath(),
 		"HOBOT_CODE_SANDBOX_MODE="+metadata.SandboxMode,
 		"HOBOT_CODE_SANDBOX_BACKEND="+sandbox.Backend,
+		"HOBOT_CODE_NETWORK_MODE="+metadata.NetworkMode,
 	)
+	credentialPayload := ""
+	if metadata.NetworkMode == networkModeShared {
+		credentialPayload = gatewayCredentialPayload(current.manager.cfg)
+	}
+	closeCredential, err := attachGatewayCredential(command, credentialPayload)
+	if err != nil {
+		return fmt.Errorf("prepare worker model credential: %w", err)
+	}
+	defer closeCredential()
 	command.SysProcAttr = workerSysProcAttr()
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -1478,6 +1580,62 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 
 func (current *task) taskSessionDirectory() string {
 	return filepath.Join(current.manager.cfg.SessionDir, current.metadata.ID)
+}
+
+func (current *task) taskAgentDirectory() string {
+	return filepath.Join(current.taskSessionDirectory(), "agent")
+}
+
+// Pi uses a short-lived settings.json.lock directory even when it only reads
+// settings. Give every background worker a private runtime snapshot instead of
+// making the user's canonical configuration writable inside the sandbox.
+func (current *task) prepareTaskAgentConfiguration(networkMode string) (string, error) {
+	if !taskIDPattern.MatchString(current.metadata.ID) {
+		return "", fmt.Errorf("task id is invalid")
+	}
+	directory := current.taskAgentDirectory()
+	if err := ensurePrivateDir(directory); err != nil {
+		return "", err
+	}
+	names := []string{"settings.json", "models.json"}
+	if networkMode == networkModeShared {
+		// Pi login providers own auth.json and require it only with shared
+		// networking. Restricted workers must never receive this credential.
+		names = append(names, "auth.json")
+	}
+	allowed := make(map[string]bool, len(names))
+	for _, name := range names {
+		allowed[name] = true
+		destination := filepath.Join(directory, name)
+		if err := os.RemoveAll(destination); err != nil {
+			return "", err
+		}
+		source := filepath.Join(current.manager.cfg.AgentDir, name)
+		content, err := readPrivateRegularFile(source, maxRequestBytes)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", name, err)
+		}
+		if len(content) == 0 || !json.Valid(content) {
+			return "", fmt.Errorf("%s is not valid JSON", name)
+		}
+		if err := writePrivateFile(destination, content); err != nil {
+			return "", fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	for _, name := range []string{"settings.json", "models.json", "auth.json"} {
+		if !allowed[name] {
+			if err := os.RemoveAll(filepath.Join(directory, name)); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(directory, "settings.json.lock")); err != nil {
+		return "", err
+	}
+	return directory, nil
 }
 
 func (current *task) prepareTaskSession(sessionFile string) (string, string, error) {
@@ -1662,6 +1820,7 @@ func (current *task) failWorker(message string) {
 }
 
 func (current *task) recordEvent(raw json.RawMessage) {
+	raw = redactEventImagePayloads(raw)
 	var header struct {
 		Type       string `json:"type"`
 		Method     string `json:"method"`
@@ -1762,18 +1921,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	}
 	encoded, _ := json.Marshal(event)
 	wasTruncated := current.metadata.LogTruncated
-	persisted := false
-	if !current.metadata.LogTruncated && current.eventBytes+int64(len(encoded)+1) <= current.manager.cfg.MaxEventSize {
-		if file, err := os.OpenFile(current.events, os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-			if _, err := file.Write(append(encoded, '\n')); err == nil {
-				current.eventBytes += int64(len(encoded) + 1)
-				persisted = true
-			}
-			if err := file.Close(); err != nil {
-				persisted = false
-			}
-		}
-	}
+	persisted := current.persistEventLocked(event, encoded)
 	if !persisted {
 		current.metadata.LogTruncated = true
 	}
@@ -1793,6 +1941,40 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	if header.Type == "agent_settled" {
 		go current.manager.scheduleQueued()
 	}
+}
+
+func (current *task) persistEventLocked(event taskEvent, encoded []byte) bool {
+	recordBytes := int64(len(encoded) + 1)
+	maximumBytes := current.manager.cfg.MaxEventSize
+	if recordBytes > maximumBytes {
+		return false
+	}
+	continuous := (current.eventLastSequence == 0 && event.Sequence == 1) || event.Sequence == current.eventLastSequence+1
+	if continuous && current.eventBytes+recordBytes <= maximumBytes {
+		file, err := os.OpenFile(current.events, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return false
+		}
+		written, writeErr := file.Write(append(encoded, '\n'))
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil || written != len(encoded)+1 {
+			return false
+		}
+		current.eventBytes += recordBytes
+		current.eventLastSequence = event.Sequence
+		return true
+	}
+
+	eventBytes, lastSequence, err := rewriteRetainedEventLog(
+		current.events, current.metadata.ID, event, maximumBytes, current.metadata.LogTruncated,
+	)
+	if err != nil {
+		return false
+	}
+	current.eventBytes = eventBytes
+	current.eventLastSequence = lastSequence
+	current.metadata.LogTruncated = true
+	return true
 }
 
 func workerModelSelection(provider, id string) string {
@@ -2294,6 +2476,9 @@ func (manager *taskManager) setModel(params setTaskModelParams) (taskMetadata, e
 	if err != nil {
 		return taskMetadata{}, err
 	}
+	if err := manager.validateNetworkModel(current.snapshot().NetworkMode, model); err != nil {
+		return taskMetadata{}, err
+	}
 	current.mu.Lock()
 	status := current.metadata.Status
 	if isTerminalStatus(status) || status == statusQueued {
@@ -2374,8 +2559,13 @@ func (manager *taskManager) setSandboxMode(params setTaskSandboxParams) (taskMet
 	}
 	permissionMode := current.metadata.PermissionMode
 	deployment := current.metadata.Deployment != nil
+	networkMode := current.metadata.NetworkMode
 	current.mu.Unlock()
 	mode, sandbox, err := manager.resolveTaskSandbox(params.Mode, permissionMode, deployment)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	networkMode, sandbox, err = manager.resolveTaskNetworkMode(networkMode, mode, sandbox)
 	if err != nil {
 		return taskMetadata{}, err
 	}
@@ -2384,6 +2574,7 @@ func (manager *taskManager) setSandboxMode(params setTaskSandboxParams) (taskMet
 	previousStatus := current.metadata.Sandbox
 	previousUpdatedAt := current.metadata.UpdatedAt
 	current.metadata.SandboxMode = mode
+	current.metadata.NetworkMode = networkMode
 	current.metadata.Sandbox = sandbox
 	current.metadata.UpdatedAt = time.Now().UTC()
 	metadata := current.metadata
@@ -2391,6 +2582,49 @@ func (manager *taskManager) setSandboxMode(params setTaskSandboxParams) (taskMet
 	if err := current.saveMetadata(); err != nil {
 		current.mu.Lock()
 		current.metadata.SandboxMode = previousMode
+		current.metadata.Sandbox = previousStatus
+		current.metadata.UpdatedAt = previousUpdatedAt
+		current.mu.Unlock()
+		return taskMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func (manager *taskManager) setNetworkMode(params setTaskNetworkParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	if current.metadata.Status != statusQueued && !isTerminalStatus(current.metadata.Status) {
+		current.mu.Unlock()
+		return taskMetadata{}, fmt.Errorf("task must be queued or stopped before changing its network boundary")
+	}
+	sandboxMode := current.metadata.SandboxMode
+	sandbox := current.metadata.Sandbox
+	model := current.metadata.Model
+	current.mu.Unlock()
+	mode, sandbox, err := manager.resolveTaskNetworkMode(params.Mode, sandboxMode, sandbox)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	if err := manager.validateNetworkModel(mode, model); err != nil {
+		return taskMetadata{}, err
+	}
+	current.mu.Lock()
+	previousMode := current.metadata.NetworkMode
+	previousStatus := current.metadata.Sandbox
+	previousUpdatedAt := current.metadata.UpdatedAt
+	current.metadata.NetworkMode = mode
+	current.metadata.Sandbox = sandbox
+	current.metadata.UpdatedAt = time.Now().UTC()
+	metadata := current.metadata
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
+		current.mu.Lock()
+		current.metadata.NetworkMode = previousMode
 		current.metadata.Sandbox = previousStatus
 		current.metadata.UpdatedAt = previousUpdatedAt
 		current.mu.Unlock()
@@ -2745,15 +2979,18 @@ func validateSessionFile(sessionRoot, value string) (string, error) {
 	return physical, nil
 }
 
-func (current *task) subscribe(after uint64, follow bool) ([]taskEvent, <-chan taskEvent, func(), error) {
+func (current *task) subscribe(after uint64, follow bool) (eventPage, <-chan taskEvent, func(), error) {
 	current.mu.Lock()
 	defer current.mu.Unlock()
-	replayed, err := readEvents(current.events, current.metadata.ID, after)
+	page, err := readEventPageWithRetention(current.events, current.metadata.ID, after, 0, current.metadata.LogTruncated)
 	if err != nil {
-		return nil, nil, nil, err
+		return eventPage{}, nil, nil, err
 	}
+	page.RetainedThrough = current.eventLastSequence
+	page.LatestSequence = current.metadata.LastSequence
+	page.HistoryTruncated = current.metadata.LogTruncated || page.RetainedFrom > 1
 	if !follow || !isLiveStatus(current.metadata.Status) {
-		return replayed, nil, func() {}, nil
+		return page, nil, func() {}, nil
 	}
 	current.nextSubID++
 	id := current.nextSubID
@@ -2767,13 +3004,20 @@ func (current *task) subscribe(after uint64, follow bool) ([]taskEvent, <-chan t
 		}
 		current.mu.Unlock()
 	}
-	return replayed, channel, cancel, nil
+	return page, channel, cancel, nil
 }
 
 func (current *task) eventPage(after uint64, limit int) (eventPage, error) {
 	current.mu.Lock()
 	defer current.mu.Unlock()
-	return readEventPage(current.events, current.metadata.ID, after, limit)
+	page, err := readEventPageWithRetention(current.events, current.metadata.ID, after, limit, current.metadata.LogTruncated)
+	if err != nil {
+		return eventPage{}, err
+	}
+	page.RetainedThrough = current.eventLastSequence
+	page.LatestSequence = current.metadata.LastSequence
+	page.HistoryTruncated = current.metadata.LogTruncated || page.RetainedFrom > 1
+	return page, nil
 }
 
 func readEvents(path, taskID string, after uint64) ([]taskEvent, error) {
@@ -2786,7 +3030,7 @@ func readEvents(path, taskID string, after uint64) ([]taskEvent, error) {
 // its lastSequence can lag the durable log. Older daemons could then append a
 // second, otherwise contiguous sequence epoch. Renumber only that recognizable
 // rollback suffix; gaps and malformed envelopes remain hard failures.
-func recoverEventLog(path, taskID string, maximumBytes int64) (int64, uint64, bool, error) {
+func recoverEventLog(path, taskID string, maximumBytes int64, allowRetainedStart bool) (int64, uint64, bool, error) {
 	info, err := privateRegularFileInfo(path, maximumBytes)
 	if err != nil {
 		return 0, 0, false, err
@@ -2810,6 +3054,13 @@ func recoverEventLog(path, taskID string, maximumBytes int64) (int64, uint64, bo
 		}
 		if event.Protocol != protocolVersion || event.Kind != "event" || event.TaskID != taskID || event.Sequence == 0 {
 			return 0, 0, false, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+		}
+		if fixedSequence == 0 && event.Sequence != 1 {
+			if !allowRetainedStart {
+				return 0, 0, false, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+			}
+			fixedSequence = event.Sequence - 1
+			originalSequence = fixedSequence
 		}
 		if !rollback {
 			switch {
@@ -2893,7 +3144,117 @@ func recoverEventLog(path, taskID string, maximumBytes int64) (int64, uint64, bo
 	return written, fixedSequence, true, nil
 }
 
+func rewriteRetainedEventLog(path, taskID string, next taskEvent, maximumBytes int64, allowRetainedStart bool) (int64, uint64, error) {
+	if _, err := privateRegularFileInfo(path, maximumBytes); err != nil {
+		return 0, 0, err
+	}
+	page, err := readEventPageWithRetention(path, taskID, 0, 0, allowRetainedStart)
+	if err != nil {
+		return 0, 0, err
+	}
+	events := page.Events
+	if len(events) == 0 {
+		if next.Sequence != 1 && !allowRetainedStart {
+			return 0, 0, fmt.Errorf("event sequence %d does not follow an empty log", next.Sequence)
+		}
+	} else if events[len(events)-1].Sequence+1 != next.Sequence {
+		if !allowRetainedStart {
+			return 0, 0, fmt.Errorf("event sequence %d does not follow retained sequence %d", next.Sequence, events[len(events)-1].Sequence)
+		}
+		events = nil
+	}
+	events = append(events, next)
+
+	records := make([][]byte, len(events))
+	for index, event := range events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return 0, 0, err
+		}
+		records[index] = append(encoded, '\n')
+	}
+	if int64(len(records[len(records)-1])) > maximumBytes {
+		return 0, 0, fmt.Errorf("event record exceeds the %d byte retention limit", maximumBytes)
+	}
+	targetBytes := maximumBytes * 3 / 4
+	if targetBytes <= 0 {
+		targetBytes = maximumBytes
+	}
+	start := len(records) - 1
+	used := int64(len(records[start]))
+	for index := start - 1; index >= 0; index-- {
+		candidate := int64(len(records[index]))
+		if used+candidate > targetBytes {
+			break
+		}
+		used += candidate
+		start = index
+	}
+	// Prefer a complete recent user turn when one exists inside the retained
+	// byte window. A single very long active turn still keeps its newest events.
+	for index := start; index < len(events)-1; index++ {
+		if events[index].Normalized != nil && events[index].Normalized.Type == "user.message" {
+			start = index
+			break
+		}
+	}
+
+	var output bytes.Buffer
+	for _, record := range records[start:] {
+		output.Write(record)
+	}
+	if int64(output.Len()) > maximumBytes {
+		return 0, 0, fmt.Errorf("retained event log exceeds %d bytes", maximumBytes)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".retained-")
+	if err != nil {
+		return 0, 0, err
+	}
+	temporaryPath := temporary.Name()
+	cleanup := func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}
+	if err := temporary.Chmod(0o600); err != nil {
+		cleanup()
+		return 0, 0, err
+	}
+	if _, err := temporary.Write(output.Bytes()); err != nil {
+		cleanup()
+		return 0, 0, err
+	}
+	if err := temporary.Sync(); err != nil {
+		cleanup()
+		return 0, 0, err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return 0, 0, err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Remove(temporaryPath)
+		return 0, 0, err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return 0, 0, err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return 0, 0, syncErr
+	}
+	if closeErr != nil {
+		return 0, 0, closeErr
+	}
+	return int64(output.Len()), next.Sequence, nil
+}
+
 func readEventPage(path, taskID string, after uint64, limit int) (eventPage, error) {
+	return readEventPageWithRetention(path, taskID, after, limit, false)
+}
+
+func readEventPageWithRetention(path, taskID string, after uint64, limit int, allowRetainedStart bool) (eventPage, error) {
 	if limit < 0 || limit > 1000 {
 		return eventPage{}, fmt.Errorf("event page limit must be between 1 and 1000")
 	}
@@ -2905,6 +3266,7 @@ func readEventPage(path, taskID string, after uint64, limit int) (eventPage, err
 	result := make([]taskEvent, 0)
 	resultBytes := 0
 	lastSequence := uint64(0)
+	firstSequence := uint64(0)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
 	for scanner.Scan() {
@@ -2912,8 +3274,15 @@ func readEventPage(path, taskID string, after uint64, limit int) (eventPage, err
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			return eventPage{}, fmt.Errorf("corrupt task event log: %w", err)
 		}
-		if event.Protocol != protocolVersion || event.Kind != "event" || event.TaskID != taskID || event.Sequence != lastSequence+1 {
+		validSequence := event.Sequence == lastSequence+1
+		if firstSequence == 0 && allowRetainedStart {
+			validSequence = event.Sequence > 0
+		}
+		if event.Protocol != protocolVersion || event.Kind != "event" || event.TaskID != taskID || !validSequence {
 			return eventPage{}, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+		}
+		if firstSequence == 0 {
+			firstSequence = event.Sequence
 		}
 		lastSequence = event.Sequence
 		eventBytes := len(scanner.Bytes()) + 1
@@ -2922,7 +3291,10 @@ func readEventPage(path, taskID string, after uint64, limit int) (eventPage, err
 			result = append(result, event)
 			resultBytes += eventBytes
 		} else if event.Sequence > after && limit > 0 {
-			page := eventPage{Events: result, HasMore: true}
+			page := eventPage{
+				Events: result, HasMore: true, RetainedFrom: firstSequence, RetainedThrough: lastSequence,
+				HistoryTruncated: firstSequence > 1, CursorExpired: firstSequence > 1 && after < firstSequence-1,
+			}
 			if len(result) > 0 {
 				page.NextAfter = result[len(result)-1].Sequence
 			}
@@ -2932,7 +3304,10 @@ func readEventPage(path, taskID string, after uint64, limit int) (eventPage, err
 	if err := scanner.Err(); err != nil {
 		return eventPage{}, err
 	}
-	page := eventPage{Events: result}
+	page := eventPage{
+		Events: result, RetainedFrom: firstSequence, RetainedThrough: lastSequence,
+		HistoryTruncated: firstSequence > 1, CursorExpired: firstSequence > 1 && after < firstSequence-1,
+	}
 	if len(result) > 0 {
 		page.NextAfter = result[len(result)-1].Sequence
 	}

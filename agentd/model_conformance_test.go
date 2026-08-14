@@ -80,7 +80,7 @@ func TestProbeDroboticsModelConformanceCompletesAgentLoop(t *testing.T) {
 	result := normalizeModelConformanceResult(probeDroboticsModelConformance(context.Background(), modelOption{
 		Provider: "drobotics", ID: "kimi-k3", Capabilities: modelCapabilities{ImageInput: true},
 	}))
-	if result.Status != "verified" || result.Attempts != 3 || len(result.Checks) != 4 {
+	if result.SchemaVersion != 1 || result.Scope != "gateway-protocol" || result.RuntimeStatus != "not-tested" || result.RDKTaskStatus != "not-tested" || result.Status != "verified" || result.Attempts != 3 || len(result.Checks) != 4 {
 		t.Fatalf("conformance result = %+v", result)
 	}
 	for _, check := range result.Checks {
@@ -109,7 +109,12 @@ func TestConformanceFailsClosedOnIncompleteToolStream(t *testing.T) {
 		conformanceCheck("streaming", false, 1), conformanceCheck("tool-call", false, 1),
 		conformanceCheck("tool-result", false, 0), {Name: "image-input", Status: "skipped"},
 	}})
-	if result.Status != "failed" || strings.Contains(result.Message, "gateway") {
+	encodedResult, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" || result.Scope != "gateway-protocol" || result.Checks[0].Category != "check-failed" ||
+		strings.Contains(string(encodedResult), "tool-1") || strings.Contains(string(encodedResult), `\"value\":\"ping\"`) || strings.Contains(string(encodedResult), "message_start") {
 		t.Fatalf("failed conformance was unsafe or incorrectly verified: %+v", result)
 	}
 }
@@ -273,7 +278,7 @@ func TestModelConformanceServiceCachesAndForceRefreshes(t *testing.T) {
 		}}
 	}
 	first, err := service.check(manager, modelConformanceParams{Model: "drobotics/kimi-k3"})
-	if err != nil || first.Cached || first.Status != "verified" || calls.Load() != 1 {
+	if err != nil || first.Cached || first.Status != "verified" || first.Scope != "gateway-protocol" || first.RuntimeStatus != "not-tested" || first.RDKTaskStatus != "not-tested" || calls.Load() != 1 {
 		t.Fatalf("first conformance check = %+v err=%v calls=%d", first, err, calls.Load())
 	}
 	second, err := service.check(manager, modelConformanceParams{Model: "drobotics/kimi-k3"})

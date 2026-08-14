@@ -570,6 +570,8 @@ install_user=$6
 install_home=$7
 testing=$8
 test_install_root=$9
+test_proc_root=${10}
+test_fail_after_swap=${11}
 stage=$(mktemp -d "$staging_template")
 cleanup_stage() { status=$?; trap - EXIT HUP INT TERM; rm -rf "$stage"; exit "$status"; }
 trap cleanup_stage EXIT
@@ -591,15 +593,15 @@ if [ ! -x "$package_root/install.sh" ]; then
   exit 1
 fi
 if [ -n "$install_home" ]; then
-  env HOBOT_CODE_INSTALL_USER="$install_user" HOBOT_CODE_INSTALL_HOME="$install_home" HOBOT_CODE_INSTALL_CHANNEL=stable HOBOT_CODE_TESTING="$testing" HOBOT_CODE_TEST_INSTALL_ROOT="$test_install_root" "$package_root/install.sh"
+  env HOBOT_CODE_INSTALL_USER="$install_user" HOBOT_CODE_INSTALL_HOME="$install_home" HOBOT_CODE_INSTALL_CHANNEL=stable HOBOT_CODE_TESTING="$testing" HOBOT_CODE_TEST_INSTALL_ROOT="$test_install_root" HOBOT_CODE_TEST_PROC_ROOT="$test_proc_root" HOBOT_CODE_TEST_FAIL_AFTER_SWAP="$test_fail_after_swap" "$package_root/install.sh"
 else
-  env HOBOT_CODE_INSTALL_USER="$install_user" HOBOT_CODE_INSTALL_CHANNEL=stable HOBOT_CODE_TESTING="$testing" HOBOT_CODE_TEST_INSTALL_ROOT="$test_install_root" "$package_root/install.sh"
+  env HOBOT_CODE_INSTALL_USER="$install_user" HOBOT_CODE_INSTALL_CHANNEL=stable HOBOT_CODE_TESTING="$testing" HOBOT_CODE_TEST_INSTALL_ROOT="$test_install_root" HOBOT_CODE_TEST_PROC_ROOT="$test_proc_root" HOBOT_CODE_TEST_FAIL_AFTER_SWAP="$test_fail_after_swap" "$package_root/install.sh"
 fi'
 
 if [ "$(id -u)" -eq 0 ]; then
-  /bin/sh -c "$privileged_installer" hobot-installer "$archive" "$archive_name" "$expected_root" "$checksum_digest" "$privileged_staging_template" "$install_user" "$install_home" "${HOBOT_CODE_TESTING:-0}" "${HOBOT_CODE_TEST_INSTALL_ROOT:-}"
+  /bin/sh -c "$privileged_installer" hobot-installer "$archive" "$archive_name" "$expected_root" "$checksum_digest" "$privileged_staging_template" "$install_user" "$install_home" "${HOBOT_CODE_TESTING:-0}" "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" "${HOBOT_CODE_TEST_PROC_ROOT:-}" "${HOBOT_CODE_TEST_FAIL_AFTER_SWAP:-0}"
 else
-  sudo /bin/sh -c "$privileged_installer" hobot-installer "$archive" "$archive_name" "$expected_root" "$checksum_digest" "$privileged_staging_template" "$install_user" "$install_home" "${HOBOT_CODE_TESTING:-0}" "${HOBOT_CODE_TEST_INSTALL_ROOT:-}"
+  sudo /bin/sh -c "$privileged_installer" hobot-installer "$archive" "$archive_name" "$expected_root" "$checksum_digest" "$privileged_staging_template" "$install_user" "$install_home" "${HOBOT_CODE_TESTING:-0}" "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" "${HOBOT_CODE_TEST_PROC_ROOT:-}" "${HOBOT_CODE_TEST_FAIL_AFTER_SWAP:-0}"
 fi
 
 if [ "$daemon_was_running" -eq 1 ]; then

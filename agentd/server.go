@@ -15,17 +15,20 @@ import (
 )
 
 type daemonServer struct {
-	cfg        config
-	manager    *taskManager
-	health     *modelHealthService
-	verify     *modelConformanceService
-	sandbox    sandboxCapability
-	build      buildIdentity
-	extensions extensionCatalog
-	listener   *net.UnixListener
-	started    time.Time
-	stopOnce   sync.Once
-	stop       chan struct{}
+	cfg           config
+	manager       *taskManager
+	health        *modelHealthService
+	verify        *modelConformanceService
+	qualification *modelQualificationStore
+	rdkMatrix     *modelRDKMatrixStore
+	sandbox       sandboxCapability
+	build         buildIdentity
+	extensions    extensionCatalog
+	egress        *modelEgressServer
+	listener      *net.UnixListener
+	started       time.Time
+	stopOnce      sync.Once
+	stop          chan struct{}
 }
 
 type daemonInfo struct {
@@ -45,16 +48,25 @@ type daemonInfo struct {
 }
 
 func newDaemonServer(cfg config) (*daemonServer, error) {
+	egress, err := newModelEgressServer(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := egress.listen(); err != nil {
+		return nil, fmt.Errorf("start model egress broker: %w", err)
+	}
 	manager, err := newTaskManager(cfg)
 	if err != nil {
+		egress.shutdown()
 		return nil, err
 	}
 	extensions, err := loadExtensionCatalog(cfg.ExtensionCatalog, version)
 	if err != nil {
+		egress.shutdown()
 		return nil, err
 	}
 	return &daemonServer{
-		cfg: cfg, manager: manager, health: newModelHealthService(), verify: newModelConformanceService(), sandbox: sandboxCapabilityStatus(cfg), build: currentBuildIdentity(), extensions: extensions, started: time.Now().UTC(), stop: make(chan struct{}),
+		cfg: cfg, manager: manager, health: newModelHealthService(cfg.gatewayToken), verify: newModelConformanceService(cfg.gatewayToken), qualification: newModelQualificationStore(cfg), rdkMatrix: newModelRDKMatrixStore(cfg), sandbox: sandboxCapabilityStatus(cfg), build: currentBuildIdentity(), extensions: extensions, egress: egress, started: time.Now().UTC(), stop: make(chan struct{}),
 	}, nil
 }
 
@@ -74,9 +86,13 @@ func (server *daemonServer) info(clientFingerprint string) daemonInfo {
 }
 
 func (server *daemonServer) capabilities() capabilityInfo {
+	capabilities := append([]string(nil), protocolCapabilities...)
+	if modelEgressAvailable(server.cfg) {
+		capabilities = append(capabilities, "models.egress-broker.v1")
+	}
 	return capabilityInfo{
 		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion, EventSchema: eventSchemaVersion,
-		Capabilities: append([]string(nil), protocolCapabilities...), MaximumRequest: maxRequestBytes,
+		Capabilities: capabilities, MaximumRequest: maxRequestBytes,
 		MaximumResponse: maxResponseBytes, MaximumPrompt: maxPromptBytes, MaximumTasks: server.cfg.MaxTasks,
 		MaximumRetained: server.cfg.MaxRetainedTasks, Sandbox: server.sandbox,
 	}
@@ -126,6 +142,8 @@ func removeStaleSocket(path string) error {
 }
 
 func (server *daemonServer) serve() error {
+	go server.egress.serve()
+	defer server.egress.shutdown()
 	if err := server.listen(); err != nil {
 		return err
 	}
@@ -151,6 +169,7 @@ func (server *daemonServer) serve() error {
 func (server *daemonServer) shutdown() {
 	server.stopOnce.Do(func() {
 		server.manager.interruptAll()
+		server.egress.shutdown()
 		close(server.stop)
 		if server.listener != nil {
 			_ = server.listener.Close()
@@ -208,11 +227,28 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		}
 		_ = writeJSON(connection, success(req.ID, server.capabilities()))
 	case "extensions.list":
-		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+		var params struct {
+			TaskID string `json:"taskId,omitempty"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
 			return
 		}
-		_ = writeJSON(connection, success(req.ID, discoverConfiguredExtensions(server.extensions)))
+		if params.TaskID == "" {
+			_ = writeJSON(connection, success(req.ID, discoverConfiguredExtensions(server.extensions)))
+			return
+		}
+		if !taskIDPattern.MatchString(params.TaskID) {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", fmt.Errorf("taskId is invalid")))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
+			return
+		}
+		metadata := current.snapshot()
+		_ = writeJSON(connection, success(req.ID, discoverConfiguredExtensions(server.extensions, extensionInventoryContext{Cwd: metadata.Cwd, ProjectTrusted: metadata.Approved})))
 	case "models.list":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
@@ -235,6 +271,10 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			_ = writeJSON(connection, failure(req.ID, "models_health_failed", err))
 			return
 		}
+		if err := server.qualification.recordHealth(result, server.build); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_qualification_write_failed", err))
+			return
+		}
 		_ = writeJSON(connection, success(req.ID, result))
 	case "models.conformance":
 		var params modelConformanceParams
@@ -247,6 +287,70 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			_ = writeJSON(connection, failure(req.ID, "models_conformance_failed", err))
 			return
 		}
+		if err := server.qualification.recordConformance(result, server.build); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_qualification_write_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "models.runtime-probe":
+		var params modelRuntimeProbeParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.manager.runModelRuntimeProbe(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_runtime_probe_failed", err))
+			return
+		}
+		if err := server.qualification.recordRuntime(result, server.build); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_qualification_write_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "models.rdk-probe":
+		var params modelRDKProbeParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.manager.runModelRDKProbe(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_rdk_probe_failed", err))
+			return
+		}
+		if err := server.rdkMatrix.record(result, server.build); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_rdk_matrix_write_failed", err))
+			return
+		}
+		if err := server.qualification.recordRDK(result, server.build); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_qualification_write_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "models.rdk-matrix":
+		var params modelRDKMatrixParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.rdkMatrix.get(server.manager, params, server.build, req.ConfigFingerprint)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_rdk_matrix_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "models.qualification":
+		var params modelQualificationParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.qualification.get(server.manager, params, server.build, req.ConfigFingerprint)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "models_qualification_failed", err))
+			return
+		}
 		_ = writeJSON(connection, success(req.ID, result))
 	case "system.snapshot":
 		if err := decodeParams(req.Params, &struct{}{}); err != nil {
@@ -254,13 +358,36 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, collectSystemSnapshot(server.cfg)))
+	case "diagnostics.inspect":
+		if err := decodeParams(req.Params, &struct{}{}); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		report, err := server.inspectDiagnostics(req.ConfigFingerprint)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "diagnostics_inspect_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, report))
+	case "diagnostics.repair":
+		var params diagnosticRepairParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.repairDiagnostics(params, req.ConfigFingerprint)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "diagnostics_repair_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
 	case "support.bundle":
 		var params supportBundleParams
 		if err := decodeParams(req.Params, &params); err != nil {
 			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
 			return
 		}
-		bundle, err := server.createSupportBundle(params.IncludeContent)
+		bundle, err := server.createSupportBundle(params.IncludeContent, req.ConfigFingerprint)
 		if err != nil {
 			_ = writeJSON(connection, failure(req.ID, "support_bundle_failed", err))
 			return
@@ -570,6 +697,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.network":
+		var params setTaskNetworkParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.setNetworkMode(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_network_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
 	case "task.archive":
 		var params archiveTaskParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -646,16 +785,21 @@ func (server *daemonServer) subscribe(connection *net.UnixConn, req request) {
 		_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
 		return
 	}
-	replayed, events, cancel, err := current.subscribe(params.After, params.Follow)
+	page, events, cancel, err := current.subscribe(params.After, params.Follow)
 	if err != nil {
 		_ = writeJSON(connection, failure(req.ID, "event_log_failed", err))
 		return
 	}
 	defer cancel()
-	if err := writeJSON(connection, success(req.ID, map[string]any{"replayed": len(replayed), "following": events != nil})); err != nil {
+	if err := writeJSON(connection, success(req.ID, subscriptionResult{
+		Replayed: len(page.Events), Following: events != nil,
+		RetainedFrom: page.RetainedFrom, RetainedThrough: page.RetainedThrough,
+		LatestSequence: page.LatestSequence, HistoryTruncated: page.HistoryTruncated,
+		CursorExpired: page.CursorExpired,
+	})); err != nil {
 		return
 	}
-	for _, event := range replayed {
+	for _, event := range page.Events {
 		if err := writeJSON(connection, event); err != nil {
 			return
 		}

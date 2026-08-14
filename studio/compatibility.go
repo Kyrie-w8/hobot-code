@@ -50,11 +50,19 @@ var recommendedStudioCapabilities = []struct {
 	Name   string
 	Impact string
 }{
+	{Name: "diagnostics.inspect.v1", Impact: "Board readiness cannot be inspected without creating a support file."},
+	{Name: "diagnostics.repair.v1", Impact: "Safe board repairs are unavailable from Studio."},
 	{Name: "extensions.catalog.v1", Impact: "Installed capabilities and their trust boundaries cannot be inspected from Studio."},
 	{Name: "models.capabilities.v1", Impact: "Model input capabilities cannot be negotiated; image attachments stay disabled."},
 	{Name: "build.identity.v1", Impact: "This board service cannot prove which source build and Pi runtime are installed."},
+	{Name: "pi.compatibility.v1", Impact: "This board service cannot prove which Pi capability contract its runtime passed."},
 	{Name: "models.health.v1", Impact: "Model routes cannot be checked before starting a task."},
 	{Name: "models.conformance.v1", Impact: "Models cannot be verified for streaming, tools, continuation, and declared input modes."},
+	{Name: "models.runtime-probe.v1", Impact: "Models cannot be checked through the pinned Pi Agent runtime before real work."},
+	{Name: "models.rdk-probe.v1", Impact: "Models cannot produce a board-bound read-only RDK diagnostic qualification report."},
+	{Name: "models.rdk-matrix.v1", Impact: "Studio cannot show per-workflow RDK evidence or its freshness."},
+	{Name: "models.qualification.v1", Impact: "Model readiness evidence cannot survive Studio or board-service restarts, and stale results cannot be identified."},
+	{Name: "providers.manage.v1", Impact: "Third-party model providers cannot be safely configured from Studio."},
 	{Name: "system.snapshot", Impact: "Board health and hardware telemetry are unavailable."},
 	{Name: "support.bundle.v1", Impact: "One-click support bundles are unavailable."},
 	{Name: "deployments.v1", Impact: "The guided model deployment workflow is unavailable."},
@@ -63,12 +71,14 @@ var recommendedStudioCapabilities = []struct {
 	{Name: "tasks.failure.v1", Impact: "Task failures cannot provide safe, structured recovery actions."},
 	{Name: "tasks.turn-evidence.v1", Impact: "Interrupted tasks cannot show whether tools completed or the Git workspace changed."},
 	{Name: "events.items.v1", Impact: "Rich command and task lifecycle details are unavailable."},
+	{Name: "events.retention.v1", Impact: "Long tasks cannot disclose retained history boundaries or expired reconnect cursors."},
 	{Name: "workspaces.browse", Impact: "Project folders cannot be browsed from Studio."},
 	{Name: "workspaces.changes.v1", Impact: "Current workspace changes cannot be reviewed in Studio."},
 	{Name: "workspaces.isolation.v1", Impact: "New tasks cannot use an isolated Git worktree."},
 	{Name: "workspaces.write-leases.v1", Impact: "Concurrent workspace writes cannot be identified before they overlap."},
 	{Name: "workspaces.delivery.v1", Impact: "Isolated changes cannot be safely applied to the original project from Studio."},
 	{Name: "tasks.sandbox.v1", Impact: "Background Agents cannot expose or select their board-side OS isolation boundary."},
+	{Name: "tasks.network.v1", Impact: "Background Agents cannot enforce or display an offline network boundary."},
 }
 
 func currentStudioVersion() string {
@@ -141,6 +151,9 @@ func assessConnectionCompatibility(info hobot.DaemonInfo, snapshot *hobot.System
 		default:
 			addWarning("missing-build-identity", "The board service could not verify its release provenance.", "Reinstall or update Hobot Code on the board before production use.")
 		}
+	}
+	if containsValue(capabilities.Capabilities, "pi.compatibility.v1") && (info.Build.Status != "verified" || len(info.Build.PiCompatibilitySHA256) != 64) {
+		addWarning("missing-pi-compatibility-identity", "The Pi runtime capability contract is missing from the verified build identity.", "Reinstall Hobot Code from a current verified release archive.")
 	}
 	sandboxReported := capabilities.Sandbox.Backend != "" || capabilities.Sandbox.Reason != "" || len(capabilities.Sandbox.Profiles) > 0
 	if containsValue(capabilities.Capabilities, "tasks.sandbox.v1") && sandboxReported && !capabilities.Sandbox.Available {

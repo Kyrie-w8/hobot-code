@@ -31,7 +31,7 @@ printf '%s\n' "$DROBOTICS_TOKEN" | hobot setup --token-stdin --model kimi-k3
 
 可增加 `--check` 在保存后执行一次最小模型路由检查。若 `agentd` 已在运行，向导不会停止任务或静默重启服务，而会提示先执行 `hobot daemon restart`；重启后新任务才会使用更新后的配置。
 
-`hobot.env`、`agent/settings.json` 或 `agent/models.json` 在后台服务启动后发生变化时，模型查询、新任务和 Resume 会停止并直接给出重启命令，避免用户误以为新配置已生效。查看旧任务、审批和停止任务仍然可用。
+`hobot.env`、`agent/settings.json`、`agent/models.json` 或 `agent/providers.json` 在后台服务启动后发生变化时，模型查询、新任务和 Resume 会停止并直接给出重启命令，避免用户误以为新配置已生效。查看旧任务、审批和停止任务仍然可用。
 
 编辑 `~/.config/hobot-code/hobot.env`：
 
@@ -54,9 +54,79 @@ Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Hobot Code 的 Anthropic SSE 适配器
 
 ## 添加其他模型
 
-Pi 支持 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 和 Google Generative AI 等 Provider。可使用 `/login <provider>` 配置 Pi 支持的登录型 Provider，或编辑 `~/.config/hobot-code/agent/models.json` 添加兼容服务。
+Hobot Code 把第三方模型分为三条路径，避免把登录、元数据和密钥混在一个文件里：
 
-本机 Ollama 示例：
+| 场景 | 推荐入口 | 凭据边界 | Studio |
+|---|---|---|---|
+| API Key 兼容网关 | `hobot provider` | Hobot Code 受管 | 显示并可切换 |
+| Pi 原生 OAuth/登录 | `/login <provider>` | Pi 原生 | 默认不自动展开 |
+| 本机、无密钥或高级自管 Provider | `agent/models.json` | Pi/Provider 自行负责 | 默认不自动展开 |
+
+受管 Provider 支持 `anthropic-messages`、`openai-completions`、`openai-responses` 和 `google-generative-ai`。常见的单模型 API Key 服务可直接执行：
+
+```bash
+hobot provider add acme \
+  --base-url https://models.example.com/v1 \
+  --api openai-completions \
+  --model coder-v2 \
+  --model-name "Acme Coder" \
+  --context-window 65536 \
+  --max-tokens 4096 \
+  --reasoning --image
+```
+
+命令会从控制终端隐藏读取 API key；自动化场景使用 `--token-stdin`，不要把密钥作为命令参数。查看和删除配置：
+
+```bash
+hobot provider list
+hobot provider rotate acme
+hobot provider remove acme --yes
+hobot daemon restart
+hobot model runtime-probe acme/coder-v2
+```
+
+`list` 只返回 Provider、协议、模型、`ready`/`missing` 和共享使用数量，不返回密钥、密钥变量名或私有端点。`rotate` 只原子替换私有凭据，Provider 元数据和模型配置保持不变；如果高级配置让多个 Provider 共用同一个密钥，必须显式加 `--yes-shared` 确认影响全部使用者。删除默认清理已经没有其他 Provider 引用的密钥；`--keep-credential` 可显式保留。添加、轮换与删除使用跨进程锁、私有 `0600` 文件和耐久原子重命名。异常中断最多留下未引用密钥，不会发布一个缺少凭据的 Provider。
+
+Studio 标题栏的钥匙入口提供同一套新增、轮换、删除和应用操作。密钥只在非受控密码框中短暂停留，并通过固定短时 SSH 命令的标准输入传到板端；不会保存到 Mac 配置、浏览器存储、任务历史或长期 bridge。正在运行的 Agent 会阻止安全重启，此时配置已经保存，Studio 会保留“Apply”提示，待任务空闲后再应用。
+
+向导当前覆盖一个 Provider 的单模型常用字段。多模型、`thinkingLevelMap` 或 `compat` 等高级配置仍可直接编辑严格 schema。元数据写入私有的 `~/.config/hobot-code/agent/providers.json`，真实密钥只写入同样私有的 `~/.config/hobot-code/hobot.env`。等价的高级配置示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "acme",
+      "name": "Acme Gateway",
+      "baseUrl": "https://models.example.com/v1",
+      "api": "openai-completions",
+      "credentialEnv": "HOBOT_CODE_PROVIDER_KEY_ACME",
+      "models": [
+        {
+          "id": "coder-v2",
+          "name": "Acme Coder",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 65536,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  ]
+}
+```
+
+对应的 `hobot.env` 项为：
+
+```text
+HOBOT_CODE_PROVIDER_KEY_ACME=your-token
+```
+
+修改后必须执行 `hobot daemon restart`。未配置密钥的 Provider 会被单独跳过，不影响 D-Robotics 或其他 Provider；`hobot provider list`、`hobot extensions` 和 `/doctor` 只显示脱敏状态。配置拒绝未知字段、重复 JSON key、明文 `apiKey`/任意 Header、带凭据或查询参数的 URL，以及非本机 HTTP。`authHeader` 仅在兼容代理明确要求时设置；不同协议沿用 Pi 对应适配器的原生认证方式。
+
+受管密钥与 D-Robotics token 一起在启动时从普通环境移除，通过匿名文件描述符传给非沙箱进程，通过沙箱 tmpfs 内的一次性私有文件传给隔离进程，并由 Side Agent 继承同一份有界凭据包。`providers.json` 不含密钥；运行时探测只复制当前所选 Provider 的已校验元数据。该机制不构成同进程第三方扩展或主机管理员之间的安全边界。
+
+Pi 原生登录继续使用 `/login <provider>`。只有需要本地服务、无密钥服务或 Pi 高级字段时，才编辑 `models.json`。本机 Ollama 示例：
 
 ```json
 {
@@ -77,7 +147,7 @@ Pi 支持 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 和 Go
 }
 ```
 
-API key 可以写成 `$ENV_NAME` 引用，避免把真实密钥放进 JSON。保存后打开 `/model` 重新选择模型即可。
+自管 `models.json` 的 API key 可以写成 `$ENV_NAME` 引用，避免把真实密钥放进 JSON；它不自动获得上述 Hobot Code 受管凭据隔离。保存后打开 `/model` 重新选择模型即可。
 
 ## Pi 交互与扩展
 
@@ -93,9 +163,11 @@ hobot config
 hobot update --extensions
 ```
 
-`hobot extensions` 显示发行包内置扩展与 Skills，以及当前私有配置中 Provider、Hook 和 LSP 的脱敏状态；`hobot extensions --json` 供 Studio 和自动化读取。Studio 标题栏的 Capabilities 入口提供搜索、类型筛选、板型适配、依赖和声明权限检查。清单每次读取都会刷新，不要求重启 agentd，但它只用于发现和兼容性判断，不执行扩展、不改变启用状态，也不授予权限。
+`hobot extensions` 显示发行包内置能力，以及当前用户的 Provider、Hook、LSP、Pi extensions、Skills、Prompt templates、themes 和 package 声明；`hobot extensions --json` 供自动化读取。`hobot extensions --task TASK_ID` 增加该任务的项目上下文。Studio 标题栏的 Capabilities 入口会自动使用当前任务，并提供搜索、类型筛选、板型适配、来源、信任、依赖和声明权限检查。清单每次读取都会刷新，不要求重启 agentd，但它只用于发现和兼容性判断，不执行扩展、不改变启用状态，也不授予权限。
 
-用户配置只有在属于当前用户、不是符号链接、未向组或其他用户开放且大小受限时才会进入清单。返回内容不会包含 Provider 地址或 token、Hook 命令、LSP 参数和本地配置路径。某个来源无效时只跳过该来源并显示诊断，不影响内置能力。第三方 package 的安装、更新和加载继续由 Pi 负责，MCP 与 package 在形成稳定的本地清单契约前不会由 Hobot Code 猜测扫描；工具调用仍由板端策略判定。
+全局私有配置只有在属于当前用户、不是符号链接、仅当前用户可读写且大小受限时才会进入清单。资源目录和文件还必须不可由组或其他用户写入；扫描限制深度和数量，不跟随符号链接。项目资源不能用路径查询，只能绑定 agentd 已持久化且创建时批准项目资源的任务；未信任任务显示 `Not trusted` 并保持不读取。返回内容不会包含 Provider 地址或 token、Hook 命令、LSP 参数、设置中的绝对路径或 package URL。某个来源无效时只跳过该来源并显示诊断，不影响内置能力。
+
+第三方 package 的安装、更新和加载继续由 Pi 负责。清单中的 `declared` 表示配置声明，`discovered` 表示在 Pi 固定目录找到候选文件，都不证明运行时已经加载。Pi 的 MCP 通常由 extension/package 提供；没有独立、可验证的运行时注册信息时，Hobot Code 不根据文件名猜测一个 MCP 条目。所有实际工具调用仍由板端策略判定。
 
 第三方扩展与 Skills 不是沙箱内容，它们拥有当前用户权限。安装前应审查来源和代码；root 会话尤其不应加载来源不明的 package。
 
@@ -125,17 +197,19 @@ cacheRead / (input + cacheRead + cacheWrite)
 | `HOBOT_CODE_EXTENSION_CATALOG` | 发行包内置扩展清单的绝对路径；仅用于受管安装和开发测试 |
 | `HOBOT_CODE_MAX_BACKGROUND_TASKS` | 同时活跃的后台 Agent 数，取值 `1..8`，默认 `2` |
 | `HOBOT_CODE_MAX_RETAINED_TASKS` | 当前用户可保留的任务总数，取值 `10..1000`，默认 `100` |
-| `HOBOT_CODE_MAX_EVENT_MIB` | 单个后台任务事件日志上限，取值 `1..64` MiB，默认 `16` |
+| `HOBOT_CODE_MAX_EVENT_MIB` | 单个后台任务滚动事件历史上限，取值 `1..64` MiB，默认 `16`；保留最新连续事件并继续持久化 |
 | `HOBOT_CODING_AGENT_DIR` | `<config-root>/agent` |
 | `HOBOT_CODING_AGENT_SESSION_DIR` | `<state-root>/sessions` |
 | `HOBOT_CODE_BWRAP` | 自动发现 `/usr/bin/bwrap` 或 `/bin/bwrap`；仅在自定义安装路径时设置绝对路径 |
 | `HOBOT_CODE_TUI_SANDBOX` | 前台 TUI 默认 OS 隔离档位：`system`（默认）、`workspace`、`review` 或 `off` |
+| `HOBOT_CODE_TUI_NETWORK` | 前台 TUI 默认网络边界：`shared`（默认）、`model-only` 或 `offline`；后两者要求 Bubblewrap |
 | `HOBOT_CODE_PERMISSION_POLICY` | 权限策略文件 |
 | `HOBOT_CODE_MEMORY_CONFIG`、`HOBOT_CODE_MEMORY_DB` | 记忆配置与数据库 |
 | `HOBOT_CODE_GOAL_CONFIG`、`HOBOT_CODE_GOAL_DB` | 目标配置与数据库 |
 | `HOBOT_CODE_HOOK_CONFIG`、`HOBOT_CODE_HOOK_AUDIT` | Hook 配置与审计 |
 | `HOBOT_CODE_NOTIFICATION_CONFIG` | 通知配置 |
 | `HOBOT_CODE_LSP_CONFIG` | LSP 配置 |
+| `HOBOT_CODE_MANAGED_PROVIDER_CONFIG` | 受管 Provider 元数据配置；默认 `<agent-dir>/providers.json` |
 | `HOBOT_CODE_RDK_KNOWLEDGE_DIR`、`HOBOT_CODE_RDK_EXPERT_PROMPT` | 版本化知识目录与专家 Prompt 文件 |
 
 例如，在调用 `hobot` 前为一次测试使用隔离目录：
@@ -155,9 +229,13 @@ hobot tui --sandbox review
 hobot tui --sandbox workspace
 hobot tui --sandbox system
 hobot tui --sandbox off
+hobot tui --sandbox workspace --network model-only
+hobot tui --sandbox review --network offline
 ```
 
-`review` 保持当前目录只读；`workspace` 允许当前目录写入但不开放 RDK 硬件设备；`system` 在同一文件边界上开放受支持设备白名单；`off` 关闭 OS 隔离，必须由用户明确选择。`workspace` 与 `system` 拒绝把 `/` 或受保护系统目录当作工作区；从 `$HOME` 启动仍可工作，但 SSH/GPG、常见云凭据、Git 凭据、Hobot 配置和 daemon 状态会重新锁为只读。建议进入具体项目目录，以缩小 Agent 的可写范围。四档都继续使用 Pi 参数，例如 `hobot tui --sandbox system -- --resume`。当前网络仍与宿主共享，以便访问模型网关、软件源和开发服务；工具级权限会继续审批网络命令，但这不等价于域名级网络沙箱。
+`review` 保持当前目录只读；`workspace` 允许当前目录写入但不开放 RDK 硬件设备；`system` 在同一文件边界上开放受支持设备白名单；`off` 关闭 OS 隔离，必须由用户明确选择。`workspace` 与 `system` 拒绝把 `/` 或受保护系统目录当作工作区；从 `$HOME` 启动仍可工作，但 SSH/GPG、常见云凭据、Git 凭据、Hobot 配置和 daemon 状态会重新锁为只读。建议进入具体项目目录，以缩小 Agent 的可写范围。四档都继续使用 Pi 参数，例如 `hobot tui --sandbox system -- --resume`。网络默认为 `shared`；`model-only` 使用独立网络命名空间并仅挂载 agentd 的私有模型 Socket；`offline` 连该 Socket 也会隐藏，只适合本地模型。受限网络不能与 `--sandbox off` 组合。
+
+Hobot Code 会把内置 D-Robotics provider 的 `ANTHROPIC_AUTH_TOKEN` 和所有 `HOBOT_CODE_PROVIDER_KEY_*` 受管密钥从长期进程及工具子进程环境中移除。`shared` 使用匿名文件描述符和沙箱 tmpfs 一次性文件把所选凭据交给 Provider；`model-only` 不把任何模型密钥交给 worker，而由 agentd 按启动时冻结的 Provider/模型白名单固定 HTTPS 目标、协议路径、认证头、方法、请求/响应上限和禁止重定向后代发。当前支持 D-Robotics、Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses；Google Generative AI、Pi 登录和自管 `models.json` 必须使用 `shared`。后台 Pi worker 从全局配置生成任务私有、可写的 `settings.json` 与 `models.json` 快照，以支持 Pi 的锁文件机制而不开放全局配置写入；只有 `shared` 模式会复制 Pi 登录所需的 `auth.json`，受限网络任务会主动移除它。Provider 或密钥配置变化后运行 `hobot daemon restart`，否则配置指纹检查会拒绝模型相关操作。托管沙箱内的宿主 `hobot.env` 会被遮蔽。`/doctor` 可查看脱敏状态。这不是同用户宿主进程或 root 管理员之间的边界；能访问模型 Socket 的同用户进程仍可向已批准的模型网关发送数据并消耗额度。
 
 知识库与专家 Prompt 可在开发时覆盖：
 
@@ -210,7 +288,9 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 `/permissions set <pattern> <action>` 将规则放到数组开头并原子写回。配置缺失或无效时使用内置保守默认值并显示警告。`deny` 工具从活跃工具集合移除，调用时仍会复核；旧版 schema 1 中可能修改系统的 `allow` 规则会降级为 `ask`。
 
-`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、板卡诊断、知识检索、只读记忆、目标进度和 LSP。Developer 使用风险审批，即使会话以 root 运行，帮助查询、状态检查、构建和工作区内编辑等普通操作也不会反复确认；质量门执行、持久记忆写入、目标完成、MCP 和未知工具仍然确认。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
+`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、板卡诊断、知识检索、只读记忆、目标进度和 LSP。Developer 使用风险审批，即使会话以 root 运行，帮助查询、状态检查、构建和工作区内编辑等普通操作也不会反复确认；质量门执行、持久记忆写入、目标完成、MCP、未知工具和识别出的外联命令仍然确认。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
+
+`shared` 模式用虚拟 `network` 权限识别 `curl`、`wget`、SSH/SCP、远程 Git、软件包客户端、容器仓库和常见网络诊断命令；默认与 Developer 预设均为 `ask`。可用 `/permissions set network allow|ask|deny` 调整。`allow` 只跳过这层外联提示，下载并执行、系统修改等独立高风险规则仍会审批；该检测是启发式策略，自定义程序可能绕过。对受支持模型，`model-only` 改用内核网络命名空间和固定 Unix Socket 模型代理，工具无法访问通用网络；这比命令识别更强，但不是“模型看不到项目数据”，因为 Agent 上下文本来就会发送给所选模型。`offline` 切断全部网络。不支持注入自定义传输的协议不会被伪装成受保护状态。
 
 root 会话默认使用 `rootMode: "confirm"`，对 `bash`、`write`、`edit` 逐次审批。Developer 预设或 `/permissions root policy` 会改用策略判定，但不会关闭硬安全边界；`/permissions root confirm` 可恢复严格模式。完全相同且非危险的确认调用可以在当前任务内记住，危险 Shell 每次都必须审批。
 
@@ -282,7 +362,7 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 
 ```bash
 hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] \
-  [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--trust-project] -- PROMPT
+  [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
 hobot task list
 hobot task show TASK_ID [--details]
 hobot task logs TASK_ID [--after SEQUENCE] [--follow]
@@ -306,9 +386,9 @@ hobot task delete TASK_ID --yes
 hobot task stop TASK_ID
 ```
 
-后台任务默认使用 OS 隔离：只读权限对应 `review`，普通开发对应 `workspace`，模型部署对应 `system`。`system` 只额外开放 BPU、ION/Hbmem、DMA heap、video 和 media 设备，而不是整个 `/dev`；它仍限制宿主文件写入并丢弃 Linux capabilities。网络为模型网关、包源和开发服务保留共享；需要完全无隔离的系统维护必须显式使用 `--sandbox off`。
+后台任务默认使用 OS 隔离：只读权限对应 `review`，普通开发对应 `workspace`，模型部署对应 `system`。`system` 只额外开放 BPU、ION/Hbmem、DMA heap、video 和 media 设备，而不是整个 `/dev`；它仍限制宿主文件写入并丢弃 Linux capabilities。CLI 为兼容现有工作流默认 `shared`；D-Robotics 及受支持的 Hobot 受管 Anthropic/OpenAI 任务可选更安全的 `--network model-only`，本地模型任务可选 `offline`。需要完全无隔离的系统维护必须显式使用 `--sandbox off`。
 
-`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。首次 `attach` 会显示已持久化事件，之后按已成功显示的事件断点继续跟随；断点每两秒和退出时写入当前用户私有状态，`--replay-all` 才会明确从头回放。失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务标记为 `interrupted`；`resume` 从已校验的 Pi session 续接对话，但不重放中断的 Prompt、审批或工具调用。`show` 与 `approvals` 默认省略 session、审批正文和部署绝对路径，只有显式 `--details` 才返回完整本地记录。归档任务从普通 `list` 中隐藏，但可用 `list --all` 查看；只有已停止且已归档的任务才能显式删除。完整接口见 [agentd 协议](agentd-protocol.md)。
+`hobot task` 会在需要时自动启动当前用户的 daemon。默认最多两个活跃任务，任务空闲时 worker 仍然存活并可继续多轮对话。首次 `attach` 会显示仍保留的持久事件，之后按已成功显示的事件断点继续跟随；断点每两秒和退出时写入当前用户私有状态，`--replay-all` 会从当前滚动保留窗口的起点回放。长任务达到事件空间上限后会原子滚动旧历史并继续持久化，断点早于保留窗口时会显示实际重放起点。失去 SSH 连接不会终止任务。daemon 或板卡重启后，活动任务标记为 `interrupted`；`resume` 从已校验的 Pi session 续接对话，但不重放中断的 Prompt、审批或工具调用。`show` 与 `approvals` 默认省略 session、审批正文和部署绝对路径，只有显式 `--details` 才返回完整本地记录。归档任务从普通 `list` 中隐藏，但可用 `list --all` 查看；只有已停止且已归档的任务才能显式删除。完整接口见 [agentd 协议](agentd-protocol.md)。
 
 桌面客户端应在 SSH 连接上运行 `hobot bridge --stdio`。控制请求和长时订阅各使用一个 bridge 进程；每行是一个 agentd JSON 请求。桥接只转发到当前用户的 Unix socket，不替代板端权限判定。
 

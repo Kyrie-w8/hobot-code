@@ -1,0 +1,164 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact SemVer draft release to promote
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: promote-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate trusted workflow source and exact release tag
+        run: |
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$DEFAULT_BRANCH")"
+          node --input-type=module -e 'import { isStrictSemVer } from "./scripts/release-metadata.mjs"; if (!isStrictSemVer(process.env.RELEASE_VERSION)) process.exit(1)'
+          tag="refs/tags/v$RELEASE_VERSION"
+          test "$(git cat-file -t "$tag")" = tag
+          test "$(git show "${tag}:VERSION")" = "$RELEASE_VERSION"
+          commit=$(git rev-parse "$tag^{commit}")
+          test "${#commit}" -eq 40
+          echo "HOBOT_RELEASE_COMMIT=$commit" >> "$GITHUB_ENV"
+
+      - name: Require a draft release and exact pre-promotion assets
+        run: |
+          test "$(gh release view "v$RELEASE_VERSION" --json isDraft --jq '.isDraft')" = true
+          verification="$RUNNER_TEMP/hobot-code-promote-$RELEASE_VERSION"
+          mkdir -m 700 "$verification"
+          gh release view "v$RELEASE_VERSION" --json assets --jq '.assets[].name' | sort > "$verification/actual-assets.txt"
+          cat > "$verification/expected-assets.txt" <<EOF
+          hobot-code-$RELEASE_VERSION-board-acceptance.json
+          hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz
+          hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz.sha256
+          hobot-code-$RELEASE_VERSION-macos-arm64.dmg
+          hobot-code-$RELEASE_VERSION-macos-arm64.dmg.sha256
+          hobot-code-version.txt
+          hobot-install.sh
+          EOF
+          sort -o "$verification/expected-assets.txt" "$verification/expected-assets.txt"
+          cp "$verification/expected-assets.txt" "$verification/expected-with-evidence.txt"
+          echo "hobot-code-$RELEASE_VERSION-release-evidence.json" >> "$verification/expected-with-evidence.txt"
+          sort -o "$verification/expected-with-evidence.txt" "$verification/expected-with-evidence.txt"
+          if ! cmp -s "$verification/expected-assets.txt" "$verification/actual-assets.txt"; then
+            diff -u "$verification/expected-with-evidence.txt" "$verification/actual-assets.txt"
+          fi
+          echo "HOBOT_PROMOTION_DIR=$verification" >> "$GITHUB_ENV"
+
+      - name: Download and verify release assets
+        run: |
+          gh release download "v$RELEASE_VERSION" --dir "$HOBOT_PROMOTION_DIR"
+          cd "$HOBOT_PROMOTION_DIR"
+          verify_checksum() {
+            checksum_file=$1
+            artifact=$2
+            test "$(wc -c < "$checksum_file" | tr -d ' ')" -le 512
+            test "$(wc -l < "$checksum_file" | tr -d ' ')" = 1
+            record=$(sed -n '1p' "$checksum_file")
+            test "$(printf '%s\n' "$record" | awk '{print NF}')" = 2
+            expected=$(printf '%s\n' "$record" | awk '{print $1}')
+            target=$(printf '%s\n' "$record" | awk '{print $2}')
+            case "$target" in \** ) target=${target#\*} ;; esac
+            test "$target" = "$artifact"
+            test "$expected" = "$(sha256sum "$artifact" | awk '{print $1}')"
+          }
+          verify_checksum "hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz.sha256" "hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz"
+          verify_checksum "hobot-code-$RELEASE_VERSION-macos-arm64.dmg.sha256" "hobot-code-$RELEASE_VERSION-macos-arm64.dmg"
+          test "$(wc -c < hobot-code-version.txt | tr -d ' ')" -le 128
+          test "$(sed -n '1p' hobot-code-version.txt)" = "$RELEASE_VERSION"
+
+      - name: Verify build provenance before promotion
+        run: |
+          cd "$HOBOT_PROMOTION_DIR"
+          gh attestation verify "hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "hobot-code-$RELEASE_VERSION-macos-arm64.dmg" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify hobot-install.sh --repo "$GITHUB_REPOSITORY"
+          gh attestation verify hobot-code-version.txt --repo "$GITHUB_REPOSITORY"
+
+      - name: Validate candidate and generate release evidence
+        id: candidate
+        run: |
+          archive="$HOBOT_PROMOTION_DIR/hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz"
+          root_name="hobot-code-$RELEASE_VERSION-linux-arm64"
+          extract_root="$HOBOT_PROMOTION_DIR/extracted"
+          matrix="$HOBOT_PROMOTION_DIR/hobot-code-$RELEASE_VERSION-board-acceptance.json"
+          generated="$HOBOT_PROMOTION_DIR/hobot-code-$RELEASE_VERSION-release-evidence.generated.json"
+          evidence="$HOBOT_PROMOTION_DIR/hobot-code-$RELEASE_VERSION-release-evidence.json"
+          mkdir -m 700 "$extract_root"
+          scripts/validate-tar-archive.sh "$archive" "$root_name" "Hobot Code release"
+          tar -xzf "$archive" -C "$extract_root"
+          node scripts/validate-release-candidate.mjs \
+            --package-root "$extract_root/$root_name" \
+            --archive "$archive" \
+            --matrix "$matrix" \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-commit "$HOBOT_RELEASE_COMMIT" \
+            --output "$generated"
+          upload=true
+          if [ -f "$evidence" ]; then
+            cmp "$generated" "$evidence"
+            rm -f "$generated"
+            upload=false
+          else
+            mv "$generated" "$evidence"
+          fi
+          echo "evidence_path=$evidence" >> "$GITHUB_OUTPUT"
+          echo "upload=$upload" >> "$GITHUB_OUTPUT"
+
+      - name: Attest release evidence
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.candidate.outputs.evidence_path }}
+
+      - name: Upload release evidence
+        if: steps.candidate.outputs.upload == 'true'
+        run: gh release upload "v$RELEASE_VERSION" "${{ steps.candidate.outputs.evidence_path }}"
+
+      - name: Verify final assets and publish
+        run: |
+          test "$(gh release view "v$RELEASE_VERSION" --json isDraft --jq '.isDraft')" = true
+          cat > "$HOBOT_PROMOTION_DIR/final-assets.txt" <<EOF
+          hobot-code-$RELEASE_VERSION-board-acceptance.json
+          hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz
+          hobot-code-$RELEASE_VERSION-linux-arm64.tar.gz.sha256
+          hobot-code-$RELEASE_VERSION-macos-arm64.dmg
+          hobot-code-$RELEASE_VERSION-macos-arm64.dmg.sha256
+          hobot-code-$RELEASE_VERSION-release-evidence.json
+          hobot-code-version.txt
+          hobot-install.sh
+          EOF
+          sort -o "$HOBOT_PROMOTION_DIR/final-assets.txt" "$HOBOT_PROMOTION_DIR/final-assets.txt"
+          gh release view "v$RELEASE_VERSION" --json assets --jq '.assets[].name' | sort > "$HOBOT_PROMOTION_DIR/actual-final-assets.txt"
+          diff -u "$HOBOT_PROMOTION_DIR/final-assets.txt" "$HOBOT_PROMOTION_DIR/actual-final-assets.txt"
+          gh release edit "v$RELEASE_VERSION" --draft=false
+
+      - name: Record published evidence
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Hobot Code $RELEASE_VERSION published
+
+          The exact ARM64 archive, clean tag build identity, Pi compatibility contract, and complete X5/S100/S600 matrix are bound by the attached release evidence and GitHub provenance attestation.
+          EOF

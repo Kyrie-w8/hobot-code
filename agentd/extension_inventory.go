@@ -21,10 +21,15 @@ const (
 	maximumInventoryEntries     = 64
 )
 
-func discoverConfiguredExtensions(catalog extensionCatalog) extensionCatalog {
+type extensionInventoryContext struct {
+	Cwd            string
+	ProjectTrusted bool
+}
+
+func discoverConfiguredExtensions(catalog extensionCatalog, contexts ...extensionInventoryContext) extensionCatalog {
 	catalog.CapturedAt = time.Now().UTC().Format(time.RFC3339)
 	entries := append([]extensionEntry(nil), catalog.Entries...)
-	diagnostics := make([]extensionDiagnostic, 0, 3)
+	diagnostics := make([]extensionDiagnostic, 0, 4)
 	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		seen[entry.ID] = struct{}{}
@@ -37,6 +42,7 @@ func discoverConfiguredExtensions(catalog extensionCatalog) extensionCatalog {
 		load func(map[string]any) ([]extensionEntry, bool)
 	}{
 		{name: "providers", path: paths.models, load: configuredProviders},
+		{name: "managed-providers", path: paths.managedProviders, load: configuredManagedProviders},
 		{name: "hooks", path: paths.hooks, load: configuredHooks},
 		{name: "lsp", path: paths.lsp, load: configuredLSP},
 	}
@@ -63,6 +69,23 @@ func discoverConfiguredExtensions(catalog extensionCatalog) extensionCatalog {
 		}
 		diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: sourceStatus, Message: inventoryDiagnosticMessage(source.name, sourceStatus)})
 	}
+	var inventoryContext *extensionInventoryContext
+	if len(contexts) > 0 {
+		inventoryContext = &contexts[0]
+	}
+	for _, source := range discoverPiResourceSources(paths, inventoryContext) {
+		sourceStatus := source.status
+		for _, entry := range source.entries {
+			if len(entries) >= maximumCatalogEntries {
+				sourceStatus = "truncated"
+				break
+			}
+			entry.ID = uniqueInventoryID(entry.ID, seen)
+			seen[entry.ID] = struct{}{}
+			entries = append(entries, entry)
+		}
+		diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: sourceStatus, Message: source.message})
+	}
 
 	sort.Slice(entries, func(left, right int) bool { return entries[left].ID < entries[right].ID })
 	catalog.Entries = entries
@@ -71,9 +94,11 @@ func discoverConfiguredExtensions(catalog extensionCatalog) extensionCatalog {
 }
 
 type configuredExtensionPathSet struct {
-	models string
-	hooks  string
-	lsp    string
+	agentDir         string
+	models           string
+	managedProviders string
+	hooks            string
+	lsp              string
 }
 
 func configuredExtensionPaths() configuredExtensionPathSet {
@@ -97,7 +122,11 @@ func configuredExtensionPaths() configuredExtensionPathSet {
 	if lsp == "" {
 		lsp = filepath.Join(agentDir, "lsp.json")
 	}
-	return configuredExtensionPathSet{models: filepath.Join(agentDir, "models.json"), hooks: hooks, lsp: lsp}
+	managedProviders := strings.TrimSpace(os.Getenv("HOBOT_CODE_MANAGED_PROVIDER_CONFIG"))
+	if managedProviders == "" {
+		managedProviders = filepath.Join(agentDir, "providers.json")
+	}
+	return configuredExtensionPathSet{agentDir: agentDir, models: filepath.Join(agentDir, "models.json"), managedProviders: managedProviders, hooks: hooks, lsp: lsp}
 }
 
 func readPrivateInventoryConfig(path string) (map[string]any, string) {
@@ -137,10 +166,62 @@ func readPrivateInventoryConfig(path string) (map[string]any, string) {
 		return nil, "unsafe"
 	}
 	var document map[string]any
-	if json.Unmarshal(raw, &document) != nil || document == nil {
+	if rejectDuplicateJSONKeys(string(raw)) != nil || json.Unmarshal(raw, &document) != nil || document == nil {
 		return nil, "invalid"
 	}
 	return document, "ok"
+}
+
+func configuredManagedProviders(document map[string]any) ([]extensionEntry, bool) {
+	providers, err := validateManagedProviderDocument(document)
+	if err != nil {
+		return nil, false
+	}
+	entries := make([]extensionEntry, 0, len(providers))
+	for _, provider := range providers {
+		id := provider["id"].(string)
+		models := provider["models"].([]any)
+		entries = append(entries, extensionEntry{
+			ID: "managed.provider." + inventorySlug(id), Name: strings.TrimSpace(id), Version: "configured", Kind: "provider",
+			Description: inventoryCountDescription("Hobot-managed credential provider", len(models), "model"), Origin: "user", Scope: "user", Runtime: "hobot-provider",
+			Entrypoint: "providers.json#" + inventorySlug(id), Trust: "user", DefaultEnabled: true, Provides: []string{"provider." + inventorySlug(id)}, Requires: []string{"hobot.rdk-core"}, Permissions: []string{"model-network"}, Targets: []string{}, Status: "configured",
+		})
+	}
+	return entries, true
+}
+
+func validateManagedProviderDocument(document map[string]any) ([]map[string]any, error) {
+	schema, schemaOK := integerValue(document["schemaVersion"])
+	rawProviders, providersOK := document["providers"].([]any)
+	if !schemaOK || schema != 1 || !providersOK || len(document) != 2 || len(rawProviders) > maximumManagedProviders {
+		return nil, fmt.Errorf("invalid managed provider schema")
+	}
+	providers := make([]map[string]any, 0, len(rawProviders))
+	seen := make(map[string]bool, len(rawProviders))
+	for _, raw := range rawProviders {
+		provider, ok := raw.(map[string]any)
+		if !ok || !hasOnlyFields(provider, managedProviderFields) {
+			return nil, fmt.Errorf("invalid managed provider entry")
+		}
+		id, idOK := provider["id"].(string)
+		baseURL, baseURLOK := provider["baseUrl"].(string)
+		api, apiOK := provider["api"].(string)
+		credential, credentialOK := provider["credentialEnv"].(string)
+		models, modelsOK := provider["models"].([]any)
+		if !idOK || !managedProviderIDPattern.MatchString(id) || id == "drobotics" || seen[id] || !optionalSafeLabel(provider["name"], 120) || !baseURLOK || !safeManagedProviderURL(baseURL) || !apiOK || !managedProviderAPIs[api] || !credentialOK || !validProviderCredentialEnvironment(credential) || !optionalBoolean(provider["authHeader"]) || !modelsOK || len(models) < 1 || len(models) > maximumManagedModels {
+			return nil, fmt.Errorf("invalid managed provider")
+		}
+		seen[id] = true
+		modelIDs := make(map[string]bool, len(models))
+		for _, rawModel := range models {
+			model, ok := rawModel.(map[string]any)
+			if !ok || !validManagedModel(model, modelIDs) {
+				return nil, fmt.Errorf("invalid managed model")
+			}
+		}
+		providers = append(providers, provider)
+	}
+	return providers, nil
 }
 
 func privateInventoryFileInfo(info os.FileInfo) bool {
@@ -327,8 +408,14 @@ func uniqueInventoryID(candidate string, seen map[string]struct{}) string {
 }
 
 func integerValue(value any) (int, bool) {
-	number, ok := value.(float64)
-	return int(number), ok && number == float64(int(number))
+	switch number := value.(type) {
+	case int:
+		return number, true
+	case float64:
+		return int(number), number == float64(int(number))
+	default:
+		return 0, false
+	}
 }
 
 func inventoryCountDescription(prefix string, count int, singular string) string {
@@ -347,7 +434,7 @@ func inventoryIndexDetail(index int) string {
 }
 
 func inventoryDiagnosticMessage(source, status string) string {
-	labels := map[string]string{"providers": "Provider", "hooks": "Hook", "lsp": "LSP"}
+	labels := map[string]string{"providers": "Pi provider", "managed-providers": "Managed provider", "hooks": "Hook", "lsp": "LSP"}
 	label := labels[source]
 	switch status {
 	case "ok":

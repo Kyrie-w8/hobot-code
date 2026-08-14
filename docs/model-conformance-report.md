@@ -18,14 +18,15 @@ Environment:
 
 | Model | Result | Native tool stream | Tool call | Tool-result continuation | Image input | Observed duration |
 | --- | --- | --- | --- | --- | --- | ---: |
-| `qwen3.8-max` | Verified | Passed | Passed | Passed | Passed | 5.0 s |
-| `glm-5.2` | Compatible | Buffered fallback | Passed | Passed | Passed | 10.8 s |
+| `qwen3.8-max` | Protocol OK | Passed | Passed | Passed | Passed | 5.0 s |
+| `glm-5.2` | Protocol fallback | Buffered fallback | Passed | Passed | Passed | 10.8 s |
 | `kimi-k3` | Not verified in this run | Buffered fallback | Passed | Passed | Gateway image request was unstable | 40.7 s |
 
-`Verified` means every required step completed with an explicit native stream
-terminal event. `Compatible` means the complete Agent protocol worked, but one
-or more successful streamed requests required Hobot Code's bounded JSON
-fallback. A failed run must remain visible even when an earlier run passed;
+`Protocol OK` means every probed gateway step completed with an explicit native
+stream terminal event. `Protocol fallback` means the bounded gateway sequence
+worked, but one or more successful streamed requests required Hobot Code's JSON
+fallback. Neither label proves the complete Pi Agent runtime or RDK task
+quality. A failed run must remain visible even when an earlier run passed;
 declared image support does not prove current route stability.
 
 The Kimi K3 tool stream ended before the terminal event but its buffered
@@ -37,11 +38,12 @@ K3 image input for production use.
 Re-run the current route before relying on it:
 
 ```bash
-hobot model verify --force drobotics/qwen3.8-max
-hobot model verify --force drobotics/glm-5.2
-hobot model verify --force drobotics/kimi-k3
+hobot model probe --force drobotics/qwen3.8-max
+hobot model probe --force drobotics/glm-5.2
+hobot model probe --force drobotics/kimi-k3
 ```
 
-The conformance probe does not measure reasoning quality, long-context
-stability, prompt-cache efficiency, RDK task completion rate, quota, or cost.
-Those require separate pinned evaluations.
+The conformance probe does not execute the complete Pi Agent runtime and does
+not measure reasoning quality, long-context stability, prompt-cache efficiency,
+RDK task completion rate, quota, or cost. Those require the separate pinned
+levels defined in [Model adaptation levels](model-adaptation-levels.md).

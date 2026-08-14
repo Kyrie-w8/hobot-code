@@ -31,6 +31,7 @@ import {
   validateGatewayUsage,
 } from "./drobotics-response.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
+import { modelEgressFetch, modelEgressProviderEnabled, resolveModelEgressSocket } from "./model-egress.mjs";
 
 export const DEFAULT_DROBOTICS_BASE_URL = "https://ai-api.d-robotics.cc";
 
@@ -437,8 +438,9 @@ export function streamDrobotics(
       controller.abort();
     }, timeoutMs);
 
-    try {
-      if (!extendedOptions.apiKey) throw new Error("ANTHROPIC_AUTH_TOKEN is not configured");
+	try {
+			const modelEgressSocket = modelEgressProviderEnabled("drobotics") ? resolveModelEgressSocket() : "";
+		if (!extendedOptions.apiKey && !modelEgressSocket) throw new Error("ANTHROPIC_AUTH_TOKEN is not configured");
       stream.push({ type: "start", partial: output });
 
       const requestedMaxTokens = extendedOptions.maxTokens ?? model.maxTokens;
@@ -467,7 +469,9 @@ export function streamDrobotics(
       };
 
       const endpoint = `${(model.baseUrl || DEFAULT_DROBOTICS_BASE_URL).replace(/\/$/, "")}/v1/messages`;
-      const transport = extendedOptions.fetch ?? fetch;
+		const transport = extendedOptions.fetch ?? (modelEgressSocket
+			? (input: RequestInfo | URL, init?: RequestInit) => modelEgressFetch(modelEgressSocket, "drobotics", input, init)
+			: fetch);
       const request = (payload: JsonRecord, accept: string) => {
         const headers = new Headers({
           Accept: accept,

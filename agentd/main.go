@@ -21,14 +21,23 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Hobot Code background task service
 
 Usage:
-  hobot tui [--sandbox review|workspace|system|off] [-- PI_OPTIONS...]
+  hobot tui [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [-- PI_OPTIONS...]
   hobot daemon start|status
   hobot daemon stop|restart [--force]
   hobot bridge --stdio
+  hobot doctor [--json] [--repair ACTION --yes]
   hobot diagnose [--json]
-  hobot extensions [--json]
+  hobot extensions [--json] [--task ID]
+  hobot provider list [--json]
+  hobot provider add PROVIDER --base-url URL --model MODEL [options]
+  hobot provider rotate PROVIDER [--token-stdin] [--yes-shared]
+  hobot provider remove PROVIDER --yes [--keep-credential]
   hobot model check [--force] [--json] PROVIDER/MODEL
-  hobot model verify [--force] [--json] PROVIDER/MODEL
+  hobot model probe [--force] [--json] PROVIDER/MODEL
+  hobot model runtime-probe [--json] PROVIDER/MODEL
+  hobot model rdk-probe [--profile ID] [--json] PROVIDER/MODEL
+  hobot model profiles [--json] PROVIDER/MODEL
+  hobot model status [--json] PROVIDER/MODEL
   hobot deploy inspect [--cwd DIR]
   hobot deploy start [--cwd DIR] [--goal deploy-and-validate|benchmark] [--profile PROFILE] [--name NAME] [--model PROVIDER/MODEL] [--permissions ask|developer] [--sandbox system|off] ARTIFACT
   hobot deploy status TASK_ID
@@ -38,7 +47,7 @@ Usage:
   hobot workspace delivery TASK_ID
   hobot workspace apply TASK_ID --yes
   hobot workspace cleanup TASK_ID --yes
-  hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--trust-project] -- PROMPT
+  hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
   hobot task list [--all]
   hobot task show TASK_ID [--details]
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
@@ -53,12 +62,33 @@ Usage:
   hobot task model TASK_ID PROVIDER/MODEL
   hobot task permissions TASK_ID review|ask|developer
   hobot task sandbox TASK_ID review|workspace|system|off
+  hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
   hobot task stop TASK_ID`)
 }
 
 func main() {
+	credentials, credentialErr := ambientGatewayCredentials(os.Environ())
+	credentialPayload, encodeErr := encodeGatewayCredentialBundle(credentials)
+	if credentialErr != nil || encodeErr != nil {
+		if credentialErr != nil {
+			fmt.Fprintln(os.Stderr, "Error: isolate model gateway credential:", credentialErr)
+		} else {
+			fmt.Fprintln(os.Stderr, "Error: isolate model gateway credential:", encodeErr)
+		}
+		os.Exit(1)
+	}
+	if credentialPayload != "" {
+		executable, err := os.Executable()
+		if err == nil {
+			err = replaceProcess(executable, os.Args[1:], environmentWithoutGatewayCredential(os.Environ()), credentialPayload)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: isolate model gateway credential:", err)
+			os.Exit(1)
+		}
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
@@ -66,13 +96,24 @@ func main() {
 }
 
 func run(args []string) error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
 	if len(args) == 0 {
 		usage()
 		return fmt.Errorf("a daemon or task command is required")
+	}
+	switch args[0] {
+	case "version", "--version", "-v":
+		if releaseMarker == "" {
+			return fmt.Errorf("agentd release marker is missing")
+		}
+		fmt.Println(version)
+		return nil
+	case "help", "--help", "-h":
+		usage()
+		return nil
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
 	}
 	switch args[0] {
 	case "serve":
@@ -89,8 +130,12 @@ func run(args []string) error {
 		return runDeploymentCLI(cfg, args[1:])
 	case "diagnose":
 		return runDiagnoseCLI(cfg, args[1:])
+	case "doctor":
+		return runDoctorCLI(cfg, args[1:])
 	case "extensions":
 		return runExtensionsCLI(cfg, args[1:])
+	case "provider":
+		return runProviderCLI(cfg, args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "model":
 		return runModelCLI(cfg, args[1:])
 	case "bridge":
@@ -98,46 +143,49 @@ func run(args []string) error {
 			return fmt.Errorf("usage: hobot bridge --stdio")
 		}
 		return runStdioBridge(cfg)
-	case "version", "--version", "-v":
-		if releaseMarker == "" {
-			return fmt.Errorf("agentd release marker is missing")
-		}
-		fmt.Println(version)
-		return nil
-	case "help", "--help", "-h":
-		usage()
-		return nil
 	default:
 		usage()
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
 }
 
-func parseTUIArgs(args []string) (string, []string, error) {
+func parseTUIArgs(args []string) (string, string, []string, error) {
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	defaultMode := strings.TrimSpace(os.Getenv("HOBOT_CODE_TUI_SANDBOX"))
 	if defaultMode == "" {
 		defaultMode = sandboxModeSystem
 	}
+	defaultNetwork := strings.TrimSpace(os.Getenv("HOBOT_CODE_TUI_NETWORK"))
+	if defaultNetwork == "" {
+		defaultNetwork = networkModeShared
+	}
 	sandbox := flags.String("sandbox", defaultMode, "OS sandbox: review, workspace, system, or off")
+	network := flags.String("network", defaultNetwork, "network boundary: shared, model-only, or offline")
 	if err := flags.Parse(args); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	mode, err := normalizeSandboxMode(*sandbox)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	return mode, flags.Args(), nil
+	networkMode, err := normalizeNetworkMode(*network)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return mode, networkMode, flags.Args(), nil
 }
 
 func runTUICLI(cfg config, args []string) error {
-	requested, agentArgs, err := parseTUIArgs(args)
+	requested, requestedNetwork, agentArgs, err := parseTUIArgs(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
+	}
+	if err := prepareUserPaths(cfg); err != nil {
+		return fmt.Errorf("prepare private user paths: %w", err)
 	}
 	workingDirectory, err := os.Getwd()
 	if err != nil {
@@ -147,13 +195,34 @@ func runTUICLI(cfg config, args []string) error {
 	if err != nil {
 		return err
 	}
+	networkMode, status, err := resolveNetworkMode(requestedNetwork, mode, status)
+	if err != nil {
+		return err
+	}
+	if networkMode != networkModeShared {
+		if err := probeSandboxNetworkBackend(cfg.SandboxBinary); err != nil {
+			return fmt.Errorf("%s network sandbox self-test failed: %w", networkMode, err)
+		}
+	}
+	if networkMode == networkModeModelOnly {
+		client := daemonClient{cfg: cfg}
+		if err := client.ensureStarted(); err != nil {
+			return fmt.Errorf("start model egress broker: %w", err)
+		}
+		if _, err := client.checkConfiguration("starting the TUI with model-only networking"); err != nil {
+			return err
+		}
+		if !modelEgressSocketReady(cfg) {
+			return fmt.Errorf("model egress broker is unavailable; run `hobot daemon restart`")
+		}
+	}
 	commandName := cfg.AgentBinary
 	commandArgs := agentArgs
 	if mode != sandboxModeOff {
 		if err := probeSandboxBackend(cfg.SandboxBinary); err != nil {
 			return fmt.Errorf("OS sandbox self-test failed: %w; fix bubblewrap or explicitly choose --sandbox off", err)
 		}
-		commandName, commandArgs, err = foregroundSandboxCommand(cfg, workingDirectory, mode, agentArgs)
+		commandName, commandArgs, err = foregroundSandboxCommand(cfg, workingDirectory, mode, networkMode, agentArgs, networkMode == networkModeShared && gatewayCredentialPayload(cfg) != "")
 		if err != nil {
 			return err
 		}
@@ -162,25 +231,34 @@ func runTUICLI(cfg config, args []string) error {
 		"HOBOT_CODE_SANDBOX_SCOPE=foreground",
 		"HOBOT_CODE_SANDBOX_MODE="+mode,
 		"HOBOT_CODE_SANDBOX_BACKEND="+status.Backend,
+		"HOBOT_CODE_NETWORK_MODE="+networkMode,
 	)
-	return replaceProcess(commandName, commandArgs, environment)
+	credentialPayload := ""
+	if networkMode == networkModeShared {
+		credentialPayload = gatewayCredentialPayload(cfg)
+	}
+	return replaceProcess(commandName, commandArgs, environmentWithoutGatewayCredential(environment), credentialPayload)
 }
 
 func runExtensionsCLI(cfg config, args []string) error {
 	flags := flag.NewFlagSet("extensions", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	jsonOutput := flags.Bool("json", false, "print the extension catalog as JSON")
+	taskID := flags.String("task", "", "include trusted project resources for a task")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("usage: hobot extensions [--json]")
+		return fmt.Errorf("usage: hobot extensions [--json] [--task ID]")
+	}
+	if *taskID != "" && !taskIDPattern.MatchString(*taskID) {
+		return fmt.Errorf("task ID is invalid")
 	}
 	client := daemonClient{cfg: cfg}
 	if err := client.ensureStarted(); err != nil {
 		return err
 	}
-	result, err := client.call("extensions.list", struct{}{})
+	result, err := client.call("extensions.list", map[string]string{"taskId": *taskID})
 	if err != nil {
 		return err
 	}
@@ -191,12 +269,19 @@ func runExtensionsCLI(cfg config, args []string) error {
 	if *jsonOutput {
 		return printJSON(catalog)
 	}
-	fmt.Printf("Hobot Code extensions (%d)\n", len(catalog.Entries))
+	contextLabel := "global"
+	if *taskID != "" {
+		contextLabel = "task " + *taskID
+	}
+	fmt.Printf("Hobot Code capabilities (%d, %s)\n", len(catalog.Entries), contextLabel)
 	for _, entry := range catalog.Entries {
-		state := "available"
+		state := entry.Status
+		if state == "" {
+			state = "available"
+		}
 		if entry.Required {
 			state = "required"
-		} else if entry.DefaultEnabled {
+		} else if entry.DefaultEnabled && entry.Status == "" {
 			state = "enabled"
 		}
 		fmt.Printf("%-34s %-10s %-9s %s\n", entry.ID, entry.Kind, state, entry.Name)
@@ -354,25 +439,90 @@ func runWorkspaceCLI(cfg config, args []string) error {
 }
 
 func runModelCLI(cfg config, args []string) error {
-	if len(args) == 0 || (args[0] != "check" && args[0] != "verify") {
-		return fmt.Errorf("usage: hobot model check|verify [--force] [--json] PROVIDER/MODEL")
+	if len(args) == 0 || (args[0] != "check" && args[0] != "probe" && args[0] != "verify" && args[0] != "runtime-probe" && args[0] != "rdk-probe" && args[0] != "profiles" && args[0] != "status") {
+		return fmt.Errorf("usage: hobot model check|probe|runtime-probe|rdk-probe|profiles|status [options] PROVIDER/MODEL")
 	}
 	operation := args[0]
+	if operation == "verify" {
+		operation = "probe"
+	}
 	flags := flag.NewFlagSet("model "+operation, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	force := flags.Bool("force", false, "bypass the cached result")
 	jsonOutput := flags.Bool("json", false, "print the result as JSON")
+	profile := flags.String("profile", rdkProbeProfile, "select a bounded RDK workflow profile")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return fmt.Errorf("usage: hobot model %s [--force] [--json] PROVIDER/MODEL", operation)
+		return fmt.Errorf("usage: hobot model %s [--force] [--profile ID] [--json] PROVIDER/MODEL", operation)
+	}
+	if (operation == "runtime-probe" || operation == "rdk-probe" || operation == "profiles" || operation == "status") && *force {
+		return fmt.Errorf("--force is not supported by %s because results are never cached", operation)
+	}
+	if operation != "rdk-probe" && *profile != rdkProbeProfile {
+		return fmt.Errorf("--profile is supported only by rdk-probe")
 	}
 	client := daemonClient{cfg: cfg}
 	if err := client.ensureStarted(); err != nil {
 		return err
 	}
-	if operation == "verify" {
+	if operation == "status" {
+		result, err := client.call("models.qualification", modelQualificationParams{Model: flags.Arg(0)})
+		if err != nil {
+			return err
+		}
+		var qualification modelQualificationResult
+		if err := json.Unmarshal(result, &qualification); err != nil {
+			return err
+		}
+		if *jsonOutput {
+			return printJSON(qualification)
+		}
+		fmt.Printf("Model: %s/%s\n", qualification.Provider, qualification.Model)
+		fmt.Printf("Evidence: %s\n", qualification.State)
+		fmt.Printf("Level: %s\n", qualification.Level)
+		fmt.Printf("Outcome: %s\n", qualification.Outcome)
+		if !qualification.UpdatedAt.IsZero() {
+			fmt.Printf("Updated: %s\n", qualification.UpdatedAt.Format(time.RFC3339))
+		}
+		if len(qualification.StaleReasons) > 0 {
+			fmt.Printf("Retest reasons: %s\n", strings.Join(qualification.StaleReasons, ", "))
+		}
+		if len(qualification.ExpiredLayers) > 0 {
+			fmt.Printf("Expired layers: %s\n", strings.Join(qualification.ExpiredLayers, ", "))
+		}
+		fmt.Println("This command reads private board evidence and makes no model request.")
+		return nil
+	}
+	if operation == "profiles" {
+		result, err := client.call("models.rdk-matrix", modelRDKMatrixParams{Model: flags.Arg(0)})
+		if err != nil {
+			return err
+		}
+		var matrix modelRDKMatrixResult
+		if err := json.Unmarshal(result, &matrix); err != nil {
+			return err
+		}
+		if *jsonOutput {
+			return printJSON(matrix)
+		}
+		fmt.Printf("Model: %s/%s\n", matrix.Provider, matrix.Model)
+		fmt.Printf("Target: %s | RDK OS %s | %s\n", matrix.BoardID, matrix.RDKOSVersion, matrix.Architecture)
+		for _, item := range matrix.Profiles {
+			outcome := item.EvidenceState
+			if item.Result != nil {
+				outcome += "/" + item.Result.Status
+			}
+			fmt.Printf("  %-46s %-18s %s\n", item.ID, item.Availability, outcome)
+			if len(item.StaleReasons) > 0 {
+				fmt.Printf("    Retest: %s\n", strings.Join(item.StaleReasons, ", "))
+			}
+		}
+		fmt.Println("Read-only planning profiles do not prove conversion, inference, media execution, or hardware mutation outcomes.")
+		return nil
+	}
+	if operation == "probe" {
 		result, err := client.call("models.conformance", modelConformanceParams{Model: flags.Arg(0), Force: *force})
 		if err != nil {
 			return err
@@ -387,7 +537,10 @@ func runModelCLI(cfg config, args []string) error {
 			}
 		} else {
 			fmt.Printf("Model: %s/%s\n", verification.Provider, verification.Model)
-			fmt.Printf("Verification: %s\n", verification.Status)
+			fmt.Printf("Scope: %s\n", verification.Scope)
+			fmt.Printf("Protocol: %s\n", verification.Status)
+			fmt.Printf("Agent runtime: %s\n", verification.RuntimeStatus)
+			fmt.Printf("RDK tasks: %s\n", verification.RDKTaskStatus)
 			for _, check := range verification.Checks {
 				fmt.Printf("  %-12s %s", check.Name, check.Status)
 				if check.LatencyMS > 0 {
@@ -398,7 +551,71 @@ func runModelCLI(cfg config, args []string) error {
 			fmt.Printf("Checked: %s%s\n", verification.CheckedAt.Format(time.RFC3339), map[bool]string{true: " (cached)", false: ""}[verification.Cached])
 		}
 		if verification.Status != "verified" && verification.Status != "compatible" {
-			return fmt.Errorf("model did not pass Agent protocol verification")
+			return fmt.Errorf("model did not pass the gateway protocol probe")
+		}
+		return nil
+	}
+	if operation == "runtime-probe" {
+		result, err := client.call("models.runtime-probe", modelRuntimeProbeParams{Model: flags.Arg(0)})
+		if err != nil {
+			return err
+		}
+		var probe modelRuntimeProbeResult
+		if err := json.Unmarshal(result, &probe); err != nil {
+			return err
+		}
+		if *jsonOutput {
+			if err := printJSON(probe); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Model: %s/%s\n", probe.Provider, probe.Model)
+			fmt.Printf("Scope: %s\n", probe.Scope)
+			fmt.Printf("Agent runtime: %s\n", probe.Status)
+			if probe.Category != "" {
+				fmt.Printf("Failure stage: %s\n", probe.Category)
+			}
+			for _, check := range probe.Checks {
+				fmt.Printf("  %-18s %s - %s\n", check.Name, check.Status, check.Message)
+			}
+			fmt.Printf("Pending: %s\n", strings.Join(probe.Pending, ", "))
+			fmt.Printf("Checked: %s\n", probe.CheckedAt.Format(time.RFC3339))
+		}
+		if probe.Status == "failed" {
+			return fmt.Errorf("model did not pass the bounded Pi Agent runtime probe")
+		}
+		return nil
+	}
+	if operation == "rdk-probe" {
+		result, err := client.call("models.rdk-probe", modelRDKProbeParams{Model: flags.Arg(0), Profile: *profile})
+		if err != nil {
+			return err
+		}
+		var probe modelRDKProbeResult
+		if err := json.Unmarshal(result, &probe); err != nil {
+			return err
+		}
+		if *jsonOutput {
+			if err := printJSON(probe); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Model: %s/%s\n", probe.Provider, probe.Model)
+			fmt.Printf("Profile: %s\n", probe.Profile)
+			fmt.Printf("RDK task: %s\n", probe.Status)
+			fmt.Printf("Target: %s | RDK OS %s | %s\n", probe.Binding.BoardID, probe.Binding.RDKOSVersion, probe.Binding.Architecture)
+			fmt.Printf("Release evidence: %t\n", probe.ReleaseEligible)
+			if probe.Category != "" {
+				fmt.Printf("Failure stage: %s\n", probe.Category)
+			}
+			for _, check := range probe.Checks {
+				fmt.Printf("  %-22s %s - %s\n", check.Name, check.Status, check.Message)
+			}
+			fmt.Printf("Not covered: %s\n", strings.Join(probe.NotCovered, ", "))
+			fmt.Printf("Checked: %s\n", probe.CheckedAt.Format(time.RFC3339))
+		}
+		if probe.Status != "passed" {
+			return fmt.Errorf("model did not pass the selected read-only RDK profile")
 		}
 		return nil
 	}
@@ -458,11 +675,135 @@ func runDiagnoseCLI(cfg config, args []string) error {
 		return printJSON(bundle)
 	}
 	fmt.Println("Hobot Code diagnostics completed.")
-	fmt.Printf("Health: %d passed, %d warnings, %d failed.\n", bundle.Checks.Pass, bundle.Checks.Warn, bundle.Checks.Fail)
+	fmt.Printf("Status: %s\n", supportStatusLabel(bundle.Status))
+	fmt.Printf("Health: %d passed, %d informational, %d %s, %d failed.\n", bundle.Checks.Pass, bundle.Checks.Info, bundle.Checks.Warn, countedLabel(bundle.Checks.Warn, "warning"), bundle.Checks.Fail)
+	for _, finding := range bundle.Findings {
+		fmt.Printf("- [%s] %s: %s\n", finding.Severity, finding.Title, finding.Summary)
+		fmt.Printf("  Next: %s\n", finding.Action)
+	}
 	fmt.Printf("Support bundle: %s\n", bundle.Path)
 	fmt.Printf("Size: %d bytes  SHA-256: %s\n", bundle.SizeBytes, bundle.SHA256)
 	fmt.Println("Privacy: no conversations, prompts, tool inputs, environment variables, credentials, or project files are included.")
 	return nil
+}
+
+func runDoctorCLI(cfg config, args []string) error {
+	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	jsonOutput := flags.Bool("json", false, "print the diagnostic report as JSON")
+	repair := flags.String("repair", "", "apply an advertised safe repair action")
+	confirmed := flags.Bool("yes", false, "confirm the selected repair action")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || (*repair == "" && *confirmed) {
+		return fmt.Errorf("usage: hobot doctor [--json] [--repair ACTION --yes]")
+	}
+	if *repair != "" && !*confirmed {
+		return fmt.Errorf("--repair requires --yes after reviewing the advertised action")
+	}
+	client := daemonClient{cfg: cfg}
+	if err := client.ensureStarted(); err != nil {
+		return err
+	}
+	report, err := inspectDiagnostics(client)
+	if err != nil {
+		return err
+	}
+	if *repair != "" {
+		action, ok := diagnosticRepairByID(report.Repairs, *repair)
+		if !ok {
+			return fmt.Errorf("repair action is not advertised by the current diagnostic report: %s", *repair)
+		}
+		if action.Status != "available" {
+			return fmt.Errorf("repair action is %s: %s", action.Status, action.Reason)
+		}
+		switch action.Executor {
+		case "agentd":
+			result, err := client.call("diagnostics.repair", diagnosticRepairParams{Action: action.ID, Confirm: true})
+			if err != nil {
+				return err
+			}
+			var repaired diagnosticRepairResult
+			if err := json.Unmarshal(result, &repaired); err != nil {
+				return err
+			}
+			report = repaired.Report
+			if !*jsonOutput {
+				fmt.Printf("Applied %s to %d path(s).\n", action.ID, repaired.Changed)
+			}
+		case "client":
+			if action.ID != diagnosticRepairRestartDaemon {
+				return fmt.Errorf("unsupported client repair action: %s", action.ID)
+			}
+			output := io.Writer(os.Stdout)
+			if *jsonOutput {
+				output = io.Discard
+			}
+			if err := runDaemonCLIWithOutput(cfg, []string{"restart"}, output); err != nil {
+				return err
+			}
+			report, err = inspectDiagnostics(client)
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported repair executor: %s", action.Executor)
+		}
+	}
+	if *jsonOutput {
+		return printJSON(report)
+	}
+	printDiagnosticReport(report)
+	return nil
+}
+
+func inspectDiagnostics(client daemonClient) (diagnosticReport, error) {
+	result, err := client.call("diagnostics.inspect", struct{}{})
+	if err != nil {
+		return diagnosticReport{}, err
+	}
+	var report diagnosticReport
+	if err := json.Unmarshal(result, &report); err != nil {
+		return diagnosticReport{}, err
+	}
+	return report, nil
+}
+
+func printDiagnosticReport(report diagnosticReport) {
+	fmt.Printf("Hobot Code readiness: %s\n", supportStatusLabel(report.Status))
+	fmt.Printf("Checks: %d passed, %d informational, %d %s, %d failed.\n", report.Summary.Pass, report.Summary.Info, report.Summary.Warn, countedLabel(report.Summary.Warn, "warning"), report.Summary.Fail)
+	for _, finding := range report.Findings {
+		fmt.Printf("- [%s] %s: %s\n", finding.Severity, finding.Title, finding.Summary)
+		fmt.Printf("  Next: %s\n", finding.Action)
+	}
+	for _, repair := range report.Repairs {
+		fmt.Printf("- Repair %s (%s): %s\n", repair.ID, repair.Status, repair.Reason)
+		if repair.Status == "available" {
+			fmt.Printf("  Apply: hobot doctor --repair %s --yes\n", repair.ID)
+		}
+	}
+	fmt.Println("This check is read-only. Use `hobot diagnose` only when you need a private support file.")
+}
+
+func supportStatusLabel(status string) string {
+	switch status {
+	case "healthy":
+		return "Healthy"
+	case "attention":
+		return "Attention"
+	case "action-required":
+		return "Action required"
+	default:
+		return "Unknown"
+	}
+}
+
+func countedLabel(count int, singular string) string {
+	if count == 1 {
+		return singular
+	}
+	return singular + "s"
 }
 
 func runDeploymentCLI(cfg config, args []string) error {
@@ -579,6 +920,10 @@ func runServer(cfg config) error {
 }
 
 func runDaemonCLI(cfg config, args []string) error {
+	return runDaemonCLIWithOutput(cfg, args, os.Stdout)
+}
+
+func runDaemonCLIWithOutput(cfg config, args []string, output io.Writer) error {
 	if len(args) == 0 {
 		args = []string{"status"}
 	}
@@ -595,7 +940,7 @@ func runDaemonCLI(cfg config, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Hobot Code agentd is running (pid %d, protocol %d).\n", info.PID, info.Protocol)
+		fmt.Fprintf(output, "Hobot Code agentd is running (pid %d, protocol %d).\n", info.PID, info.Protocol)
 		return nil
 	case "status":
 		if len(args) != 1 {
@@ -604,7 +949,7 @@ func runDaemonCLI(cfg config, args []string) error {
 		info, err := client.ping()
 		if err != nil {
 			if isConnectionFailure(err) {
-				fmt.Println("Hobot Code agentd is not running.")
+				fmt.Fprintln(output, "Hobot Code agentd is not running.")
 				return nil
 			}
 			return err
@@ -618,14 +963,14 @@ func runDaemonCLI(cfg config, args []string) error {
 		_, err := client.call("daemon.shutdown", map[string]bool{"force": force})
 		if err != nil {
 			if isConnectionFailure(err) && args[0] == "stop" {
-				fmt.Println("Hobot Code agentd is not running.")
+				fmt.Fprintln(output, "Hobot Code agentd is not running.")
 				return nil
 			}
 			if isConnectionFailure(err) && args[0] == "restart" {
 				if err := startDaemon(cfg); err != nil {
 					return err
 				}
-				fmt.Println("Started Hobot Code agentd.")
+				fmt.Fprintln(output, "Started Hobot Code agentd.")
 				return nil
 			}
 			return err
@@ -646,9 +991,9 @@ func runDaemonCLI(cfg config, args []string) error {
 			if err := startDaemon(cfg); err != nil {
 				return err
 			}
-			fmt.Println("Restarted Hobot Code agentd.")
+			fmt.Fprintln(output, "Restarted Hobot Code agentd.")
 		} else {
-			fmt.Println("Stopped Hobot Code agentd.")
+			fmt.Fprintln(output, "Stopped Hobot Code agentd.")
 		}
 		return nil
 	default:
@@ -827,6 +1172,24 @@ func runTaskCLI(cfg config, args []string) error {
 		}
 		fmt.Printf("Task %s sandbox: %s (%s)\n", metadata.ID, metadata.SandboxMode, metadata.Sandbox.Backend)
 		return nil
+	case "network":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task network TASK_ID shared|model-only|offline")
+		}
+		mode, err := normalizeNetworkMode(args[2])
+		if err != nil {
+			return err
+		}
+		result, err := client.call("task.network", setTaskNetworkParams{TaskID: args[1], Mode: mode})
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		fmt.Printf("Task %s network: %s\n", metadata.ID, metadata.NetworkMode)
+		return nil
 	case "archive", "unarchive":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: hobot task %s TASK_ID", args[0])
@@ -869,6 +1232,7 @@ Usage:
   hobot task model TASK_ID PROVIDER/MODEL
   hobot task permissions TASK_ID review|ask|developer
   hobot task sandbox TASK_ID review|workspace|system|off
+  hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
   hobot task stop TASK_ID
@@ -890,14 +1254,14 @@ func printRequestedTaskHelp(args []string, output io.Writer) bool {
 		return false
 	}
 	usageByCommand := map[string]string{
-		"start": "hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--trust-project] -- PROMPT",
+		"start": "hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT",
 		"list":  "hobot task list [--all]", "show": "hobot task show TASK_ID [--details]",
 		"logs": "hobot task logs TASK_ID [--after SEQUENCE] [--follow]", "attach": "hobot task attach TASK_ID [--after SEQUENCE | --replay-all]",
 		"send": "hobot task send TASK_ID [--] PROMPT", "abort": "hobot task abort TASK_ID",
 		"respond": "hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE", "approvals": "hobot task approvals TASK_ID [--details]",
 		"resume": "hobot task resume TASK_ID [-- PROMPT]", "restart": "hobot task restart TASK_ID [--] PROMPT",
 		"rename": "hobot task rename TASK_ID NAME", "archive": "hobot task archive TASK_ID",
-		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|developer", "sandbox": "hobot task sandbox TASK_ID review|workspace|system|off",
+		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|developer", "sandbox": "hobot task sandbox TASK_ID review|workspace|system|off", "network": "hobot task network TASK_ID shared|model-only|offline",
 		"unarchive": "hobot task unarchive TASK_ID", "delete": "hobot task delete TASK_ID --yes", "stop": "hobot task stop TASK_ID",
 	}
 	commandUsage, ok := usageByCommand[command]
@@ -924,7 +1288,7 @@ func taskHelpRequested(command string, args []string) bool {
 				return true
 			}
 			switch value {
-			case "--name", "--cwd", "--workspace", "--model", "--permissions", "--sandbox":
+			case "--name", "--cwd", "--workspace", "--model", "--permissions", "--sandbox", "--network":
 				index++
 			case "--trust-project", "--approve":
 			default:
@@ -1006,7 +1370,8 @@ func runTaskStart(client daemonClient, args []string) error {
 		fmt.Printf("Project: %s\n", metadata.ProjectCwd)
 	}
 	fmt.Printf("Permissions: %s\n", metadata.PermissionMode)
-	fmt.Printf("OS sandbox: %s (%s; network shared)\n", metadata.SandboxMode, metadata.Sandbox.Backend)
+	fmt.Printf("OS sandbox: %s (%s)\n", metadata.SandboxMode, metadata.Sandbox.Backend)
+	fmt.Printf("Network: %s\n", metadata.NetworkMode)
 	fmt.Printf("Project resources: %s\n", map[bool]string{true: "trusted", false: "not trusted"}[metadata.Approved])
 	fmt.Printf("Attach: hobot task attach %s\n", metadata.ID)
 	return nil
@@ -1026,6 +1391,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 	permissions := flags.String("permissions", defaultTaskPermissionMode, "permission mode: review, ask, or developer")
 	workspace := flags.String("workspace", workspaceModeShared, "workspace mode: shared or worktree")
 	sandbox := flags.String("sandbox", "", "OS sandbox: review, workspace, system, or off")
+	network := flags.String("network", networkModeShared, "network boundary: shared, model-only, or offline")
 	trustProject := false
 	flags.BoolVar(&trustProject, "trust-project", false, "load trusted project resources")
 	flags.BoolVar(&trustProject, "approve", false, "compatibility alias for --trust-project")
@@ -1043,7 +1409,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 		promptArgs = promptArgs[1:]
 	}
 	if len(promptArgs) == 0 {
-		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--trust-project] -- PROMPT")
+		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT")
 	}
 	workingDirectory := *cwd
 	if workingDirectory == "" {
@@ -1071,6 +1437,10 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 			return taskStartCLIOptions{}, err
 		}
 	}
+	networkMode, err := normalizeNetworkMode(*network)
+	if err != nil {
+		return taskStartCLIOptions{}, err
+	}
 	prompt := strings.Join(promptArgs, " ")
 	if len(prompt) == 0 || len(prompt) > maxPromptBytes {
 		return taskStartCLIOptions{}, fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
@@ -1078,7 +1448,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 	return taskStartCLIOptions{
 		params: startTaskParams{
 			Name: *name, Cwd: workingDirectory, Prompt: prompt, Approve: trustProject,
-			Model: modelSelection, PermissionMode: permissionMode, WorkspaceMode: workspaceMode, SandboxMode: sandboxMode,
+			Model: modelSelection, PermissionMode: permissionMode, WorkspaceMode: workspaceMode, SandboxMode: sandboxMode, NetworkMode: networkMode,
 		},
 		usedApproveAlias: usedApproveAlias,
 	}, nil
@@ -1193,6 +1563,9 @@ func replayEventPage(client daemonClient, taskID string, after uint64, limit int
 			return err
 		}
 		fmt.Println(string(encoded))
+	}
+	if notice := eventRetentionNotice(page.RetainedFrom, page.RetainedThrough, page.LatestSequence, page.HistoryTruncated, page.CursorExpired); notice != "" {
+		fmt.Fprintln(os.Stderr, notice)
 	}
 	if page.HasMore {
 		fmt.Fprintf(os.Stderr, "More events are available; continue with --after %d.\n", page.NextAfter)

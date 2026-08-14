@@ -1,0 +1,373 @@
+{
+  "schemaVersion": 1,
+  "apiVersion": "hobot.pi-compatibility/v1",
+  "pi": {
+    "version": "0.84.1",
+    "commit": "53fa77ccd8a279eb87e92294ef3687b03ff80112"
+  },
+  "policy": {
+    "sourceEvidenceRequired": true,
+    "runtimeEvidenceRequired": true,
+    "boardEvidenceRequiredForPublicRelease": true,
+    "requiredBoards": [
+      "x5",
+      "s100",
+      "s600"
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "interactive.tui",
+      "description": "Interactive editor, commands, message queue, and terminal-first session control.",
+      "upstreamEvidence": [
+        {
+          "path": "README.md",
+          "contains": [
+            "Pi runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps.",
+            "Message Queue"
+          ]
+        },
+        {
+          "path": "docs/usage.md",
+          "contains": [
+            "| `/tree` |",
+            "| `/fork` |",
+            "| `/compact [prompt]` |"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "tests/user-paths.test.mjs",
+          "contains": "test(\"launcher routes explicit TUI sandbox selection through agentd\""
+        },
+        {
+          "path": "tests/user-paths.test.mjs",
+          "contains": "test(\"persistent tmux forwards application clipboard sequences\""
+        }
+      ]
+    },
+    {
+      "id": "rpc.lifecycle",
+      "description": "Strict JSONL RPC prompting, interruption, settled lifecycle, and interactive extension requests.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/rpc.md",
+          "contains": [
+            "pi --mode rpc [options]",
+            "\"type\": \"prompt\"",
+            "### agent_settled",
+            "extension_ui_request"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "tests/side-agent.test.mjs",
+          "contains": "test(\"multi-turn side agent invocation uses RPC and inherits model, thinking, tools, and project trust\""
+        },
+        {
+          "path": "agentd/agentd_test.go",
+          "contains": "func TestNormalizedEventsApprovalsAndSessionResume("
+        }
+      ]
+    },
+    {
+      "id": "sessions.branching",
+      "description": "Persistent JSONL sessions, resume, tree navigation, fork, and historical edit semantics.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/sessions.md",
+          "contains": [
+            "pi --session <path|id>",
+            "| `/tree` |",
+            "| `/fork` |",
+            "| `/resume` |"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "agentd/control_plane_test.go",
+          "contains": "func TestSessionForkUsesSettledAndHistoricalContext("
+        },
+        {
+          "path": "agentd/control_plane_test.go",
+          "contains": "func TestEditEventHistoryTruncatesAtAUserTurn("
+        }
+      ]
+    },
+    {
+      "id": "context.compaction",
+      "description": "Manual and automatic context compaction with explicit lifecycle events and durable summaries.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/compaction.md",
+          "contains": [
+            "Auto-compaction triggers when:",
+            "/compact [instructions]",
+            "CompactionEntry"
+          ]
+        },
+        {
+          "path": "docs/rpc.md",
+          "contains": [
+            "#### compact",
+            "### compaction_start / compaction_end"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "agentd/events_test.go",
+          "contains": "func TestCompactionLifecycleIsNormalizedWithoutProviderFields("
+        },
+        {
+          "path": "studio/frontend/src/conversation-model.test.mjs",
+          "contains": "test('compaction lifecycle remains visible inside the active turn'"
+        }
+      ]
+    },
+    {
+      "id": "extensions.lifecycle",
+      "description": "Extension tools, commands, lifecycle hooks, custom UI, and settled-agent semantics.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/extensions.md",
+          "contains": [
+            "pi.registerTool()",
+            "pi.registerCommand",
+            "before_agent_start",
+            "agent_settled"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "tests/control-plane.test.mjs",
+          "contains": "test(\"permission rules cover built-in, RDK, MCP, and fallback tools\""
+        },
+        {
+          "path": "tests/side-agent.test.mjs",
+          "contains": "test(\"side agent stays busy until the RPC agent_settled barrier\""
+        }
+      ]
+    },
+    {
+      "id": "resources.discovery",
+      "description": "Skills, prompt templates, themes, and packages remain discoverable through the pinned runtime.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/skills.md",
+          "contains": [
+            "Agent Skills standard",
+            "/skill:name"
+          ]
+        },
+        {
+          "path": "docs/prompt-templates.md",
+          "contains": [
+            "# Prompt Templates",
+            "--prompt-template"
+          ]
+        },
+        {
+          "path": "docs/themes.md",
+          "contains": [
+            "# Themes",
+            "--no-themes"
+          ]
+        },
+        {
+          "path": "docs/packages.md",
+          "contains": [
+            "# Pi Packages",
+            "pi update --extensions"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "agentd/extensions_test.go",
+          "contains": "func TestPackagedExtensionCatalogIsValidAndDeterministic("
+        },
+        {
+          "path": "studio/frontend/src/extension-center.test.mjs",
+          "contains": "test('catalog summary and filters are deterministic and capability-aware'"
+        }
+      ]
+    },
+    {
+      "id": "providers.models",
+      "description": "Built-in and custom providers, model selection, thinking levels, and runtime model discovery.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/models.md",
+          "contains": [
+            "# Custom Models",
+            "Supported APIs",
+            "models.json"
+          ]
+        },
+        {
+          "path": "docs/providers.md",
+          "contains": [
+            "# Providers",
+            "Custom Providers"
+          ]
+        },
+        {
+          "path": "docs/usage.md",
+          "contains": [
+            "--list-models",
+            "--thinking <level>"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "agentd/control_plane_test.go",
+          "contains": "func TestModelTableAndSelection("
+        },
+        {
+          "path": "agentd/model_conformance_test.go",
+          "contains": "func TestProbeDroboticsModelConformanceCompletesAgentLoop("
+        }
+      ]
+    },
+    {
+      "id": "tools.parallel",
+      "description": "Parallel tool batches preserve extension preflight and Hobot Code write-lease safety.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/extensions.md",
+          "contains": [
+            "default parallel tool execution mode",
+            "executed concurrently"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "agentd/workspace_write_lease_test.go",
+          "contains": "func TestWorkspaceWriteLeaseBlocksOverlappingGitWorkspaces("
+        },
+        {
+          "path": "tests/provider-stream.test.mjs",
+          "contains": "test(\"gateway history preserves complete tool-call sequences\""
+        }
+      ]
+    },
+    {
+      "id": "thinking.stream",
+      "description": "Reasoning capability selection and streamed thinking events remain separate from final text.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/rpc.md",
+          "contains": [
+            "#### set_thinking_level",
+            "thinking_delta"
+          ]
+        },
+        {
+          "path": "docs/usage.md",
+          "contains": [
+            "--thinking <level>"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "tests/provider-stream.test.mjs",
+          "contains": "test(\"gateway history replays unsigned thinking as text\""
+        },
+        {
+          "path": "studio/frontend/src/conversation-model.test.mjs",
+          "contains": "test('conversation groups thinking, tools, and text into one assistant turn'"
+        }
+      ]
+    },
+    {
+      "id": "images.prompt",
+      "description": "RPC image prompts preserve explicit MIME and bounded model capability checks.",
+      "upstreamEvidence": [
+        {
+          "path": "docs/rpc.md",
+          "contains": [
+            "With images:",
+            "`ImageContent` format"
+          ]
+        }
+      ],
+      "sourceEvidence": [
+        {
+          "path": "agentd/agentd_test.go",
+          "contains": "func TestImagePromptPersistsOnlyAttachmentMetadata("
+        },
+        {
+          "path": "agentd/permissions_test.go",
+          "contains": "func TestImagePromptsAreBoundedAndValidated("
+        },
+        {
+          "path": "agentd/events_test.go",
+          "contains": "func TestWorkerEventsOmitStructuredImagePayloads("
+        }
+      ]
+    }
+  ],
+  "boardAcceptance": {
+    "reportSchema": "hobot.pi-board-compatibility/v1",
+    "scenarios": [
+      {
+        "id": "tui-basics",
+        "description": "Start the installed TUI as an ordinary user, submit Chinese text, stream thinking, use the editor, and detach without terminating the Agent.",
+        "capabilities": [
+          "interactive.tui",
+          "thinking.stream"
+        ]
+      },
+    {
+      "id": "rpc-background",
+      "description": "Run a persistent RPC task through agentd, approve a tool, send a second turn, attach an image, and reconnect without duplicate execution.",
+      "capabilities": [
+        "rpc.lifecycle",
+        "images.prompt"
+      ]
+    },
+    {
+      "id": "model-egress-runtime",
+      "description": "Run the packaged Pi Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses adapters through model-only isolation, proving exact broker routes, complete stream lifecycle, and absence of model credentials in the worker process tree.",
+      "capabilities": [
+        "providers.models"
+      ]
+    },
+      {
+        "id": "session-recovery",
+        "description": "Resume, fork, edit history, compact context, restart the client, and verify the intended branch and summary remain active.",
+        "capabilities": [
+          "sessions.branching",
+          "context.compaction"
+        ]
+      },
+      {
+        "id": "extension-safety",
+        "description": "Load packaged resources, exercise an extension tool batch, and verify permission hooks and workspace write leases remain effective.",
+        "capabilities": [
+          "extensions.lifecycle",
+          "resources.discovery",
+          "tools.parallel"
+        ]
+      },
+      {
+        "id": "readiness-diagnostics",
+        "description": "Inspect installation and runtime readiness without creating support data or calling a model, require explicit repair confirmation, and restrict changes to the declared private-runtime permission allowlist.",
+        "capabilities": []
+      },
+      {
+        "id": "install-lifecycle",
+        "description": "Install into a root-owned isolated tree, upgrade while preserving user data, recover from a post-swap failure, roll back, and uninstall while preserving configuration, state, and backups without changing the board's existing installation.",
+        "capabilities": []
+      }
+    ]
+  }
+}

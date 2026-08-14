@@ -18,8 +18,8 @@ const TARGETS = {
   s600: { boardId: "s600", releases: new Set(["5.1.0"]) },
 };
 const RELEASE_CAPABILITIES = [
-  "build.identity.v1", "events.items.v1", "events.normalized.v4", "events.page", "models.conformance.v1",
-  "support.bundle.v1", "system.snapshot", "tasks.failure.v1", "tasks.lifecycle", "tasks.page", "tasks.queue.v1",
+  "build.identity.v1", "diagnostics.inspect.v1", "diagnostics.repair.v1", "events.items.v1", "events.normalized.v4", "events.page", "events.retention.v1", "models.conformance.v1", "models.runtime-probe.v1", "pi.compatibility.v1",
+  "support.bundle.v1", "support.bundle.v2", "system.snapshot", "tasks.failure.v1", "tasks.lifecycle", "tasks.page", "tasks.queue.v1",
   "tasks.sandbox.v1", "tasks.turn-evidence.v1", "workspaces.changes.v1", "workspaces.isolation.v1",
   "workspaces.write-leases.v1",
 ];
@@ -74,7 +74,7 @@ export function parseArguments(args) {
   if (options.intervalMs > 0 && options.intervalMs < 1000) throw new Error("--interval must be 0 or at least 1s");
   if (options.timeoutMs < 1000 || options.timeoutMs > 60_000) throw new Error("--timeout must be between 1s and 60s");
   if (new Set(options.boards.map((board) => board.label)).size !== options.boards.length) throw new Error("board labels must be unique");
-  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/u.test(options.expectedVersion)) {
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.test(options.expectedVersion)) {
     throw new Error("--expected-version must be strict SemVer");
   }
   if (!options.output && (options.samples > 3 || options.intervalMs > 0 || options.resume)) throw new Error("long or resumable runs require --output");
@@ -204,6 +204,7 @@ function buildIdentity(value) {
     binarySha256: typeof build.binarySha256 === "string" && /^[0-9a-f]{64}$/u.test(build.binarySha256) ? build.binarySha256 : undefined,
     piVersion: semanticVersion(build.piVersion),
     piCommit: typeof build.piCommit === "string" && /^[0-9a-f]{40}$/u.test(build.piCommit) ? build.piCommit : undefined,
+    piCompatibilitySha256: typeof build.piCompatibilitySha256 === "string" && /^[0-9a-f]{64}$/u.test(build.piCompatibilitySha256) ? build.piCompatibilitySha256 : undefined,
   };
 }
 
@@ -271,6 +272,7 @@ export function assessBoard(label, samples, expectedVersion) {
   add("release-capabilities", missing.length === 0 ? "pass" : "fail", missing.length === 0 ? "Current release capability contract is complete." : `Missing ${missing.join(", ")}.`);
   const buildStatus = latest.service.build?.status;
   add("build-identity", buildStatus === "verified" && latest.service.build?.dirty !== true ? "pass" : "fail", buildStatus === "verified" ? `Build ${latest.service.build.commit?.slice(0, 12) ?? "verified"}${latest.service.build.dirty ? " is modified" : " is clean"}.` : `Build identity is ${buildStatus ?? "missing"}.`);
+  add("pi-compatibility", latest.service.build?.piCompatibilitySha256 ? "pass" : "fail", latest.service.build?.piCompatibilitySha256 ? `Pi capability contract ${latest.service.build.piCompatibilitySha256.slice(0, 12)} is bound to this build.` : "The build does not report a Pi capability contract digest.");
   add("configuration", latest.service.configurationCurrent === false ? "fail" : "pass", latest.service.configurationCurrent === false ? "Model configuration changed after agentd started." : "Daemon configuration is current or no drift was reported.");
   const sandbox = latest.service.sandbox;
   add("sandbox", sandbox?.available && sandbox?.filesystemWritesRestricted && sandbox?.devicesRestricted && sandbox?.capabilitiesDropped ? "pass" : "fail", sandbox?.available ? "File, device, and capability isolation is available." : `Sandbox unavailable: ${sandbox?.reason ?? "not reported"}.`);
@@ -300,12 +302,13 @@ function assessFleet(report) {
   if (latest.length !== report.boards.length) {
     return [{ name: "fleet-build-consistency", status: "fail", summary: "Not every board produced release identity evidence." }];
   }
-  if (latest.some((sample) => sample.service.build?.status !== "verified" || sample.service.build?.dirty !== false || !sample.service.build?.commit || !sample.service.build?.binarySha256 || !sample.service.build?.piVersion || !sample.service.build?.piCommit)) {
+  if (latest.some((sample) => sample.service.build?.status !== "verified" || sample.service.build?.dirty !== false || !sample.service.build?.commit || !sample.service.build?.binarySha256 || !sample.service.build?.piVersion || !sample.service.build?.piCommit || !sample.service.build?.piCompatibilitySha256)) {
     return [{ name: "fleet-build-consistency", status: "fail", summary: "Not every board reports a verified, clean, and complete release identity." }];
   }
   const identities = new Set(latest.map((sample) => [
     sample.service.version, sample.service.build?.commit, sample.service.build?.binarySha256,
     sample.service.build?.piVersion, sample.service.build?.piCommit,
+    sample.service.build?.piCompatibilitySha256,
   ].join("|")));
   return [{
     name: "fleet-build-consistency", status: identities.size === 1 ? "pass" : "fail",

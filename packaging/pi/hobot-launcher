@@ -18,7 +18,46 @@ require_absolute_path() {
   esac
 }
 
+require_scoped_private_root() {
+  root_name=$1
+  root_value=$2
+  case "$root_value" in
+    /|"$HOME"|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+      printf '%s must identify a scoped private directory, not a broad system or home root: %s\n' "$root_name" "$root_value" >&2
+      exit 1
+      ;;
+  esac
+}
+
 require_absolute_path HOME "$HOME"
+
+hobot_system_root=
+if [ -n "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" ]; then
+  if [ "${HOBOT_CODE_TESTING:-0}" != 1 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT requires HOBOT_CODE_TESTING=1\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_INSTALL_ROOT" in
+    /|''|*[!A-Za-z0-9_./-]*)
+      printf 'HOBOT_CODE_TEST_INSTALL_ROOT is unsafe: %s\n' "$HOBOT_CODE_TEST_INSTALL_ROOT" >&2
+      exit 1
+      ;;
+    /*) ;;
+    *) printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be absolute\n' >&2; exit 1 ;;
+  esac
+  if [ -L "$HOBOT_CODE_TEST_INSTALL_ROOT" ] || [ ! -d "$HOBOT_CODE_TEST_INSTALL_ROOT" ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
+  hobot_system_root_logical=$(CDPATH= cd -L -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -L)
+  hobot_system_root=$(CDPATH= cd -P -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -P)
+  if [ "$hobot_system_root_logical" != "$hobot_system_root" ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not traverse symbolic links\n' >&2
+    exit 1
+  fi
+fi
+hobot_runtime_root="$hobot_system_root/usr/local/lib/hobot-code"
+hobot_install_lock="$hobot_system_root/usr/local/lib/hobot-code.install.lock"
 
 original_umask=$(umask)
 umask 077
@@ -90,6 +129,14 @@ load_environment_file() {
         ;;
       HOBOT_CODE_CONFIG_DIR|XDG_CONFIG_HOME|XDG_STATE_HOME)
         printf '%s:%s must set launcher path variable %s before invoking hobot\n' "$environment_file" "$environment_line_number" "$environment_key" >&2
+        exit 1
+        ;;
+      HOBOT_CODE_GATEWAY_TOKEN_FD|HOBOT_CODE_GATEWAY_TOKEN_FILE)
+        printf '%s:%s cannot set reserved credential transport variable %s\n' "$environment_file" "$environment_line_number" "$environment_key" >&2
+        exit 1
+        ;;
+      HOBOT_CODE_TESTING|HOBOT_CODE_TEST_INSTALL_ROOT|HOBOT_CODE_TEST_PROC_ROOT|HOBOT_CODE_TEST_FAIL_AFTER_SWAP)
+        printf '%s:%s cannot set reserved launcher test variable %s\n' "$environment_file" "$environment_line_number" "$environment_key" >&2
         exit 1
         ;;
     esac
@@ -332,12 +379,14 @@ export_config_fingerprint() {
     environment_digest=$(sha256sum "$hobot_config_root/hobot.env" | awk 'NR == 1 { print $1 }')
     settings_digest=$(sha256sum "$hobot_agent_dir/settings.json" | awk 'NR == 1 { print $1 }')
     models_digest=$(sha256sum "$hobot_agent_dir/models.json" | awk 'NR == 1 { print $1 }')
-    config_fingerprint=$(printf '%s\n%s\n%s\n' "$environment_digest" "$settings_digest" "$models_digest" | sha256sum | awk 'NR == 1 { print $1 }')
+    providers_digest=$(sha256sum "$hobot_managed_provider_config" | awk 'NR == 1 { print $1 }')
+    config_fingerprint=$(printf '%s\n%s\n%s\n%s\n' "$environment_digest" "$settings_digest" "$models_digest" "$providers_digest" | sha256sum | awk 'NR == 1 { print $1 }')
   elif command -v shasum >/dev/null 2>&1; then
     environment_digest=$(shasum -a 256 "$hobot_config_root/hobot.env" | awk 'NR == 1 { print $1 }')
     settings_digest=$(shasum -a 256 "$hobot_agent_dir/settings.json" | awk 'NR == 1 { print $1 }')
     models_digest=$(shasum -a 256 "$hobot_agent_dir/models.json" | awk 'NR == 1 { print $1 }')
-    config_fingerprint=$(printf '%s\n%s\n%s\n' "$environment_digest" "$settings_digest" "$models_digest" | shasum -a 256 | awk 'NR == 1 { print $1 }')
+    providers_digest=$(shasum -a 256 "$hobot_managed_provider_config" | awk 'NR == 1 { print $1 }')
+    config_fingerprint=$(printf '%s\n%s\n%s\n%s\n' "$environment_digest" "$settings_digest" "$models_digest" "$providers_digest" | shasum -a 256 | awk 'NR == 1 { print $1 }')
   fi
   case "$config_fingerprint" in
     *[!0-9a-f]*|'') ;;
@@ -348,6 +397,22 @@ export_config_fingerprint() {
       fi
       ;;
   esac
+}
+
+has_model_configuration() {
+  if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+    return 0
+  fi
+  if env | grep -Eq '^HOBOT_CODE_PROVIDER_KEY_[A-Z0-9_]+=.+$'; then
+    return 0
+  fi
+  if [ -f "$hobot_agent_dir/auth.json" ] && [ ! -L "$hobot_agent_dir/auth.json" ] && [ -s "$hobot_agent_dir/auth.json" ]; then
+    return 0
+  fi
+  if command -v cmp >/dev/null 2>&1 && ! cmp -s "$hobot_agent_dir/models.json" "$hobot_default_config/models.json"; then
+    return 0
+  fi
+  return 1
 }
 
 persistent_usage() {
@@ -368,18 +433,18 @@ handle_product_command() {
     update)
       if [ "${2:-}" = --extensions ]; then return 1; fi
       shift
-      exec /usr/local/lib/hobot-code/release.sh update "$@"
+      exec "$hobot_runtime_root/release.sh" update "$@"
       ;;
     uninstall)
       shift
-      exec /usr/local/lib/hobot-code/uninstall.sh "$@"
+      exec "$hobot_runtime_root/uninstall.sh" "$@"
       ;;
   esac
   return 1
 }
 
 refuse_during_install() {
-  install_lock=/usr/local/lib/hobot-code.install.lock
+  install_lock=$hobot_install_lock
   if [ "${HOBOT_CODE_TESTING:-0}" = 1 ] && [ -n "${HOBOT_CODE_TEST_INSTALL_LOCK:-}" ]; then
     require_absolute_path HOBOT_CODE_TEST_INSTALL_LOCK "$HOBOT_CODE_TEST_INSTALL_LOCK"
     install_lock=$HOBOT_CODE_TEST_INSTALL_LOCK
@@ -398,6 +463,15 @@ require_tmux() {
     printf 'Hobot Code tmux configuration is missing or unreadable: %s\n' "$hobot_tmux_config" >&2
     exit 1
   fi
+}
+
+clear_persistent_model_credentials() {
+  unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+  persistent_credential_names=$(env | sed -n 's/^\(HOBOT_CODE_PROVIDER_KEY_[A-Z0-9_][A-Z0-9_]*\)=.*/\1/p')
+  for persistent_credential_name in $persistent_credential_names; do
+    unset "$persistent_credential_name"
+  done
+  unset persistent_credential_name persistent_credential_names
 }
 
 persistent_session_name() {
@@ -435,6 +509,9 @@ handle_persistent_command() {
   shift
   persistent_action=${1:-start}
   if [ "$#" -gt 0 ]; then shift; fi
+  # The inner launcher reloads the private configuration. The dedicated tmux
+  # server must never retain model credentials in its long-lived environment.
+  clear_persistent_model_credentials
 
   case "$persistent_action" in
     help|-h|--help)
@@ -538,11 +615,12 @@ handle_persistent_command() {
 hobot_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 hobot_state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 hobot_config_root=${HOBOT_CODE_CONFIG_DIR:-$hobot_config_home/hobot-code}
-hobot_default_config=/usr/local/lib/hobot-code/default-config
-hobot_tmux_config=/usr/local/lib/hobot-code/tmux.conf
+hobot_default_config="$hobot_runtime_root/default-config"
+hobot_tmux_config="$hobot_runtime_root/tmux.conf"
 require_absolute_path XDG_CONFIG_HOME "$hobot_config_home"
 require_absolute_path XDG_STATE_HOME "$hobot_state_home"
 require_absolute_path HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
+require_scoped_private_root HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
 
 handle_product_command "$@" || :
 refuse_during_install "$@"
@@ -566,6 +644,7 @@ fi
 hobot_agent_dir=${HOBOT_CODING_AGENT_DIR:-$hobot_config_root/agent}
 hobot_state_dir=${HOBOT_CODE_STATE_DIR:-$hobot_state_home/hobot-code}
 hobot_session_dir=${HOBOT_CODING_AGENT_SESSION_DIR:-$hobot_state_dir/sessions}
+hobot_tmux_runtime_dir=$hobot_state_dir/tmux
 hobot_permission_policy=${HOBOT_CODE_PERMISSION_POLICY:-$hobot_agent_dir/permissions.json}
 hobot_memory_config=${HOBOT_CODE_MEMORY_CONFIG:-$hobot_agent_dir/memory.json}
 hobot_memory_db=${HOBOT_CODE_MEMORY_DB:-$hobot_state_dir/memory/memory.db}
@@ -575,12 +654,16 @@ hobot_hook_config=${HOBOT_CODE_HOOK_CONFIG:-$hobot_agent_dir/hooks.json}
 hobot_hook_audit=${HOBOT_CODE_HOOK_AUDIT:-$hobot_state_dir/audit/hooks.jsonl}
 hobot_notification_config=${HOBOT_CODE_NOTIFICATION_CONFIG:-$hobot_agent_dir/notifications.json}
 hobot_lsp_config=${HOBOT_CODE_LSP_CONFIG:-$hobot_agent_dir/lsp.json}
-hobot_rdk_knowledge_dir=${HOBOT_CODE_RDK_KNOWLEDGE_DIR:-/usr/local/lib/hobot-code/knowledge}
-hobot_rdk_expert_prompt=${HOBOT_CODE_RDK_EXPERT_PROMPT:-/usr/local/lib/hobot-code/prompts/rdk-expert.md}
-hobot_extension_catalog=${HOBOT_CODE_EXTENSION_CATALOG:-/usr/local/lib/hobot-code/extensions/catalog.json}
+hobot_managed_provider_config=${HOBOT_CODE_MANAGED_PROVIDER_CONFIG:-$hobot_agent_dir/providers.json}
+hobot_rdk_knowledge_dir=${HOBOT_CODE_RDK_KNOWLEDGE_DIR:-$hobot_runtime_root/knowledge}
+hobot_rdk_expert_prompt=${HOBOT_CODE_RDK_EXPERT_PROMPT:-$hobot_runtime_root/prompts/rdk-expert.md}
+hobot_extension_catalog=${HOBOT_CODE_EXTENSION_CATALOG:-$hobot_runtime_root/extensions/catalog.json}
 require_absolute_path HOBOT_CODING_AGENT_DIR "$hobot_agent_dir"
 require_absolute_path HOBOT_CODE_STATE_DIR "$hobot_state_dir"
 require_absolute_path HOBOT_CODING_AGENT_SESSION_DIR "$hobot_session_dir"
+require_scoped_private_root HOBOT_CODING_AGENT_DIR "$hobot_agent_dir"
+require_scoped_private_root HOBOT_CODE_STATE_DIR "$hobot_state_dir"
+require_scoped_private_root HOBOT_CODING_AGENT_SESSION_DIR "$hobot_session_dir"
 require_absolute_path HOBOT_CODE_PERMISSION_POLICY "$hobot_permission_policy"
 require_absolute_path HOBOT_CODE_MEMORY_CONFIG "$hobot_memory_config"
 require_absolute_path HOBOT_CODE_MEMORY_DB "$hobot_memory_db"
@@ -590,16 +673,17 @@ require_absolute_path HOBOT_CODE_HOOK_CONFIG "$hobot_hook_config"
 require_absolute_path HOBOT_CODE_HOOK_AUDIT "$hobot_hook_audit"
 require_absolute_path HOBOT_CODE_NOTIFICATION_CONFIG "$hobot_notification_config"
 require_absolute_path HOBOT_CODE_LSP_CONFIG "$hobot_lsp_config"
+require_absolute_path HOBOT_CODE_MANAGED_PROVIDER_CONFIG "$hobot_managed_provider_config"
 require_absolute_path HOBOT_CODE_RDK_KNOWLEDGE_DIR "$hobot_rdk_knowledge_dir"
 require_absolute_path HOBOT_CODE_RDK_EXPERT_PROMPT "$hobot_rdk_expert_prompt"
 require_absolute_path HOBOT_CODE_EXTENSION_CATALOG "$hobot_extension_catalog"
 
-for hobot_path in "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"; do
+for hobot_path in "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit" "$hobot_tmux_runtime_dir"; do
   reject_symlink "$hobot_path"
 done
-mkdir -p "$hobot_agent_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"
-chmod 0700 "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit"
-for hobot_config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+mkdir -p "$hobot_agent_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit" "$hobot_tmux_runtime_dir"
+chmod 0700 "$hobot_agent_dir" "$hobot_state_dir" "$hobot_session_dir" "$hobot_state_dir/memory" "$hobot_state_dir/goals" "$hobot_state_dir/audit" "$hobot_tmux_runtime_dir"
+for hobot_config_name in settings.json models.json providers.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
   reject_symlink "$hobot_agent_dir/$hobot_config_name"
   if [ -e "$hobot_agent_dir/$hobot_config_name" ] && [ ! -f "$hobot_agent_dir/$hobot_config_name" ]; then
     printf 'Hobot Code configuration must be a regular file: %s\n' "$hobot_agent_dir/$hobot_config_name" >&2
@@ -610,6 +694,8 @@ for hobot_config_name in settings.json models.json permissions.json memory.json 
   fi
   chmod 0600 "$hobot_agent_dir/$hobot_config_name"
 done
+
+require_private_file "$hobot_managed_provider_config"
 
 export_config_fingerprint
 
@@ -625,21 +711,40 @@ export HOBOT_CODE_HOOK_CONFIG="$hobot_hook_config"
 export HOBOT_CODE_HOOK_AUDIT="$hobot_hook_audit"
 export HOBOT_CODE_NOTIFICATION_CONFIG="$hobot_notification_config"
 export HOBOT_CODE_LSP_CONFIG="$hobot_lsp_config"
+export HOBOT_CODE_MANAGED_PROVIDER_CONFIG="$hobot_managed_provider_config"
 export HOBOT_CODE_RDK_KNOWLEDGE_DIR="$hobot_rdk_knowledge_dir"
 export HOBOT_CODE_RDK_EXPERT_PROMPT="$hobot_rdk_expert_prompt"
 export HOBOT_CODE_EXTENSION_CATALOG="$hobot_extension_catalog"
-if [ -r /usr/local/lib/hobot-code/VERSION ]; then
-  HOBOT_CODE_VERSION=$(sed -n '1p' /usr/local/lib/hobot-code/VERSION)
+export TMUX_TMPDIR="$hobot_tmux_runtime_dir"
+if [ -r "$hobot_runtime_root/VERSION" ]; then
+  HOBOT_CODE_VERSION=$(sed -n '1p' "$hobot_runtime_root/VERSION")
   export HOBOT_CODE_VERSION
 fi
 export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
-export PATH="/usr/local/lib/hobot-code/bin:$PATH"
+export PATH="$hobot_runtime_root/bin:$PATH"
+
+if [ "$#" -eq 0 ] && ! has_model_configuration; then
+  umask "$original_umask"
+  cat >&2 <<'EOF'
+Hobot Code needs a model provider before the first conversation.
+
+Configure D-Robotics models:
+  hobot setup
+
+Or add another provider:
+  hobot provider add --help
+
+Run `hobot doctor` to inspect readiness. `hobot tui` remains available for
+deliberate configuration-free inspection.
+EOF
+  exit 2
+fi
 
 umask "$original_umask"
 case "${1:-}" in
-  tui|daemon|deploy|task|bridge|diagnose|extensions|model|workspace) exec /usr/local/lib/hobot-code/agentd "$@" ;;
+  tui|daemon|deploy|task|bridge|doctor|diagnose|extensions|provider|model|workspace) exec "$hobot_runtime_root/agentd" "$@" ;;
 esac
 if [ "${1:-}" = persistent ]; then
   handle_persistent_command "$@"
 fi
-exec /usr/local/lib/hobot-code/agentd tui -- "$@"
+exec "$hobot_runtime_root/agentd" tui -- "$@"

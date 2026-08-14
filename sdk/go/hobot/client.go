@@ -181,10 +181,10 @@ func (client *Client) ensureProcess() (*bridgeProcess, error) {
 }
 
 func (client *Client) sshArgs() []string {
-	return client.sshArgsFor("hobot bridge --stdio")
+	return append(client.sshTransportArgs(), client.sshTarget(), "hobot bridge --stdio")
 }
 
-func (client *Client) sshArgsFor(remoteCommand string) []string {
+func (client *Client) sshTransportArgs() []string {
 	timeout := int(client.config.ConnectTimeout.Round(time.Second) / time.Second)
 	args := []string{
 		"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=" + strconv.Itoa(timeout),
@@ -195,11 +195,15 @@ func (client *Client) sshArgsFor(remoteCommand string) []string {
 	if client.config.IdentityFile != "" {
 		args = append(args, "-i", client.config.IdentityFile, "-o", "IdentitiesOnly=yes")
 	}
+	return args
+}
+
+func (client *Client) sshTarget() string {
 	host := client.config.Host
 	if net.ParseIP(host) != nil && strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	return append(args, client.config.User+"@"+host, remoteCommand)
+	return client.config.User + "@" + host
 }
 
 func (client *Client) Close() error {

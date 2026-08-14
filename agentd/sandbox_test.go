@@ -22,6 +22,14 @@ func TestSandboxModeDefaultsAndLegacyTasks(t *testing.T) {
 	if mode != sandboxModeOff || status.Backend != "none" || !strings.Contains(status.Reason, "legacy") {
 		t.Fatalf("legacy task did not preserve its original behavior: %+v", status)
 	}
+	network, status := normalizePersistedNetwork("", mode, status)
+	if network != networkModeShared || status.NetworkRestricted {
+		t.Fatalf("legacy task did not migrate to shared networking: mode=%q status=%+v", network, status)
+	}
+	network, status = normalizePersistedNetwork(networkModeOffline, sandboxModeOff, sandboxStatus(sandboxModeOff, "none", "disabled"))
+	if network != networkModeShared || status.NetworkRestricted {
+		t.Fatalf("invalid persisted offline-without-sandbox state was preserved: mode=%q status=%+v", network, status)
+	}
 }
 
 func TestSandboxCommandBoundsWorkerStateAndDevices(t *testing.T) {
@@ -47,7 +55,7 @@ func TestSandboxCommandBoundsWorkerStateAndDevices(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "unrelated-xdg-config"))
 	cfg := config{
 		ConfigRoot: filepath.Join(home, ".config", "hobot-code"),
-		StateRoot: filepath.Join(root, "state"), AgentdRoot: filepath.Join(root, "state", "agentd"),
+		StateRoot:  filepath.Join(root, "state"), AgentdRoot: filepath.Join(root, "state", "agentd"),
 		TasksRoot: filepath.Join(root, "state", "agentd", "tasks"), AttachCursorRoot: filepath.Join(root, "state", "agentd", "attach-cursors"),
 		SupportRoot: filepath.Join(root, "state", "agentd", "support"), SessionDir: filepath.Join(root, "state", "sessions"),
 		SocketPath: filepath.Join(root, "run", "agentd.sock"), AgentBinary: "/usr/local/lib/hobot-code/hobot", SandboxBinary: "/usr/bin/bwrap",
@@ -110,6 +118,33 @@ func TestResolveSandboxFailsClosedOnLinuxBoard(t *testing.T) {
 	}
 }
 
+func TestSandboxCapabilityReportsOnlyEnforceableNetworkModes(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "bwrap-full")
+	if err := os.WriteFile(full, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	capability := sandboxCapabilityStatus(config{SandboxBinary: full})
+	if !capability.Available || !capability.Network || strings.Join(capability.NetworkModes, ",") != "shared,offline" {
+		t.Fatalf("full sandbox capability was not reported: %+v", capability)
+	}
+	capability = sandboxCapabilityStatus(config{
+		SandboxBinary: full, gatewayToken: "secret", DRoboticsBaseURL: defaultDroboticsBaseURL,
+		ModelEgressSocket: filepath.Join(root, "egress", "model.sock"),
+	})
+	if strings.Join(capability.NetworkModes, ",") != "shared,model-only,offline" {
+		t.Fatalf("configured model egress was not advertised: %+v", capability)
+	}
+	sharedOnly := filepath.Join(root, "bwrap-shared")
+	if err := os.WriteFile(sharedOnly, []byte("#!/bin/sh\ncase \" $* \" in *\" --unshare-net \"*) exit 9;; esac\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	capability = sandboxCapabilityStatus(config{SandboxBinary: sharedOnly})
+	if !capability.Available || capability.Network || strings.Join(capability.NetworkModes, ",") != "shared" || !strings.Contains(capability.Reason, "cannot create") {
+		t.Fatalf("unsupported offline networking was advertised: %+v", capability)
+	}
+}
+
 func TestSandboxKeepsTemporaryRuntimePathsVisible(t *testing.T) {
 	manager := taskManager{cfg: config{StateRoot: "/tmp/hobot-state", SessionDir: "/tmp/hobot-state/sessions", AgentBinary: "/tmp/fake-hobot"}}
 	metadata := taskMetadata{Cwd: "/tmp/project"}
@@ -147,7 +182,7 @@ func TestForegroundSandboxReprotectsPrivateStateInsideBroadWorkspace(t *testing.
 	if err := os.WriteFile(filepath.Join(home, ".netrc"), []byte("machine example.invalid\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	command, args, err := foregroundSandboxCommand(cfg, home, sandboxModeWorkspace, []string{"--resume"})
+	command, args, err := foregroundSandboxCommand(cfg, home, sandboxModeWorkspace, networkModeShared, []string{"--resume"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,13 +203,29 @@ func TestForegroundSandboxReprotectsPrivateStateInsideBroadWorkspace(t *testing.
 	if sandboxArgumentIndex(args, "--new-session") >= 0 {
 		t.Fatalf("foreground sandbox detached the interactive TTY session: %v", args)
 	}
+	credentialFile := filepath.Join(configRoot, "hobot.env")
+	if err := os.WriteFile(credentialFile, []byte("ANTHROPIC_AUTH_TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, credentialArgs, err := foregroundSandboxCommand(cfg, home, sandboxModeSystem, networkModeShared, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialMount := filepath.Join(stateRoot, "agentd", "credential")
+	credentialPath := filepath.Join(credentialMount, "token")
+	if sandboxArgumentIndex(credentialArgs, "--tmpfs", credentialMount) < 0 ||
+		sandboxArgumentIndex(credentialArgs, "--file", gatewayTokenFDPlaceholder, credentialPath) < 0 ||
+		sandboxArgumentIndex(credentialArgs, "--setenv", gatewayTokenFileEnvironment, credentialPath) < 0 ||
+		sandboxArgumentIndex(credentialArgs, "--ro-bind", "/dev/null", credentialFile) < 0 {
+		t.Fatalf("foreground credential transport or file masking is missing: %v", credentialArgs)
+	}
 	for _, sensitive := range []string{filepath.Join(home, ".ssh"), filepath.Join(home, ".netrc")} {
 		if sandboxArgumentIndex(args, "--ro-bind", sensitive, sensitive) <= workspaceBind {
 			t.Fatalf("sensitive path was not re-protected after the home workspace bind: %s %v", sensitive, args)
 		}
 	}
 
-	_, reviewArgs, err := foregroundSandboxCommand(cfg, home, sandboxModeReview, nil)
+	_, reviewArgs, err := foregroundSandboxCommand(cfg, home, sandboxModeReview, networkModeShared, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,14 +287,18 @@ func TestForegroundSandboxRejectsProtectedWritableWorkspaces(t *testing.T) {
 }
 
 func TestForegroundSandboxDefaultsAndFailClosedBehavior(t *testing.T) {
-	mode, args, err := parseTUIArgs([]string{"--", "--resume", "session.jsonl"})
-	if err != nil || mode != sandboxModeSystem || strings.Join(args, " ") != "--resume session.jsonl" {
-		t.Fatalf("unexpected default TUI options: mode=%q args=%v err=%v", mode, args, err)
+	mode, network, args, err := parseTUIArgs([]string{"--", "--resume", "session.jsonl"})
+	if err != nil || mode != sandboxModeSystem || network != networkModeShared || strings.Join(args, " ") != "--resume session.jsonl" {
+		t.Fatalf("unexpected default TUI options: mode=%q network=%q args=%v err=%v", mode, network, args, err)
 	}
 	t.Setenv("HOBOT_CODE_TUI_SANDBOX", sandboxModeReview)
-	mode, _, err = parseTUIArgs(nil)
+	t.Setenv("HOBOT_CODE_TUI_NETWORK", networkModeOffline)
+	mode, network, _, err = parseTUIArgs(nil)
 	if err != nil || mode != sandboxModeReview {
 		t.Fatalf("TUI sandbox environment override was ignored: mode=%q err=%v", mode, err)
+	}
+	if network != networkModeOffline {
+		t.Fatalf("TUI network environment override was ignored: %q", network)
 	}
 	if _, _, err := resolveForegroundSandbox(config{SandboxBinary: sandboxUnavailable}, sandboxModeSystem); err == nil || !strings.Contains(err.Error(), "install bubblewrap") {
 		t.Fatalf("foreground sandbox did not fail closed without bubblewrap: %v", err)
@@ -251,6 +306,120 @@ func TestForegroundSandboxDefaultsAndFailClosedBehavior(t *testing.T) {
 	mode, status, err := resolveForegroundSandbox(config{SandboxBinary: sandboxUnavailable}, sandboxModeOff)
 	if err != nil || mode != sandboxModeOff || status.Backend != "none" {
 		t.Fatalf("explicit foreground sandbox opt-out failed: mode=%q status=%+v err=%v", mode, status, err)
+	}
+}
+
+func TestOfflineNetworkModeRequiresAndConfiguresBubblewrap(t *testing.T) {
+	status := sandboxStatus(sandboxModeWorkspace, "bubblewrap", "shared")
+	mode, status, err := resolveNetworkMode(networkModeOffline, sandboxModeWorkspace, status)
+	if err != nil || mode != networkModeOffline || !status.NetworkRestricted {
+		t.Fatalf("offline network mode was not resolved: mode=%q status=%+v err=%v", mode, status, err)
+	}
+	if _, _, err := resolveNetworkMode(networkModeOffline, sandboxModeOff, sandboxStatus(sandboxModeOff, "none", "disabled")); err == nil {
+		t.Fatal("offline network mode was accepted without an OS sandbox")
+	}
+	home := t.TempDir()
+	cfg := config{SandboxBinary: "/usr/bin/bwrap", AgentBinary: "/usr/bin/hobot-code", AgentDir: filepath.Join(home, "agent"), SessionDir: filepath.Join(home, "sessions"), ConfigRoot: filepath.Join(home, "config"), StateRoot: filepath.Join(home, "state")}
+	_, args, err := foregroundSandboxCommand(cfg, home, sandboxModeWorkspace, networkModeOffline, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandboxArgumentIndex(args, "--unshare-net") < 0 {
+		t.Fatalf("offline foreground sandbox did not unshare networking: %v", args)
+	}
+}
+
+func TestRestrictedForegroundNetworksExposeOnlyTheModelBroker(t *testing.T) {
+	home := t.TempDir()
+	egressRoot := filepath.Join(home, "run", "model-egress")
+	if err := os.MkdirAll(egressRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandboxBinary := filepath.Join(home, "bwrap")
+	if err := os.WriteFile(sandboxBinary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{
+		SandboxBinary: sandboxBinary, AgentBinary: "/usr/bin/hobot-code",
+		AgentDir: filepath.Join(home, "agent"), SessionDir: filepath.Join(home, "sessions"),
+		ConfigRoot: filepath.Join(home, "config"), StateRoot: filepath.Join(home, "state"),
+		AgentdRoot: filepath.Join(home, "state", "agentd"), ModelEgressRoot: egressRoot,
+		ModelEgressSocket: filepath.Join(egressRoot, "model.sock"), DRoboticsBaseURL: defaultDroboticsBaseURL, gatewayCredential: "secret",
+	}
+	for _, path := range []string{cfg.AgentDir, cfg.SessionDir, cfg.ConfigRoot, cfg.StateRoot} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, modelOnly, err := foregroundSandboxCommand(cfg, home, sandboxModeWorkspace, networkModeModelOnly, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandboxArgumentIndex(modelOnly, "--unshare-net") < 0 || sandboxArgumentIndex(modelOnly, "--ro-bind", egressRoot, egressRoot) < 0 {
+		t.Fatalf("model-only sandbox omitted its network namespace or broker mount: %v", modelOnly)
+	}
+	if sandboxArgumentIndex(modelOnly, "--setenv", modelEgressSocketEnv, cfg.ModelEgressSocket) < 0 || sandboxArgumentIndex(modelOnly, "--setenv", modelEgressProvidersEnv, "drobotics") < 0 {
+		t.Fatalf("model-only foreground worker omitted its broker capability: %v", modelOnly)
+	}
+	if sandboxArgumentIndex(modelOnly, "--file", gatewayTokenFDPlaceholder, gatewayCredentialFile(cfg)) >= 0 {
+		t.Fatalf("model-only sandbox received a gateway credential: %v", modelOnly)
+	}
+	metadata := taskMetadata{
+		ID: "00112233445566778899aabb", Cwd: home, SandboxMode: sandboxModeWorkspace,
+		NetworkMode: networkModeModelOnly, Sandbox: sandboxStatus(sandboxModeWorkspace, "bubblewrap", "model-only"),
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.SessionDir, metadata.ID, "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, background, _, err := (&taskManager{cfg: cfg}).sandboxCommand(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandboxArgumentIndex(background, "--setenv", modelEgressSocketEnv, cfg.ModelEgressSocket) < 0 || sandboxArgumentIndex(background, "--setenv", modelEgressProvidersEnv, "drobotics") < 0 {
+		t.Fatalf("model-only background worker omitted its broker capability: %v", background)
+	}
+	_, offline, err := foregroundSandboxCommand(cfg, home, sandboxModeWorkspace, networkModeOffline, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandboxArgumentIndex(offline, "--tmpfs", egressRoot) < 0 || sandboxArgumentIndex(offline, "--ro-bind", egressRoot, egressRoot) >= 0 {
+		t.Fatalf("offline sandbox did not hide the model broker: %v", offline)
+	}
+}
+
+func TestModelOnlyAcceptsOnlyConfiguredBrokerModels(t *testing.T) {
+	root := t.TempDir()
+	providerConfig := filepath.Join(root, "providers.json")
+	if err := os.WriteFile(providerConfig, []byte(`{"schemaVersion":1,"providers":[{"id":"acme","baseUrl":"https://models.example/v1","api":"openai-completions","credentialEnv":"HOBOT_CODE_PROVIDER_KEY_ACME","models":[{"id":"coder"}]},{"id":"google","baseUrl":"https://models.example/v1","api":"google-generative-ai","credentialEnv":"HOBOT_CODE_PROVIDER_KEY_GOOGLE","models":[{"id":"gemini"}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := encodeGatewayCredentialBundle(gatewayCredentialBundle{SchemaVersion: 1, DRobotics: "secret", ProviderKeys: map[string]string{
+		"HOBOT_CODE_PROVIDER_KEY_ACME": "acme-secret", "HOBOT_CODE_PROVIDER_KEY_GOOGLE": "google-secret",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := taskManager{cfg: config{
+		DRoboticsBaseURL: defaultDroboticsBaseURL, ManagedProviderConfig: providerConfig,
+		gatewayCredential: credential, ModelEgressSocket: "/run/user/1000/hobot-code/model-egress/model.sock",
+	}}
+	manager.modelsOnce.Do(func() {})
+	manager.models = map[string]modelOption{
+		"drobotics/kimi-k3": {Provider: "drobotics", ID: "kimi-k3", Default: true},
+		"acme/coder":        {Provider: "acme", ID: "coder", Managed: true},
+		"acme/other":        {Provider: "acme", ID: "other", Managed: true},
+		"google/gemini":     {Provider: "google", ID: "gemini", Managed: true},
+	}
+	if err := manager.validateNetworkModel(networkModeModelOnly, "drobotics/kimi-k3"); err != nil {
+		t.Fatalf("D-Robotics model was rejected: %v", err)
+	}
+	if err := manager.validateNetworkModel(networkModeModelOnly, "acme/coder"); err != nil {
+		t.Fatalf("supported managed model was rejected: %v", err)
+	}
+	for _, model := range []string{"acme/other", "google/gemini"} {
+		if err := manager.validateNetworkModel(networkModeModelOnly, model); err == nil || !strings.Contains(err.Error(), "does not support") {
+			t.Fatalf("unadapted model %s entered model-only mode: %v", model, err)
+		}
 	}
 }
 

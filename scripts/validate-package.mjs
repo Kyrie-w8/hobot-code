@@ -5,15 +5,16 @@ import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseDataLock, PI_LOCK_FIELDS, TOOL_LOCK_FIELDS } from "./release-metadata.mjs";
+import { validatePackagedPiCompatibility, validatePackagedPiCompatibilityContract } from "./validate-pi-compatibility.mjs";
 
 const SOURCE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"]);
-const STRIP_TYPES_PROGRAM = [
+const STRIP_TYPES_FILE_PROGRAM = [
   'import { readFileSync } from "node:fs";',
   'import { stripTypeScriptTypes } from "node:module";',
-  'const source = readFileSync(0, "utf8");',
-  'process.stdout.write(stripTypeScriptTypes(source, { mode: "strip" }));',
+  'process.stdout.write(stripTypeScriptTypes(readFileSync(process.argv[1], "utf8"), { mode: "strip" }));',
 ].join("\n");
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+const SYNTAX_CHECK_TIMEOUT_MS = 10_000;
 export const REQUIRED_PACKAGE_DIRECTORIES = [
   "config",
   "docs",
@@ -23,6 +24,7 @@ export const REQUIRED_PACKAGE_DIRECTORIES = [
   "managed-bin",
   "prompts",
   "runtime",
+  "runtime-probes",
   "skills",
 ];
 
@@ -37,6 +39,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "SECURITY.md",
   "VERSION",
   "PI_RUNTIME",
+  "PI_COMPATIBILITY.json",
   "TOOLS_RUNTIME",
   "docs/architecture.md",
   "docs/agentd-protocol.md",
@@ -44,7 +47,9 @@ export const REQUIRED_PACKAGE_PATHS = [
   "docs/board-reliability.md",
   "docs/compatibility.md",
   "docs/configuration.md",
+  "docs/model-adaptation-levels.md",
   "docs/model-capabilities.md",
+  "docs/pi-compatibility.md",
   "docs/releasing.md",
   "docs/user-directory-layout.md",
   "runtime/README.md",
@@ -52,6 +57,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "runtime/docs/index.md",
   "runtime/hobot",
   "runtime/package.json",
+  "runtime-probes/model-runtime.ts",
   "extensions/rdk/index.ts",
   "extensions/catalog.json",
   "skills/rdk-board/SKILL.md",
@@ -61,6 +67,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "prompts/rdk-expert.md",
   "config/settings.json",
   "config/models.json",
+  "config/providers.json",
   "config/permissions.json",
   "config/memory.json",
   "config/goals.json",
@@ -82,6 +89,8 @@ export const REQUIRED_PACKAGE_PATHS = [
   "rollback.sh",
   "release.sh",
   "uninstall.sh",
+  "verify-install-lifecycle.py",
+  "verify-model-egress-runtime.py",
 ];
 
 export const REQUIRED_EXECUTABLE_PATHS = [
@@ -94,6 +103,8 @@ export const REQUIRED_EXECUTABLE_PATHS = [
   "rollback.sh",
   "release.sh",
   "uninstall.sh",
+  "verify-install-lifecycle.py",
+  "verify-model-egress-runtime.py",
 ];
 
 async function walkFiles(directory) {
@@ -160,17 +171,18 @@ async function resolveImport(importer, specifier) {
 
 export async function validateRelativeImports(rootDirectory) {
   const root = resolve(rootDirectory);
-  const extensionRoot = resolve(root, "extensions");
   const failures = [];
-  for (const importer of await walkFiles(extensionRoot)) {
-    if (!SOURCE_EXTENSIONS.has(extname(importer))) continue;
-    const content = await readFile(importer, "utf8");
-    const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)["'](\.{1,2}\/[^"']+)["']/gu;
-    for (const match of content.matchAll(pattern)) {
-      const resolved = await resolveImport(importer, match[1]);
-      if (!resolved) failures.push(`${relative(root, importer)} -> ${match[1]}`);
-      else if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) {
-        failures.push(`${relative(root, importer)} escapes package root via ${match[1]}`);
+  for (const sourceRoot of [resolve(root, "extensions"), resolve(root, "runtime-probes")]) {
+    for (const importer of await walkFiles(sourceRoot)) {
+      if (!SOURCE_EXTENSIONS.has(extname(importer))) continue;
+      const content = await readFile(importer, "utf8");
+      const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)["'](\.{1,2}\/[^"']+)["']/gu;
+      for (const match of content.matchAll(pattern)) {
+        const resolved = await resolveImport(importer, match[1]);
+        if (!resolved) failures.push(`${relative(root, importer)} -> ${match[1]}`);
+        else if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) {
+          failures.push(`${relative(root, importer)} escapes package root via ${match[1]}`);
+        }
       }
     }
   }
@@ -179,33 +191,33 @@ export async function validateRelativeImports(rootDirectory) {
 
 export async function validateSourceSyntax(rootDirectory) {
   const root = resolve(rootDirectory);
-  const extensionRoot = resolve(root, "extensions");
-  for (const sourcePath of await walkFiles(extensionRoot)) {
-    const extension = extname(sourcePath);
-    if (!SOURCE_EXTENSIONS.has(extension)) continue;
-    try {
-      if (extension.includes("ts")) {
-        const source = await readFile(sourcePath);
-        const inputType = extension === ".cts" ? "commonjs" : "module";
-        const stripped = execFileSync(
-          process.execPath,
-          ["--no-warnings", "--input-type=module", "-e", STRIP_TYPES_PROGRAM],
-          { input: source, maxBuffer: MAX_SOURCE_BYTES, stdio: ["pipe", "pipe", "pipe"] },
-        );
-        execFileSync(
-          process.execPath,
-          [`--input-type=${inputType}`, "--check", "-"],
-          { input: stripped, maxBuffer: MAX_SOURCE_BYTES, stdio: ["pipe", "pipe", "pipe"] },
-        );
-      } else {
-        execFileSync(process.execPath, ["--check", sourcePath], {
-          maxBuffer: MAX_SOURCE_BYTES,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+  for (const sourceRoot of [resolve(root, "extensions"), resolve(root, "runtime-probes")]) {
+    for (const sourcePath of await walkFiles(sourceRoot)) {
+      const extension = extname(sourcePath);
+      if (!SOURCE_EXTENSIONS.has(extension)) continue;
+      try {
+        if (extension.includes("ts")) {
+          const inputType = extension === ".cts" ? "commonjs" : "module";
+          const stripped = execFileSync(
+            process.execPath,
+            ["--no-warnings", "--input-type=module", "-e", STRIP_TYPES_FILE_PROGRAM, sourcePath],
+            { maxBuffer: MAX_SOURCE_BYTES, timeout: SYNTAX_CHECK_TIMEOUT_MS, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] },
+          );
+          execFileSync(
+            process.execPath,
+            [`--input-type=${inputType}`, "--check", "-"],
+            { input: stripped, maxBuffer: MAX_SOURCE_BYTES, timeout: SYNTAX_CHECK_TIMEOUT_MS, killSignal: "SIGKILL", stdio: ["pipe", "pipe", "pipe"] },
+          );
+        } else {
+          execFileSync(process.execPath, ["--check", sourcePath], {
+            maxBuffer: MAX_SOURCE_BYTES, timeout: SYNTAX_CHECK_TIMEOUT_MS, killSignal: "SIGKILL",
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        }
+      } catch (error) {
+        const detail = String(error?.stderr || error?.message || error).trim();
+        throw new Error(`syntax validation failed for ${relative(root, sourcePath)}${detail ? `:\n${detail}` : ""}`);
       }
-    } catch (error) {
-      const detail = String(error?.stderr || error?.message || error).trim();
-      throw new Error(`syntax validation failed for ${relative(root, sourcePath)}${detail ? `:\n${detail}` : ""}`);
     }
   }
 }
@@ -262,6 +274,10 @@ export async function validateRequiredPackageLayout(rootDirectory) {
     const stats = await lstat(resolve(root, name));
     if ((stats.mode & 0o111) === 0) throw new Error(`release package entry is not executable: ${name}`);
   }
+  const publicConfigMode = (await lstat(resolve(root, "config/hobot.env.example"))).mode & 0o777;
+  if (publicConfigMode !== 0o644) {
+    throw new Error("release package config/hobot.env.example must have mode 0644");
+  }
   await validatePackagedKnowledgeLayout(root);
 }
 
@@ -283,8 +299,9 @@ export async function validatePackageMetadata(rootDirectory) {
     "TOOLS_RUNTIME",
     TOOL_LOCK_FIELDS,
   );
+  const piCompatibility = await validatePackagedPiCompatibilityContract(root);
 
-  if (buildInfo.schemaVersion !== 2) throw new Error("BUILD_INFO.json has an unsupported schemaVersion");
+  if (buildInfo.schemaVersion !== 3) throw new Error("BUILD_INFO.json has an unsupported schemaVersion");
   if (!/^[0-9a-f]{40}$/u.test(buildInfo.commit)) throw new Error("BUILD_INFO.json has an invalid commit");
   if (!/^[0-9a-f]{64}$/u.test(buildInfo.agentdSha256)) throw new Error("BUILD_INFO.json has an invalid agentdSha256");
   if (typeof buildInfo.dirty !== "boolean") throw new Error("BUILD_INFO.json dirty must be boolean");
@@ -310,9 +327,10 @@ export async function validatePackageMetadata(rootDirectory) {
   if (
     buildInfo.pi?.version !== pi.PI_VERSION ||
     buildInfo.pi?.commit !== pi.PI_COMMIT ||
-    buildInfo.pi?.archiveSha256 !== pi.PI_LINUX_ARM64_SHA256
+    buildInfo.pi?.archiveSha256 !== pi.PI_LINUX_ARM64_SHA256 ||
+    buildInfo.pi?.compatibilitySha256 !== piCompatibility.digest
   ) {
-    throw new Error("BUILD_INFO.json Pi provenance does not match PI_RUNTIME");
+    throw new Error("BUILD_INFO.json Pi provenance does not match PI_RUNTIME and PI_COMPATIBILITY.json");
   }
   if (buildInfo.tools?.fd !== tools.FD_VERSION || buildInfo.tools?.ripgrep !== tools.RIPGREP_VERSION) {
     throw new Error("BUILD_INFO.json tool provenance does not match TOOLS_RUNTIME");
@@ -357,6 +375,7 @@ export async function validatePackage(rootDirectory, { sourceOnly = false } = {}
   if (sourceOnly) return;
   const expectedVersion = (await readFile(resolve(root, "VERSION"), "utf8")).trim();
   await validateAgentdBinary(root, expectedVersion);
+  await validatePackagedPiCompatibility(root);
   await validatePackageMetadata(root);
   await verifyManifest(root);
 }

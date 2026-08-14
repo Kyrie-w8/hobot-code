@@ -6,6 +6,64 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+testing=${HOBOT_CODE_TESTING:-0}
+install_root=
+if [ -n "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" ]; then
+  if [ "$testing" != 1 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT requires HOBOT_CODE_TESTING=1\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_INSTALL_ROOT" in
+    /|''|*[!A-Za-z0-9_./-]*)
+      printf 'HOBOT_CODE_TEST_INSTALL_ROOT is unsafe: %s\n' "$HOBOT_CODE_TEST_INSTALL_ROOT" >&2
+      exit 1
+      ;;
+    /*) ;;
+    *) printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be absolute\n' >&2; exit 1 ;;
+  esac
+  if [ -L "$HOBOT_CODE_TEST_INSTALL_ROOT" ] || [ ! -d "$HOBOT_CODE_TEST_INSTALL_ROOT" ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
+  install_root_logical=$(CDPATH= cd -L -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -L)
+  install_root=$(CDPATH= cd -P -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -P)
+  if [ "$install_root_logical" != "$install_root" ] || [ "$(stat -c %u "$install_root")" -ne 0 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not traverse links and must be owned by root\n' >&2
+    exit 1
+  fi
+  install_root_mode=$(stat -c %a "$install_root")
+  if [ $((0$install_root_mode & 022)) -ne 0 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not be writable by group or other users\n' >&2
+    exit 1
+  fi
+fi
+
+local_lib_root="$install_root/usr/local/lib"
+local_bin_root="$install_root/usr/local/bin"
+local_sbin_root="$install_root/usr/local/sbin"
+runtime_root="$local_lib_root/hobot-code"
+backup_root="$local_lib_root/hobot-code-backups"
+launcher_path="$local_bin_root/hobot"
+rollback_path="$local_sbin_root/hobot-rollback"
+lock_dir="$local_lib_root/hobot-code.install.lock"
+legacy_config="$install_root/etc/hobot-code"
+legacy_state="$install_root/var/lib/hobot-code"
+proc_root=/proc
+if [ -n "${HOBOT_CODE_TEST_PROC_ROOT:-}" ]; then
+  if [ "$testing" != 1 ] || [ -z "$install_root" ]; then
+    printf 'HOBOT_CODE_TEST_PROC_ROOT requires an isolated test install root\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_PROC_ROOT" in /*) proc_root=$HOBOT_CODE_TEST_PROC_ROOT ;; *) printf 'HOBOT_CODE_TEST_PROC_ROOT must be absolute\n' >&2; exit 1 ;; esac
+  if [ -L "$proc_root" ] || [ ! -d "$proc_root" ]; then
+    printf 'HOBOT_CODE_TEST_PROC_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
+fi
+if [ -n "$install_root" ]; then
+  install -d -m 0755 "$local_lib_root" "$local_bin_root" "$local_sbin_root" "$install_root/etc" "$install_root/var/lib"
+fi
+
 package_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 version=$(cat "$package_dir/VERSION")
 install_channel=${HOBOT_CODE_INSTALL_CHANNEL:-stable}
@@ -31,7 +89,6 @@ fi
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir=
 new_runtime=
-lock_dir=/usr/local/lib/hobot-code.install.lock
 new_launcher=
 new_rollback=
 transaction_complete=0
@@ -80,8 +137,9 @@ fi
 config_root="$install_home/.config/hobot-code"
 agent_dir="$config_root/agent"
 state_root="$install_home/.local/state/hobot-code"
-legacy_config=/etc/hobot-code
-legacy_state=/var/lib/hobot-code
+if [ -n "$install_root" ]; then
+  case "$install_home" in "$install_root"/*) ;; *) printf 'Isolated install home must stay under HOBOT_CODE_TEST_INSTALL_ROOT\n' >&2; exit 1 ;; esac
+fi
 if [ -d "$config_root" ]; then
   config_root_existed=1
 fi
@@ -116,7 +174,10 @@ acquire_install_lock() {
 acquire_install_lock
 
 if ! command -v bwrap >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then
+  if [ -n "$install_root" ]; then
+    printf 'bubblewrap is required before running the isolated install lifecycle test.\n' >&2
+    exit 1
+  elif command -v apt-get >/dev/null 2>&1; then
     printf 'Installing bubblewrap for foreground and background Agent isolation...\n'
     DEBIAN_FRONTEND=noninteractive apt-get install -y bubblewrap
   else
@@ -138,26 +199,26 @@ finish_install() {
     printf 'Installation failed; restoring the previous Hobot Code runtime.\n' >&2
     if [ "$runtime_swapped" -eq 1 ] && [ -n "$backup_dir" ]; then
       if [ -d "$backup_dir/runtime-installed" ]; then
-        if [ -d /usr/local/lib/hobot-code ]; then
-          mv /usr/local/lib/hobot-code "/usr/local/lib/hobot-code-failed-$timestamp-$$"
+        if [ -d "$runtime_root" ]; then
+          mv "$runtime_root" "$runtime_root-failed-$timestamp-$$"
         fi
-        mv "$backup_dir/runtime-installed" /usr/local/lib/hobot-code
-      elif [ "$had_previous_runtime" -eq 0 ] && [ -d /usr/local/lib/hobot-code ]; then
-        mv /usr/local/lib/hobot-code "/usr/local/lib/hobot-code-failed-$timestamp-$$"
+        mv "$backup_dir/runtime-installed" "$runtime_root"
+      elif [ "$had_previous_runtime" -eq 0 ] && [ -d "$runtime_root" ]; then
+        mv "$runtime_root" "$runtime_root-failed-$timestamp-$$"
       fi
     fi
     if [ "$launcher_replaced" -eq 1 ]; then
       if [ -f "$backup_dir/hobot-command" ]; then
-        install -m 0755 "$backup_dir/hobot-command" /usr/local/bin/hobot
+        install -m 0755 "$backup_dir/hobot-command" "$launcher_path"
       else
-        rm -f /usr/local/bin/hobot
+        rm -f "$launcher_path"
       fi
     fi
     if [ "$rollback_replaced" -eq 1 ]; then
       if [ -f "$backup_dir/hobot-rollback-command" ]; then
-        install -m 0755 "$backup_dir/hobot-rollback-command" /usr/local/sbin/hobot-rollback
+        install -m 0755 "$backup_dir/hobot-rollback-command" "$rollback_path"
       else
-        rm -f /usr/local/sbin/hobot-rollback
+        rm -f "$rollback_path"
       fi
     fi
     if [ "$user_paths_touched" -eq 1 ]; then
@@ -244,29 +305,29 @@ refuse_tree_specials() {
   fi
 }
 
-for system_path in /usr/local/lib/hobot-code /usr/local/lib/hobot-code-backups /usr/local/bin/hobot /usr/local/sbin/hobot-rollback; do
+for system_path in "$runtime_root" "$backup_root" "$launcher_path" "$rollback_path"; do
   refuse_symlink "$system_path"
 done
-for system_directory in /usr/local/lib/hobot-code /usr/local/lib/hobot-code-backups; do
+for system_directory in "$runtime_root" "$backup_root"; do
   if [ -e "$system_directory" ] && [ ! -d "$system_directory" ]; then
     printf 'Expected a managed system directory or an absent path: %s\n' "$system_directory" >&2
     exit 1
   fi
 done
-for system_command in /usr/local/bin/hobot /usr/local/sbin/hobot-rollback; do
+for system_command in "$launcher_path" "$rollback_path"; do
   if [ -e "$system_command" ] && [ ! -f "$system_command" ]; then
     printf 'Expected a managed command file or an absent path: %s\n' "$system_command" >&2
     exit 1
   fi
 done
-for root_owned_path in /usr/local/lib/hobot-code /usr/local/lib/hobot-code-backups /usr/local/bin/hobot /usr/local/sbin/hobot-rollback; do
+for root_owned_path in "$runtime_root" "$backup_root" "$launcher_path" "$rollback_path"; do
   if [ -e "$root_owned_path" ] && [ "$(stat -c %u "$root_owned_path")" -ne 0 ]; then
     printf 'Managed system path must be owned by root: %s\n' "$root_owned_path" >&2
     exit 1
   fi
 done
-refuse_tree_symlinks /usr/local/lib/hobot-code
-refuse_tree_specials /usr/local/lib/hobot-code
+refuse_tree_symlinks "$runtime_root"
+refuse_tree_specials "$runtime_root"
 
 for user_path in \
   "$install_home/.config" "$config_root" "$agent_dir" "$config_root/hobot.env" \
@@ -278,7 +339,7 @@ done
 for legacy_path in "$legacy_config" "$legacy_config/agent" "$legacy_state"; do
   refuse_symlink "$legacy_path"
 done
-for config_name in settings.json models.json auth.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+for config_name in settings.json models.json providers.json auth.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
   refuse_symlink "$agent_dir/$config_name"
 done
 refuse_tree_symlinks "$config_root"
@@ -310,7 +371,7 @@ for managed_file in "$config_root/hobot.env" "$state_root/.system-layout-migrate
     exit 1
   fi
 done
-for config_name in settings.json models.json auth.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+for config_name in settings.json models.json providers.json auth.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
   if [ -e "$agent_dir/$config_name" ] && [ ! -f "$agent_dir/$config_name" ]; then
     printf 'Expected a regular configuration file: %s\n' "$agent_dir/$config_name" >&2
     exit 1
@@ -319,12 +380,12 @@ done
 
 active_hobot_pids() {
   detected_pids=
-  for process_path in /proc/[0-9]*; do
+  for process_path in "$proc_root"/[0-9]*; do
     [ -r "$process_path/exe" ] || continue
     executable=$(readlink "$process_path/exe" 2>/dev/null || true)
     executable=${executable% (deleted)}
     case "$executable" in
-      /usr/local/lib/hobot-code/hobot|/usr/local/lib/hobot-code/agentd)
+      "$runtime_root/hobot"|"$runtime_root/agentd")
         process_id=${process_path##*/}
         detected_pids="${detected_pids}${detected_pids:+ }$process_id"
         ;;
@@ -362,7 +423,6 @@ copy_missing_tree() {
 
 prune_install_backups() {
   protected_backup=$1
-  backup_root=/usr/local/lib/hobot-code-backups
   backup_limit_kib=$((backup_max_mib * 1024))
   backup_list=$(mktemp "${TMPDIR:-/tmp}/hobot-backups.XXXXXX")
   find "$backup_root" -mindepth 1 -maxdepth 1 -type d -print | LC_ALL=C sort -r > "$backup_list"
@@ -390,16 +450,16 @@ prune_install_backups() {
   return 0
 }
 
-install -d -m 0755 /usr/local/lib /usr/local/bin /usr/local/sbin /usr/local/lib/hobot-code-backups
+install -d -m 0755 "$local_lib_root" "$local_bin_root" "$local_sbin_root" "$backup_root"
 
 required_kib=$(du -sk "$package_dir" 2>/dev/null | awk '{print $1}')
-for backup_source in /usr/local/lib/hobot-code "$legacy_config" "$legacy_state" "$config_root"; do
+for backup_source in "$runtime_root" "$legacy_config" "$legacy_state" "$config_root"; do
   if [ -e "$backup_source" ]; then
     source_kib=$(du -sk "$backup_source" 2>/dev/null | awk '{print $1}')
     required_kib=$((required_kib + source_kib))
   fi
 done
-available_kib=$(df -Pk /usr/local/lib | awk 'NR == 2 { print $4 }')
+available_kib=$(df -Pk "$local_lib_root" | awk 'NR == 2 { print $4 }')
 required_kib=$((required_kib + 65536))
 home_required_kib=16384
 for migration_source in "$legacy_config" "$legacy_state"; do
@@ -409,7 +469,7 @@ for migration_source in "$legacy_config" "$legacy_state"; do
   fi
 done
 home_available_kib=$(df -Pk "$install_home" | awk 'NR == 2 { print $4 }')
-local_device=$(stat -c %d /usr/local/lib)
+local_device=$(stat -c %d "$local_lib_root")
 home_device=$(stat -c %d "$install_home")
 if [ "$local_device" = "$home_device" ]; then
   combined_required_kib=$((required_kib + home_required_kib))
@@ -425,18 +485,18 @@ elif [ -z "$home_available_kib" ] || [ "$home_available_kib" -lt "$home_required
   exit 1
 fi
 
-backup_dir=$(mktemp -d "/usr/local/lib/hobot-code-backups/$timestamp.XXXXXX")
+backup_dir=$(mktemp -d "$backup_root/$timestamp.XXXXXX")
 chmod 0750 "$backup_dir"
-new_runtime=$(mktemp -d /usr/local/lib/hobot-code.new.XXXXXX)
+new_runtime=$(mktemp -d "$local_lib_root/hobot-code.new.XXXXXX")
 chmod 0755 "$new_runtime"
-new_launcher=$(mktemp /usr/local/bin/hobot.new.XXXXXX)
-new_rollback=$(mktemp /usr/local/sbin/hobot-rollback.new.XXXXXX)
+new_launcher=$(mktemp "$local_bin_root/hobot.new.XXXXXX")
+new_rollback=$(mktemp "$local_sbin_root/hobot-rollback.new.XXXXXX")
 
-if [ -e /usr/local/bin/hobot ]; then
-  install -m 0755 /usr/local/bin/hobot "$backup_dir/hobot-command"
+if [ -e "$launcher_path" ]; then
+  install -m 0755 "$launcher_path" "$backup_dir/hobot-command"
 fi
-if [ -e /usr/local/sbin/hobot-rollback ]; then
-  install -m 0755 /usr/local/sbin/hobot-rollback "$backup_dir/hobot-rollback-command"
+if [ -e "$rollback_path" ]; then
+  install -m 0755 "$rollback_path" "$backup_dir/hobot-rollback-command"
 fi
 if [ -d "$config_root" ]; then
   cp -a "$config_root" "$backup_dir/user-config-before-install"
@@ -446,13 +506,15 @@ cp -R "$package_dir/runtime/." "$new_runtime/"
 install -m 0755 "$package_dir/agentd" "$new_runtime/agentd"
 install -m 0755 "$package_dir/release.sh" "$new_runtime/release.sh"
 install -m 0755 "$package_dir/uninstall.sh" "$new_runtime/uninstall.sh"
-install -d -m 0755 "$new_runtime/docs" "$new_runtime/extensions" "$new_runtime/skills" "$new_runtime/knowledge" "$new_runtime/prompts"
+install -d -m 0755 "$new_runtime/docs" "$new_runtime/extensions" "$new_runtime/runtime-probes" "$new_runtime/skills" "$new_runtime/knowledge" "$new_runtime/prompts"
 cp -R "$package_dir/docs/." "$new_runtime/docs/"
 cp -R "$package_dir/extensions/." "$new_runtime/extensions/"
+cp -R "$package_dir/runtime-probes/." "$new_runtime/runtime-probes/"
 cp -R "$package_dir/skills/." "$new_runtime/skills/"
 cp -R "$package_dir/knowledge/." "$new_runtime/knowledge/"
 cp -R "$package_dir/prompts/." "$new_runtime/prompts/"
 install -m 0644 "$package_dir/PI_RUNTIME" "$new_runtime/PI_RUNTIME"
+install -m 0644 "$package_dir/PI_COMPATIBILITY.json" "$new_runtime/PI_COMPATIBILITY.json"
 install -m 0644 "$package_dir/TOOLS_RUNTIME" "$new_runtime/TOOLS_RUNTIME"
 install -m 0644 "$package_dir/BUILD_INFO.json" "$new_runtime/BUILD_INFO.json"
 install -m 0644 "$package_dir/VERSION" "$new_runtime/VERSION"
@@ -461,7 +523,7 @@ chmod 0644 "$new_runtime/CHANNEL"
 cp -R "$package_dir/licenses/." "$new_runtime/licenses/"
 install -m 0755 "$package_dir/managed-bin/fd" "$new_runtime/bin/fd"
 install -m 0755 "$package_dir/managed-bin/rg" "$new_runtime/bin/rg"
-for config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+for config_name in settings.json models.json providers.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
   install -m 0644 "$package_dir/config/$config_name" "$new_runtime/default-config/$config_name"
 done
 install -m 0644 "$package_dir/config/hobot.env.example" "$new_runtime/default-config/hobot.env.example"
@@ -486,7 +548,7 @@ install -d -m 0700 "$config_root" "$agent_dir" "$state_root" "$state_root/sessio
 chown "$install_user:$install_group" "$config_root" "$agent_dir" "$state_root" "$state_root/sessions" "$state_root/memory" "$state_root/goals" "$state_root/audit"
 
 if [ -d "$legacy_config/agent" ]; then
-  for config_name in settings.json models.json auth.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+  for config_name in settings.json models.json providers.json auth.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
     if [ -f "$legacy_config/agent/$config_name" ] && [ ! -e "$agent_dir/$config_name" ]; then
       install -m 0600 "$legacy_config/agent/$config_name" "$agent_dir/$config_name"
       chown "$install_user:$install_group" "$agent_dir/$config_name"
@@ -511,7 +573,7 @@ if [ -f "$config_root/hobot.env" ]; then
   mv "$env_migration" "$config_root/hobot.env"
 fi
 
-for config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+for config_name in settings.json models.json providers.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
   if [ ! -e "$agent_dir/$config_name" ]; then
     install -m 0600 "$package_dir/config/$config_name" "$agent_dir/$config_name"
   fi
@@ -564,32 +626,36 @@ if [ -n "$active_pids" ]; then
   exit 1
 fi
 
-if [ -d /usr/local/lib/hobot-code ]; then
+if [ -d "$runtime_root" ]; then
   had_previous_runtime=1
   runtime_swapped=1
-  mv /usr/local/lib/hobot-code "$backup_dir/runtime-installed"
+  mv "$runtime_root" "$backup_dir/runtime-installed"
 else
   runtime_swapped=1
 fi
-mv "$new_runtime" /usr/local/lib/hobot-code
+mv "$new_runtime" "$runtime_root"
 
 install -m 0755 "$package_dir/hobot-launcher" "$new_launcher"
 launcher_replaced=1
-mv "$new_launcher" /usr/local/bin/hobot
+mv "$new_launcher" "$launcher_path"
 install -m 0755 "$package_dir/rollback.sh" "$new_rollback"
 rollback_replaced=1
-mv "$new_rollback" /usr/local/sbin/hobot-rollback
+mv "$new_rollback" "$rollback_path"
 
-if [ ! -f /usr/local/bin/hobot ] || [ ! -x /usr/local/bin/hobot ] ||
-   [ ! -f /usr/local/sbin/hobot-rollback ] || [ ! -x /usr/local/sbin/hobot-rollback ]; then
+if [ ! -f "$launcher_path" ] || [ ! -x "$launcher_path" ] ||
+   [ ! -f "$rollback_path" ] || [ ! -x "$rollback_path" ]; then
   printf 'Installed command validation failed\n' >&2
   exit 1
 fi
 
 if [ -d "$backup_dir/runtime-installed" ]; then
-  printf '%s\n' "$backup_dir" > /usr/local/lib/hobot-code/LAST_BACKUP
+  printf '%s\n' "$backup_dir" > "$runtime_root/LAST_BACKUP"
 fi
-/usr/local/lib/hobot-code/hobot --version
+if [ "$testing" = 1 ] && [ -n "$install_root" ] && [ "${HOBOT_CODE_TEST_FAIL_AFTER_SWAP:-0}" = 1 ]; then
+  printf 'Injected isolated install failure after runtime swap\n' >&2
+  exit 1
+fi
+"$runtime_root/hobot" --version
 transaction_complete=1
 prune_install_backups "$backup_dir"
 rm -rf "$legacy_config" "$legacy_state" || printf 'Warning: legacy directories could not be removed after a successful install.\n' >&2

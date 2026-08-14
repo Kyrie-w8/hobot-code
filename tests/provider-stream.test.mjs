@@ -108,8 +108,9 @@ async function createProviderHarness(t) {
     "cache-metrics.mjs",
     "drobotics-config.mjs",
     "drobotics-payload.mjs",
-    "drobotics-response.mjs",
-    "text-safety.mjs",
+	"drobotics-response.mjs",
+	"model-egress.mjs",
+	"text-safety.mjs",
   ]) {
     await copyFile(new URL(name, extensionRoot), join(root, name));
   }

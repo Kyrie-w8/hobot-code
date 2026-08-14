@@ -5,19 +5,22 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, FileDiff, Gauge, Info, MoreHorizontal, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Download, FileDiff, Gauge, Info, KeyRound, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
-import {buildConversation, elapsedLabel, recentEventsAfter} from './conversation-model.js';
+import {buildConversation, elapsedLabel, eventRetentionPresentation, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation, approvalResponse} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
 import {markdownRemarkPlugins} from './markdown-config.js';
 import {effectiveModel as resolveEffectiveModel, modelAcceptsImages} from './model-capabilities.js';
-import {currentModelHealth as resolveCurrentModelHealth, modelHealthLabel} from './model-health.js';
+import {currentModelHealth as resolveCurrentModelHealth} from './model-health.js';
+import {currentModelConformance as resolveCurrentModelConformance} from './model-conformance.js';
+import {currentModelProbe, currentModelQualification, modelReadinessPresentation, qualificationEvidenceNotice, qualificationExpirations, qualificationLayer} from './model-readiness.js';
+import {currentModelRDKMatrix as resolveCurrentModelRDKMatrix, rdkProfileEvidenceLabel, rdkProfileState} from './rdk-profile-matrix.js';
 import {rdkWorkflows} from './rdk-workflows.js';
 import {deploymentCanStart, deploymentCompatibilityLabel, deploymentPhaseLabel, deploymentProfileFor, preferredDeploymentArtifact} from './deployment-model.js';
 import {shouldToggleMaximise} from './titlebar-policy.js';
@@ -27,8 +30,9 @@ import {taskRecovery, taskRecoveryActionAvailable} from './task-recovery.js';
 import {compatibilityPresentation, compatibilityTargetLabel} from './compatibility-presentation.js';
 import {workspaceChangeLabel, workspaceChangeSummary, workspaceDeliverySummary, workspaceDiffLines} from './workspace-changes.js';
 import {extensionCatalogHealth, extensionCatalogSummary, extensionKindLabel, extensionTargetState, filterExtensions} from './extension-center.js';
+import {supportBundlePresentation} from './support-diagnostics.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, ExtensionCatalog, ImageContent, ModelConformance, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -62,6 +66,14 @@ function App() {
   const [checkingModel, setCheckingModel] = useState(false);
   const [modelConformance, setModelConformance] = useState<ModelConformance | null>(null);
   const [verifyingModel, setVerifyingModel] = useState(false);
+  const [modelRuntimeProbe, setModelRuntimeProbe] = useState<ModelRuntimeProbe | null>(null);
+  const [modelRDKProbe, setModelRDKProbe] = useState<ModelRDKProbe | null>(null);
+  const [modelRDKMatrix, setModelRDKMatrix] = useState<ModelRDKMatrix | null>(null);
+  const [modelQualification, setModelQualification] = useState<ModelQualification | null>(null);
+  const [modelQualificationStage, setModelQualificationStage] = useState<'runtime' | 'rdk' | ''>('');
+  const [modelQualificationProfile, setModelQualificationProfile] = useState('');
+  const [modelReadinessError, setModelReadinessError] = useState('');
+  const [showModelReadiness, setShowModelReadiness] = useState(false);
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
   const [editingNeedsImages, setEditingNeedsImages] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
@@ -76,6 +88,11 @@ function App() {
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showExtensions, setShowExtensions] = useState(false);
+  const [showProviders, setShowProviders] = useState(false);
+  const [supportBundle, setSupportBundle] = useState<SupportBundle | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
 	const [workspaceInspection, setWorkspaceInspection] = useState<{taskId: string; loading: boolean; result?: WorkspaceIsolation} | null>(null);
   const [appVersion, setAppVersion] = useState('');
@@ -88,6 +105,7 @@ function App() {
   const [renameValue, setRenameValue] = useState('');
   const [watchRevision, setWatchRevision] = useState(0);
   const [watchStatus, setWatchStatus] = useState<TaskWatchStatus | null>(null);
+  const [eventRetention, setEventRetention] = useState<Pick<EventPage, 'retainedFrom' | 'retainedThrough' | 'latestSequence' | 'historyTruncated' | 'cursorExpired'> | null>(null);
   const [hasNewOutput, setHasNewOutput] = useState(false);
   const startupStarted = useRef(false);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -100,6 +118,7 @@ function App() {
   const snapshotSampling = useRef(false);
   const modelHealthRequest = useRef(0);
   const modelVerificationRequest = useRef(0);
+  const modelQualificationRequest = useRef(0);
   const connectionRequest = useRef(0);
   const connectionTarget = useRef('');
   const watchRetryAttempt = useRef(0);
@@ -107,6 +126,17 @@ function App() {
   const taskStatusHistory = useRef(new Map<string, string>());
 
   const boardId = connection?.board.id ?? '';
+
+  useEffect(() => {
+    const target = boardId;
+    if (!target || connectionState !== 'online' || !connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1')) {
+      setDiagnostics(null);
+      return;
+    }
+    api.diagnostics(target).then((report) => {
+      if (activeBoardId.current === target) setDiagnostics(report);
+    }).catch(() => undefined);
+  }, [boardId, connection?.capabilities?.capabilities, connectionState]);
 
   const refreshTasks = useCallback(async (targetBoard = boardId) => {
     if (!targetBoard) return;
@@ -149,10 +179,18 @@ function App() {
     connectionTarget.current = board.id;
     modelHealthRequest.current += 1;
     modelVerificationRequest.current += 1;
+    modelQualificationRequest.current += 1;
     setCheckingModel(false);
     setVerifyingModel(false);
     setModelHealth(null);
     setModelConformance(null);
+    setModelRuntimeProbe(null);
+    setModelRDKProbe(null);
+    setModelRDKMatrix(null);
+    setModelQualification(null);
+    setModelQualificationStage('');
+    setModelQualificationProfile('');
+    setModelReadinessError('');
     setBusy(true);
     setConnectionState('connecting');
     setError('');
@@ -259,6 +297,13 @@ function App() {
         watchRetryAttempt.current = 0;
         if (watchRetryTimer.current !== null) window.clearTimeout(watchRetryTimer.current);
         watchRetryTimer.current = null;
+        setEventRetention((current) => ({
+          retainedFrom: status.retainedFrom ?? current?.retainedFrom,
+          retainedThrough: status.retainedThrough ?? current?.retainedThrough,
+          latestSequence: status.latestSequence ?? current?.latestSequence,
+          historyTruncated: Boolean(status.historyTruncated || current?.historyTruncated),
+          cursorExpired: Boolean(status.cursorExpired || current?.cursorExpired),
+        }));
         setWatchStatus(null);
       } else if (status.state === 'failed') {
         scheduleWatchRetry(status.boardId, status.taskId, status.message ?? 'The live event stream stopped.');
@@ -287,15 +332,24 @@ function App() {
       : null);
     if (!boardId || !selectedTask || selectedTask.id.startsWith('draft:')) {
       setEvents([]);
+      setEventRetention(null);
       setEventsLoading(false);
       return;
     }
     let active = true;
     setEventsLoading(true);
+    setEventRetention(null);
     const initialAfter = recentEventsAfter(selectedTask.lastSequence);
     api.events(boardId, selectedTask.id, initialAfter, 400).then((page) => {
       if (!active) return;
       setEvents(page.events ?? []);
+      setEventRetention({
+        retainedFrom: page.retainedFrom,
+        retainedThrough: page.retainedThrough,
+        latestSequence: page.latestSequence,
+        historyTruncated: Boolean(page.historyTruncated || selectedTask.logTruncated),
+        cursorExpired: Boolean(page.cursorExpired),
+      });
       const after = page.nextAfter ?? page.events[page.events.length - 1]?.sequence ?? 0;
       return api.watch(boardId, selectedTask.id, after);
     }).catch((reason) => {
@@ -407,6 +461,45 @@ function App() {
   }, [modelConformance]);
 
   useEffect(() => {
+	const model = resolveEffectiveModel(models, selectedTask?.model ?? '');
+	const targetBoard = boardId;
+	const selection = model ? `${model.provider}/${model.id}` : '';
+	const request = ++modelQualificationRequest.current;
+	setModelQualification(null);
+	setModelRDKMatrix(null);
+	if (!targetBoard || !selection || connectionState !== 'online') return;
+	const capabilities = connection?.capabilities?.capabilities ?? [];
+	const reads: Promise<void>[] = [];
+	if (capabilities.includes('models.qualification.v1')) reads.push(api.modelQualification(targetBoard, selection).then((result) => {
+		if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) setModelQualification(result);
+	}));
+	if (capabilities.includes('models.rdk-matrix.v1')) reads.push(api.modelRDKMatrix(targetBoard, selection).then((result) => {
+		if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) setModelRDKMatrix(result);
+	}));
+	for (const read of reads) void read.catch((reason) => {
+		if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) setModelReadinessError(friendlyError(String(reason)));
+	});
+  }, [boardId, connection?.capabilities?.capabilities, connectionState, models, selectedTask?.model]);
+
+  useEffect(() => {
+	if (!modelQualification || modelQualification.state === 'stale' || modelQualification.state === 'untested') return;
+	const expirations = [modelQualification.health?.expiresAt, modelQualification.conformance?.expiresAt]
+		.filter((value): value is string => Boolean(value))
+		.map((value) => Date.parse(value))
+		.filter((value) => Number.isFinite(value) && value > Date.now());
+	if (expirations.length === 0) return;
+	const wait = Math.min(...expirations) - Date.now();
+	const timer = window.setTimeout(() => setModelQualification((current) => {
+		if (!current || current.provider !== modelQualification.provider || current.model !== modelQualification.model || current.updatedAt !== modelQualification.updatedAt) return current;
+		const expiredLayers = qualificationExpirations(current);
+		const next = {...current, expiredLayers};
+		const currentEvidence = qualificationLayer(next, 'route', current.health) || qualificationLayer(next, 'protocol', current.conformance) || qualificationLayer(next, 'runtime', current.runtime) || qualificationLayer(next, 'rdk', current.rdk);
+		return {...next, state: currentEvidence ? current.state : 'expired'};
+	}), Math.max(0, wait + 10));
+	return () => window.clearTimeout(timer);
+  }, [modelQualification]);
+
+  useEffect(() => {
     const textarea = composerRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
@@ -419,6 +512,7 @@ function App() {
 	return query ? available.filter((task) => `${task.name} ${task.projectCwd || task.cwd} ${task.status}`.toLowerCase().includes(query)) : available;
   }, [search, selectedTask, tasks]);
   const conversation = useMemo(() => buildConversation(events), [events]);
+  const retentionNotice = useMemo(() => eventRetentionPresentation(eventRetention), [eventRetention]);
   const projects = useMemo(() => groupTasksByProject(visibleTasks), [visibleTasks]);
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
@@ -430,23 +524,25 @@ function App() {
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
   const selectedTaskRecovery = taskRecovery(selectedTask);
-  const modelPickerValue = selectedModel.startsWith('drobotics/') ? selectedModel : '';
+  const modelPickerValue = models.some((model) => `${model.provider}/${model.id}` === selectedModel) ? selectedModel : '';
   const effectiveModel = resolveEffectiveModel(models, selectedModel);
-  const currentModelHealth = resolveCurrentModelHealth(modelHealth, effectiveModel);
-  const currentModelConformance = modelConformance
-    && effectiveModel
-    && modelConformance.provider === effectiveModel.provider
-    && modelConformance.model === effectiveModel.id
-    && Date.parse(modelConformance.expiresAt) > Date.now()
-      ? modelConformance
-      : null;
+  const qualificationForModel = currentModelQualification(modelQualification, effectiveModel);
+	const currentModelHealth = resolveCurrentModelHealth(modelHealth, effectiveModel) ?? qualificationLayer(qualificationForModel, 'route', qualificationForModel?.health);
+	const currentModelConformance = resolveCurrentModelConformance(modelConformance, effectiveModel) ?? qualificationLayer(qualificationForModel, 'protocol', qualificationForModel?.conformance);
+	const currentModelRuntimeProbe = currentModelProbe(modelRuntimeProbe, effectiveModel) ?? qualificationLayer(qualificationForModel, 'runtime', qualificationForModel?.runtime);
+	const currentModelRDKProbe = currentModelProbe(modelRDKProbe, effectiveModel) ?? qualificationLayer(qualificationForModel, 'rdk', qualificationForModel?.rdk);
+	const currentModelRDKMatrix = resolveCurrentModelRDKMatrix(modelRDKMatrix, effectiveModel);
+	const effectiveQualificationState = qualificationForModel && qualificationExpirations(qualificationForModel).length > 0 && !currentModelHealth && !currentModelConformance && !currentModelRuntimeProbe && !currentModelRDKProbe ? 'expired' : qualificationForModel?.state;
+	const modelReadiness = modelReadinessPresentation({health: currentModelHealth, conformance: currentModelConformance, runtime: currentModelRuntimeProbe, rdk: currentModelRDKProbe, evidenceState: effectiveQualificationState, running: checkingModel || verifyingModel || Boolean(modelQualificationStage)});
   const imageInputSupported = modelAcceptsImages(models, selectedModel);
   const selectedPermissionMode = selectedTask?.permissionMode ?? 'ask';
   const selectedSandboxMode = selectedTask?.sandboxMode ?? (selectedPermissionMode === 'review' ? 'review' : 'workspace');
+  const selectedNetworkMode = selectedTask?.networkMode ?? 'shared';
   const canCreateBlankSideTask = Boolean(connection?.capabilities?.capabilities.includes('tasks.fork.deferred-prompt.v1'));
-  const canChangeModel = Boolean(connectionState === 'online' && selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy);
+  const canChangeModel = Boolean(connectionState === 'online' && selectedTask && (draftSelected || selectedTask.status === 'idle' || terminalStatuses.has(selectedTask.status)) && !busy && !modelQualificationStage && !checkingModel && !verifyingModel);
   const canChangePermissions = canChangeModel;
   const canChangeSandbox = Boolean(connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') && selectedTask && (draftSelected || selectedTask.status === 'queued' || terminalStatuses.has(selectedTask.status)) && !busy && connectionState === 'online');
+  const canChangeNetwork = Boolean(connection?.capabilities?.capabilities.includes('tasks.network.v1') && selectedTask && (draftSelected || selectedTask.status === 'queued' || terminalStatuses.has(selectedTask.status)) && !busy && connectionState === 'online');
   const canStopTask = Boolean(selectedTask && ['queued', 'starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
   const latestConversationItem = conversation[conversation.length - 1];
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
@@ -495,6 +591,7 @@ function App() {
 		permissionMode: selectedPermissionMode,
 		workspaceMode: connection?.capabilities?.capabilities.includes('workspaces.isolation.v1') ? selectedTask.workspaceMode || 'shared' : undefined,
 		sandboxMode: connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') ? selectedSandboxMode : undefined,
+		networkMode: connection?.capabilities?.capabilities.includes('tasks.network.v1') ? selectedNetworkMode : undefined,
 	  });
       else if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, images: submittedImages, kind: 'edit', model: selectedModel});
       else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
@@ -583,25 +680,40 @@ function App() {
     const nextModel = models.find((model) => model.provider === provider && model.id === modelId);
     modelHealthRequest.current += 1;
     modelVerificationRequest.current += 1;
+    modelQualificationRequest.current += 1;
     setCheckingModel(false);
     setVerifyingModel(false);
     setModelHealth(null);
     setModelConformance(null);
+    setModelRuntimeProbe(null);
+    setModelRDKProbe(null);
+    setModelRDKMatrix(null);
+    setModelQualification(null);
+    setModelQualificationStage('');
+    setModelQualificationProfile('');
+    setModelReadinessError('');
     if (attachments.length > 0 && nextModel?.capabilities?.imageInput !== true) {
       setAttachments([]);
       setNotice(`${nextModel?.name || modelId} does not support image input. Attachments were removed.`);
     }
-    if (draftSelected) {
-      setSelectedTask({...selectedTask, model: value});
+	if (draftSelected) {
+	  const networkMode = nextModel?.modelOnly !== true && selectedTask.networkMode === 'model-only' ? 'shared' : selectedTask.networkMode ?? 'shared';
+	  if (networkMode !== selectedTask.networkMode) setNotice('This provider is not yet supported by Model only. Network was changed to shared.');
+	  setSelectedTask({...selectedTask, model: value, networkMode});
       return;
     }
     const sourceTaskId = selectedTask.id;
     setBusy(true);
     setError('');
     try {
+      const networkMode = nextModel?.modelOnly !== true && selectedTask.networkMode === 'model-only' ? 'shared' : selectedTask.networkMode ?? 'shared';
+	  if (networkMode !== selectedTask.networkMode) {
+		await api.setNetworkMode(boardId, selectedTask.id, networkMode);
+		setNotice('This provider is not yet supported by Model only. Network was changed to shared.');
+	  }
       await api.setModel(boardId, selectedTask.id, provider, modelId);
-      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask({...selectedTask, model: value});
-      if (activeBoardId.current === boardId) setTasks((current) => current.map((task) => task.id === selectedTask.id ? {...task, model: value} : task));
+	  if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask({...selectedTask, model: value, networkMode});
+	  if (activeBoardId.current === boardId) setTasks((current) => current.map((task) => task.id === selectedTask.id ? {...task, model: value, networkMode} : task));
     } catch (reason) {
       if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
     } finally {
@@ -610,35 +722,119 @@ function App() {
   }
 
   async function checkModelHealth() {
-    if (!boardId || !effectiveModel || checkingModel || !connection?.capabilities?.capabilities.includes('models.health.v1')) return;
+	if (!boardId || !effectiveModel || effectiveModel.provider !== 'drobotics' || checkingModel || verifyingModel || modelQualificationStage || !connection?.capabilities?.capabilities.includes('models.health.v1')) return;
     const targetBoard = boardId;
     const request = ++modelHealthRequest.current;
     setCheckingModel(true);
+    setModelReadinessError('');
     setError('');
     try {
       const result = await api.modelHealth(targetBoard, `${effectiveModel.provider}/${effectiveModel.id}`, Boolean(currentModelHealth));
-      if (modelHealthRequest.current === request && activeBoardId.current === targetBoard) setModelHealth(result);
+      if (modelHealthRequest.current === request && activeBoardId.current === targetBoard) {
+		setModelHealth(result);
+		void refreshModelQualification(targetBoard, `${effectiveModel.provider}/${effectiveModel.id}`);
+	  }
     } catch (reason) {
-      if (modelHealthRequest.current === request && activeBoardId.current === targetBoard) setError(friendlyError(String(reason)));
+      if (modelHealthRequest.current === request && activeBoardId.current === targetBoard) {
+        const message = friendlyError(String(reason));
+        setModelReadinessError(message);
+        setError(message);
+      }
     } finally {
       if (modelHealthRequest.current === request) setCheckingModel(false);
     }
   }
 
   async function verifyModelConformance() {
-    if (!boardId || !effectiveModel || verifyingModel || !connection?.capabilities?.capabilities.includes('models.conformance.v1')) return;
+	if (!boardId || !effectiveModel || effectiveModel.provider !== 'drobotics' || checkingModel || verifyingModel || modelQualificationStage || !connection?.capabilities?.capabilities.includes('models.conformance.v1')) return;
     const targetBoard = boardId;
     const request = ++modelVerificationRequest.current;
     setVerifyingModel(true);
+    setModelReadinessError('');
     setError('');
     try {
       const result = await api.modelConformance(targetBoard, `${effectiveModel.provider}/${effectiveModel.id}`, Boolean(currentModelConformance));
-      if (modelVerificationRequest.current === request && activeBoardId.current === targetBoard) setModelConformance(result);
+      if (modelVerificationRequest.current === request && activeBoardId.current === targetBoard) {
+		setModelConformance(result);
+		void refreshModelQualification(targetBoard, `${effectiveModel.provider}/${effectiveModel.id}`);
+	  }
     } catch (reason) {
-      if (modelVerificationRequest.current === request && activeBoardId.current === targetBoard) setError(friendlyError(String(reason)));
+      if (modelVerificationRequest.current === request && activeBoardId.current === targetBoard) {
+        const message = friendlyError(String(reason));
+        setModelReadinessError(message);
+        setError(message);
+      }
     } finally {
       if (modelVerificationRequest.current === request) setVerifyingModel(false);
     }
+  }
+
+  async function probeModelRuntime() {
+    if (!boardId || !effectiveModel || checkingModel || verifyingModel || modelQualificationStage || !connection?.capabilities?.capabilities.includes('models.runtime-probe.v1')) return;
+    const targetBoard = boardId;
+    const targetModel = `${effectiveModel.provider}/${effectiveModel.id}`;
+    const request = ++modelQualificationRequest.current;
+    setModelQualificationStage('runtime');
+    setModelReadinessError('');
+    setError('');
+    try {
+      const result = await api.modelRuntimeProbe(targetBoard, targetModel);
+      if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) {
+		setModelRuntimeProbe(result);
+		void refreshModelQualification(targetBoard, targetModel);
+	  }
+    } catch (reason) {
+      if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) {
+        const message = friendlyError(String(reason));
+        setModelReadinessError(message);
+        setError(message);
+      }
+    } finally {
+      if (modelQualificationRequest.current === request) setModelQualificationStage('');
+    }
+  }
+
+  async function probeModelRDK(profile = 'read-only-rdk-diagnostic-v1') {
+    if (!boardId || !effectiveModel || checkingModel || verifyingModel || modelQualificationStage || !connection?.capabilities?.capabilities.includes('models.rdk-probe.v1')) return;
+    const targetBoard = boardId;
+    const targetModel = `${effectiveModel.provider}/${effectiveModel.id}`;
+    const request = ++modelQualificationRequest.current;
+    setModelQualificationStage('rdk');
+    setModelQualificationProfile(profile);
+    setModelReadinessError('');
+    setError('');
+    try {
+      const result = await api.modelRDKProbe(targetBoard, targetModel, profile);
+      if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) {
+		if (profile === 'read-only-rdk-diagnostic-v1') setModelRDKProbe(result);
+		void refreshModelQualification(targetBoard, targetModel);
+	  }
+    } catch (reason) {
+      if (modelQualificationRequest.current === request && activeBoardId.current === targetBoard) {
+        const message = friendlyError(String(reason));
+        setModelReadinessError(message);
+        setError(message);
+      }
+    } finally {
+		if (modelQualificationRequest.current === request) {
+			setModelQualificationStage('');
+			setModelQualificationProfile('');
+		}
+    }
+  }
+
+  async function refreshModelQualification(targetBoard: string, targetModel: string) {
+	const capabilities = connection?.capabilities?.capabilities ?? [];
+	const reads: Promise<void>[] = [];
+	if (capabilities.includes('models.qualification.v1')) reads.push(api.modelQualification(targetBoard, targetModel).then((result) => {
+		if (activeBoardId.current === targetBoard) setModelQualification(result);
+	}));
+	if (capabilities.includes('models.rdk-matrix.v1')) reads.push(api.modelRDKMatrix(targetBoard, targetModel).then((result) => {
+		if (activeBoardId.current === targetBoard) setModelRDKMatrix(result);
+	}));
+	for (const read of reads) void read.catch((reason) => {
+		if (activeBoardId.current === targetBoard) setModelReadinessError(friendlyError(String(reason)));
+	});
   }
 
   async function changePermissionMode(mode: string) {
@@ -681,6 +877,30 @@ function App() {
     }
   }
 
+  async function changeNetworkMode(mode: string) {
+    if (!selectedTask || !boardId || !canChangeNetwork) return;
+	  if (mode !== 'shared' && selectedSandboxMode === 'off') {
+		setError('Restricted networking requires an active OS sandbox.');
+      return;
+    }
+    if (draftSelected) {
+      setSelectedTask({...selectedTask, networkMode: mode as Task['networkMode']});
+      return;
+    }
+    const sourceTaskId = selectedTask.id;
+    setBusy(true);
+    setError('');
+    try {
+      const task = await api.setNetworkMode(boardId, selectedTask.id, mode);
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask(task);
+      if (activeBoardId.current === boardId) setTasks((current) => current.map((item) => item.id === task.id ? task : item));
+    } catch (reason) {
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(friendlyError(String(reason)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function renameSelectedTask() {
     const name = renameValue.trim();
     if (!selectedTask || !boardId || !name || name === selectedTask.name) {
@@ -711,6 +931,8 @@ function App() {
 	  const now = new Date().toISOString();
 	  const id = `draft:${Date.now()}`;
 	  const projectCwd = cwd || selectedTask?.projectCwd || selectedTask?.cwd || '/root';
+	  const draftModel = models.find((model) => model.default) ?? models[0];
+	  const draftNetworkMode = draftModel?.modelOnly === true && connection?.capabilities?.sandbox?.networkModes?.includes('model-only') ? 'model-only' : 'shared';
     setRenamingTask(false);
     setOpenMenu('');
     setEvents([]);
@@ -726,9 +948,10 @@ function App() {
       createdAt: now,
       updatedAt: now,
       lastSequence: 0,
-      model: models[0] ? `${models[0].provider}/${models[0].id}` : '',
+	      model: draftModel ? `${draftModel.provider}/${draftModel.id}` : '',
       permissionMode: 'ask',
 	  sandboxMode: 'workspace',
+		  networkMode: draftNetworkMode,
 	  });
 	  const canInspect = Boolean(boardId && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'));
 	  setWorkspaceInspection(canInspect ? {taskId: id, loading: true} : null);
@@ -890,13 +1113,44 @@ function App() {
     setBusy(true);
     setError('');
     setNotice('');
+    setSupportBundle(null);
     try {
       const bundle = await api.saveSupportBundle(boardId);
-      if (bundle.path) setNotice(`Support bundle saved · ${bundle.checks.pass} passed, ${bundle.checks.warn} warnings, ${bundle.checks.fail} failed · ${bundle.path}`);
+      if (bundle.path) setSupportBundle(bundle);
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function openDiagnostics() {
+    if (!boardId || diagnosticsLoading) return;
+    setShowDiagnostics(true);
+    setDiagnosticsLoading(true);
+    setError('');
+    try {
+      setDiagnostics(await api.diagnostics(boardId));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }
+
+  async function repairDiagnostic(action: string) {
+    if (!boardId || diagnosticsLoading || !window.confirm('Apply this bounded repair on the board? Active Agent work will never be interrupted.')) return;
+    setDiagnosticsLoading(true);
+    setError('');
+    try {
+      const report = await api.repairDiagnostics(boardId, action, true);
+      setDiagnostics(report);
+      setNotice('Board readiness was checked again after the repair.');
+      if (action === 'restart-daemon') setConnection(await api.refreshBoard(boardId));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setDiagnosticsLoading(false);
     }
   }
 
@@ -913,6 +1167,8 @@ function App() {
         {isMock() && <span className="preview-label">Preview</span>}
         <button className="version-button" title="Version and updates" onClick={() => setShowAbout(true)}>{appVersion ? `v${appVersion}` : <LoaderCircle size={12} className="spin" />}</button>
         {connection?.capabilities?.capabilities.includes('extensions.catalog.v1') && <button className="icon-button" title="Capabilities" disabled={connectionState !== 'online'} onClick={() => setShowExtensions(true)}><Box size={16} /></button>}
+        {connection?.capabilities?.capabilities.includes('providers.manage.v1') && <button className="icon-button" title="Model providers" disabled={connectionState !== 'online'} onClick={() => setShowProviders(true)}><KeyRound size={16} /></button>}
+        {connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1') && <button className={`icon-button diagnostic-status ${diagnostics?.status ?? ''}`} title="Board readiness" disabled={connectionState !== 'online'} onClick={() => void openDiagnostics()}>{diagnosticsLoading ? <LoaderCircle size={16} className="spin" /> : <Activity size={16} />}</button>}
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
@@ -963,13 +1219,14 @@ function App() {
           <div className="conversation" ref={timelineRef} onScroll={onTimelineScroll} aria-label="Conversation">
             <div className="conversation-inner">
               {eventsLoading && events.length === 0 && <div className="loading-conversation"><LoaderCircle size={18} className="spin" /><span>Loading conversation</span></div>}
+              {retentionNotice && <div className="conversation-history-notice" role="status"><AlertTriangle size={14} /><span><strong>{retentionNotice.title}</strong>{retentionNotice.detail}</span></div>}
               {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {if (workflow.id === 'deploy-model' && connection?.capabilities?.capabilities.includes('deployments.v1')) {setShowDeployment(true); return;} setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
-                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
+                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
               {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)}))}} />}
               {selectedTask.status === 'queued' ? <div className="agent-progress immediate"><ListTodo size={14} /><span>Waiting for a board Agent slot</span><small>{selectedTask.queuedAt ? relativeTime(selectedTask.queuedAt) : 'queued'}</small></div> : ['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
-              {selectedTaskRecovery && <TaskRecoveryCard presentation={selectedTaskRecovery} canCheckModel={Boolean(effectiveModel && connection?.capabilities?.capabilities.includes('models.health.v1'))} canDiagnose={Boolean(connection?.capabilities?.capabilities.includes('support.bundle.v1'))} busy={busy || checkingModel} onAction={() => {if (selectedTaskRecovery.recovery === 'check-model') {void checkModelHealth(); return;} if (selectedTaskRecovery.recovery === 'diagnose') {void saveSupportBundle(); return;} setComposer(selectedTaskRecovery.action?.prompt ?? ''); window.requestAnimationFrame(() => composerRef.current?.focus());}} />}
+              {selectedTaskRecovery && <TaskRecoveryCard presentation={selectedTaskRecovery} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} canDiagnose={Boolean(connection?.capabilities?.capabilities.includes('support.bundle.v1'))} busy={busy || checkingModel} onAction={() => {if (selectedTaskRecovery.recovery === 'check-model') {void checkModelHealth(); return;} if (selectedTaskRecovery.recovery === 'diagnose') {void saveSupportBundle(); return;} setComposer(selectedTaskRecovery.action?.prompt ?? ''); window.requestAnimationFrame(() => composerRef.current?.focus());}} />}
             </div>
           </div>
 
@@ -996,11 +1253,11 @@ function App() {
 			  <div className="composer-footer">
 				<ImagePickerButton disabled={busy || (composerBlocked && !editingNeedsImages) || connectionState !== 'online' || attachments.length >= 4 || !imageInputSupported} title={imageInputSupported ? 'Attach images' : `${effectiveModel?.name || 'The selected model'} does not support image input`} onPick={(images) => {try {setAttachments(appendImages(attachments, images));} catch (reason) {setError(friendlyError(String(reason)));}}} onError={setError} />
 				{draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1') && <label className="workspace-mode-picker" title={workspaceInspectionLoading ? 'Checking workspace' : workspaceInspection?.result?.reason || 'Choose whether this task shares the project directory'}><GitBranch size={13} /><select aria-label="Workspace mode" value={selectedTask.workspaceMode || 'shared'} disabled={workspaceInspectionLoading} onChange={(event) => changeWorkspaceMode(event.target.value)}><option value="shared">Shared</option><option value="worktree" disabled={!workspaceInspection?.result?.eligible}>Isolated</option></select><ChevronDown size={12} /></label>}
-                <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel.startsWith('drobotics/') && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel.split('/').at(-1)}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id}</option>)}</select><ChevronDown size={12} /></label>
-                {connection?.capabilities?.capabilities.includes('models.health.v1') && <button className={`model-health-button ${currentModelHealth?.status ?? ''}`} type="button" title={currentModelHealth ? `${currentModelHealth.message} Click to check again.${currentModelHealth.cached ? ' Cached result.' : ''}` : 'Check model availability'} onClick={() => void checkModelHealth()} disabled={checkingModel || verifyingModel || !effectiveModel}>{checkingModel ? <LoaderCircle size={12} className="spin" /> : currentModelHealth?.status === 'available' ? <Check size={12} /> : currentModelHealth?.status === 'unavailable' ? <XCircle size={12} /> : <Activity size={12} />}<span>{checkingModel ? 'Checking' : currentModelHealth?.status === 'available' ? `${currentModelHealth.latencyMs ?? 0} ms` : currentModelHealth?.status === 'unavailable' ? modelHealthLabel(currentModelHealth.category) : 'Check'}</span></button>}
-                {connection?.capabilities?.capabilities.includes('models.conformance.v1') && <button className={`model-health-button model-verify-button ${currentModelConformance?.status ?? ''}`} type="button" title={currentModelConformance ? `${currentModelConformance.message} ${currentModelConformance.checks.map((check) => `${check.name}: ${check.status}`).join(', ')}. Click to verify again.` : 'Verify streaming, tools, continuation, and declared input modes'} onClick={() => void verifyModelConformance()} disabled={checkingModel || verifyingModel || !effectiveModel}>{verifyingModel ? <LoaderCircle size={12} className="spin" /> : currentModelConformance?.status === 'verified' ? <ShieldCheck size={12} /> : currentModelConformance?.status === 'failed' ? <AlertTriangle size={12} /> : <ShieldCheck size={12} />}<span>{verifyingModel ? 'Verifying' : currentModelConformance?.status === 'verified' ? 'Verified' : currentModelConformance?.status === 'compatible' ? 'Compatible' : currentModelConformance?.status === 'failed' ? 'Limited' : 'Verify'}</span></button>}
+                <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.provider === 'drobotics' ? model.name || model.id : `${model.provider} · ${model.name || model.id}`}</option>)}</select><ChevronDown size={12} /></label>
+                {connection?.capabilities?.capabilities.some((capability) => ['models.health.v1', 'models.conformance.v1', 'models.runtime-probe.v1', 'models.rdk-probe.v1'].includes(capability)) && <button className={`model-health-button model-readiness-button ${modelReadiness.tone}`} type="button" title={modelReadiness.title} onClick={() => setShowModelReadiness(true)} disabled={!effectiveModel}>{checkingModel || verifyingModel || modelQualificationStage ? <LoaderCircle size={12} className="spin" /> : modelReadiness.tone === 'failed' ? <AlertTriangle size={12} /> : <ShieldCheck size={12} />}<span>{modelReadiness.label}</span></button>}
                 <label className="permission-picker" title={canChangePermissions ? 'Choose approval mode' : 'Stop the current turn before changing permissions'}><ShieldCheck size={13} /><select aria-label="Approval mode" value={selectedPermissionMode} disabled={!canChangePermissions} onChange={(event) => void changePermissionMode(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option><option value="developer">Developer</option></select><ChevronDown size={12} /></label>
-				{connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') && <label className="permission-picker" title={canChangeSandbox ? 'Choose the board-side OS boundary. Network remains available for the model gateway.' : connection.capabilities.sandbox?.reason || 'Stop the current turn before changing the OS boundary'}><ShieldCheck size={13} /><select aria-label="OS sandbox" value={selectedSandboxMode} disabled={!canChangeSandbox} onChange={(event) => void changeSandboxMode(event.target.value)}><option value="review" disabled={!connection.capabilities.sandbox?.available}>Read only</option><option value="workspace" disabled={!connection.capabilities.sandbox?.available}>Workspace</option><option value="system" disabled={!connection.capabilities.sandbox?.available}>Board hardware</option><option value="off">No sandbox</option></select><ChevronDown size={12} /></label>}
+					{connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') && <label className="permission-picker" title={canChangeSandbox ? 'Choose the board-side OS boundary.' : connection.capabilities.sandbox?.reason || 'Stop the current turn before changing the OS boundary'}><ShieldCheck size={13} /><select aria-label="OS sandbox" value={selectedSandboxMode} disabled={!canChangeSandbox} onChange={(event) => void changeSandboxMode(event.target.value)}><option value="review" disabled={!connection.capabilities.sandbox?.available}>Read only</option><option value="workspace" disabled={!connection.capabilities.sandbox?.available}>Workspace</option><option value="system" disabled={!connection.capabilities.sandbox?.available}>Board hardware</option><option value="off" disabled={selectedNetworkMode !== 'shared'}>No sandbox</option></select><ChevronDown size={12} /></label>}
+					{connection?.capabilities?.capabilities.includes('tasks.network.v1') && <label className="permission-picker" title={selectedNetworkMode === 'offline' ? 'No network access. Use a local model.' : selectedNetworkMode === 'model-only' ? 'Only the selected model provider is reachable through the board broker. Tools have no general network.' : 'Model and tools share the board network.'}><select aria-label="Network boundary" value={selectedNetworkMode} disabled={!canChangeNetwork} onChange={(event) => void changeNetworkMode(event.target.value)}><option value="shared">Network</option><option value="model-only" disabled={effectiveModel?.modelOnly !== true || selectedSandboxMode === 'off' || !connection.capabilities.sandbox?.networkModes?.includes('model-only')}>Model only</option><option value="offline" disabled={selectedSandboxMode === 'off' || !connection.capabilities.sandbox?.networkModes?.includes('offline')}>Offline</option></select><ChevronDown size={12} /></label>}
 				<span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : workspaceInspectionLoading ? 'Checking workspace' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
                 {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
@@ -1020,8 +1277,12 @@ function App() {
       {notice && <div className="success-toast"><Check size={17} /><span>{notice}</span><button title="Dismiss" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);}} onRemove={async (board) => {await api.removeBoard(board.id); if (activeBoardId.current === board.id) {activeBoardId.current = ''; setConnection(null); setConnectionState('offline'); setTasks([]); setSelectedTask(null);} setBoards(await api.listBoards());}} />}
 	  {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.projectCwd ?? selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
-      {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onInstall={async () => {if (!connection) throw new Error('Connect a board before updating.'); const result = await api.installBoardUpdate(connection.board.id); setConnection(result.connection); setConnectionState('online'); setSnapshot(result.connection.snapshot ?? null); setWatchRevision((revision) => revision + 1); void refreshWorkspace(); return result;}} onClose={() => setShowAbout(false)} />}
-      {showExtensions && connection && <ExtensionCenterDialog boardId={connection.board.id} boardName={connection.board.name} boardTarget={snapshot?.boardId || connection.compatibility?.boardId || ''} onClose={() => setShowExtensions(false)} />}
+      {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onInstall={async () => {if (!connection) throw new Error('Connect a board before updating.'); const result = await api.installBoardUpdate(connection.board.id); await connect(result.connection.board); return result;}} onClose={() => setShowAbout(false)} />}
+      {showExtensions && connection && <ExtensionCenterDialog boardId={connection.board.id} boardName={connection.board.name} boardTarget={snapshot?.boardId || connection.compatibility?.boardId || ''} taskId={selectedTask?.id.startsWith('draft:') ? '' : selectedTask?.id ?? ''} taskName={selectedTask?.name ?? ''} onClose={() => setShowExtensions(false)} />}
+      {showProviders && connection && <ProviderDialog boardId={connection.board.id} boardName={connection.board.name} onChanged={async (result) => {setNotice(result.message); if (result.applied) {const nextModels = await api.models(connection.board.id); setModels(nextModels);}}} onClose={() => setShowProviders(false)} />}
+      {supportBundle && <SupportDiagnosticsDialog bundle={supportBundle} onClose={() => setSupportBundle(null)} />}
+      {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
+      {showModelReadiness && connection && effectiveModel && <ModelReadinessDialog model={effectiveModel} snapshot={snapshot} capabilities={connection.capabilities?.capabilities ?? []} qualification={qualificationForModel} health={currentModelHealth} conformance={currentModelConformance} runtimeProbe={currentModelRuntimeProbe} rdkProbe={currentModelRDKProbe} rdkMatrix={currentModelRDKMatrix} activeStage={checkingModel ? 'health' : verifyingModel ? 'protocol' : modelQualificationStage} activeProfile={modelQualificationProfile} failure={modelReadinessError} onRunHealth={() => void checkModelHealth()} onRunProtocol={() => void verifyModelConformance()} onRunRuntime={() => void probeModelRuntime()} onRunRDK={(profile) => void probeModelRDK(profile)} onClose={() => setShowModelReadiness(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
 	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
@@ -1157,6 +1418,76 @@ function ApprovalBar({approval, busy, respond}: {approval: Approval; busy: boole
   return <form className="approval-bar" role="alert" aria-label={view.title} onSubmit={(event) => {event.preventDefault(); if (textRequest) respond(approvalResponse(approval.method, 'submit', value));}}><div className="approval-heading"><div className="approval-icon"><ShieldCheck size={17} /></div><strong>{view.title}</strong></div><pre className="approval-detail">{view.detail}</pre>{view.remembersExactCall && <div className="approval-scope"><ShieldCheck size={13} />Remembering applies only to this exact tool call in this task.</div>}{approval.method === 'input' && <input className="approval-input" value={value} placeholder={approval.placeholder} autoFocus onChange={(event) => setValue(event.target.value)} disabled={busy} />}{approval.method === 'editor' && <textarea className="approval-input approval-editor" value={value} placeholder={approval.placeholder} rows={5} autoFocus onChange={(event) => setValue(event.target.value)} disabled={busy} />}<div className="approval-actions">{approval.method === 'select' && <>{approval.options?.map((option) => <button type="button" key={option} className={option === 'Allow once' ? 'primary-button' : 'secondary-button'} disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'select', option))}>{option}</button>)}<button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'cancel'))}>Cancel</button></>}{approval.method === 'confirm' && <><button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'deny'))}>Deny</button><button type="button" className="primary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'confirm'))}>Allow once</button></>}{textRequest && <><button type="button" className="secondary-button" disabled={busy} onClick={() => respond(approvalResponse(approval.method, 'cancel'))}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Submit</button></>}</div></form>;
 }
 
+type ReadinessStage = 'health' | 'protocol' | 'runtime' | 'rdk' | '';
+
+function ModelReadinessDialog({model, snapshot, capabilities, qualification, health, conformance, runtimeProbe, rdkProbe, rdkMatrix, activeStage, activeProfile, failure, onRunHealth, onRunProtocol, onRunRuntime, onRunRDK, onClose}: {
+  model: ModelOption;
+  snapshot: SystemSnapshot | null;
+  capabilities: string[];
+  qualification?: ModelQualification;
+  health?: ModelHealth;
+  conformance?: ModelConformance;
+  runtimeProbe?: ModelRuntimeProbe;
+  rdkProbe?: ModelRDKProbe;
+  rdkMatrix?: ModelRDKMatrix;
+  activeStage: ReadinessStage;
+  activeProfile: string;
+  failure: string;
+  onRunHealth: () => void;
+  onRunProtocol: () => void;
+  onRunRuntime: () => void;
+  onRunRDK: (profile: string) => void;
+  onClose: () => void;
+}) {
+  const has = (capability: string) => capabilities.includes(capability);
+  const busy = Boolean(activeStage);
+	const summary = modelReadinessPresentation({health, conformance, runtime: runtimeProbe, rdk: rdkProbe, evidenceState: qualification?.state, running: busy});
+	const evidenceNotice = qualificationEvidenceNotice(qualification);
+	const directGatewayApplicable = model.provider === 'drobotics';
+  const healthState = !has('models.health.v1') || !directGatewayApplicable ? 'unsupported' : activeStage === 'health' ? 'running' : health?.status === 'available' ? 'passed' : health?.status === 'unavailable' ? 'failed' : 'idle';
+  const protocolState = !has('models.conformance.v1') || !directGatewayApplicable ? 'unsupported' : activeStage === 'protocol' ? 'running' : conformance?.status === 'failed' ? 'failed' : conformance?.status === 'compatible' ? 'partial' : conformance ? 'passed' : 'idle';
+  const runtimeState = !has('models.runtime-probe.v1') ? 'unsupported' : activeStage === 'runtime' ? 'running' : runtimeProbe?.status === 'failed' ? 'failed' : runtimeProbe ? 'partial' : 'idle';
+	const rdkApplicable = (model.provider === 'drobotics' || model.managed === true) && ['x5', 's100', 's600'].includes(snapshot?.boardId ?? '');
+  const rdkState = !has('models.rdk-probe.v1') || !rdkApplicable ? 'unsupported' : activeStage === 'rdk' ? 'running' : rdkProbe?.status === 'failed' ? 'failed' : rdkProbe?.status === 'passed' && rdkProbe.releaseEligible ? 'passed' : rdkProbe ? 'partial' : 'idle';
+  const matrixReady = has('models.rdk-matrix.v1') && Boolean(rdkMatrix);
+  const runLabel = (stage: ReadinessStage, result?: unknown) => activeStage === stage ? 'Running' : result ? 'Run again' : 'Run';
+  return <div className="modal-backdrop"><section className="modal model-readiness-modal" role="dialog" aria-modal="true" aria-labelledby="model-readiness-title">
+    <div className="modal-header"><div><span className="modal-eyebrow">{model.provider}</span><h2 id="model-readiness-title">{model.name || model.id} readiness</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div>
+    <div className="readiness-overview"><div className={`readiness-summary ${summary.tone}`}><ReadinessStateIcon state={summary.tone} /><span><strong>{summary.label}</strong><small>{summary.title}</small></span></div>{evidenceNotice && <div className="readiness-evidence-notice"><RefreshCw size={13} /><span>{evidenceNotice}</span></div>}{failure && <div className="readiness-failure" role="alert"><AlertTriangle size={14} /><span>{failure}</span></div>}</div>
+    <div className="readiness-layers">
+      <ReadinessLayer index="01" title="Route" subtitle="Minimal model request" state={healthState} detail={health ? `${health.message}${health.latencyMs ? ` ${health.latencyMs} ms.` : ''}${health.cached ? ' Cached result.' : ''}` : directGatewayApplicable ? 'Checks credentials, routing, and basic availability only.' : 'Direct route probing is currently available for the built-in D-Robotics gateway. Use Agent runtime for this managed provider.'} duration="Usually under 20 seconds" action={has('models.health.v1') && directGatewayApplicable ? <button className="secondary-button" disabled={busy} onClick={onRunHealth}>{activeStage === 'health' && <LoaderCircle size={13} className="spin" />}{runLabel('health', health)}</button> : undefined} />
+      <ReadinessLayer index="02" title="Gateway protocol" subtitle="Streaming, tools, continuation, inputs" state={protocolState} detail={conformance?.message || (directGatewayApplicable ? 'Tests the gateway contract without running a real Agent or RDK task.' : 'Direct protocol qualification is provider-specific. The isolated Agent runtime test covers the actual Pi integration instead.')} duration="Usually under 1 minute" action={has('models.conformance.v1') && directGatewayApplicable ? <button className="secondary-button" disabled={busy} onClick={onRunProtocol}>{activeStage === 'protocol' && <LoaderCircle size={13} className="spin" />}{runLabel('protocol', conformance)}</button> : undefined} />
+      <ReadinessLayer index="03" title="Agent runtime" subtitle="Tools, approvals, thinking, compaction, recovery" state={runtimeState} detail={runtimeProbe?.message || 'Runs an isolated Agent suite with synthetic tools and a forced interrupted-session recovery.'} duration="Can take up to 15 minutes" extra={runtimeProbe?.pending?.length ? <span>Still pending: {runtimeProbe.pending.join(', ')}</span> : undefined} action={has('models.runtime-probe.v1') ? <button className="secondary-button" disabled={busy} onClick={onRunRuntime}>{activeStage === 'runtime' && <LoaderCircle size={13} className="spin" />}{runLabel('runtime', runtimeProbe)}</button> : undefined} />
+      <ReadinessLayer index="04" title="RDK workflows" subtitle={snapshot ? `${snapshot.boardId.toUpperCase()} · RDK OS ${snapshot.rdkOsVersion}` : 'Recognized RDK board required'} state={rdkState} detail={matrixReady ? 'Evidence is recorded independently for each bounded board workflow.' : rdkProbe?.message || 'Runs one named, read-only board diagnostic profile against live board state and versioned official knowledge.'} duration="Each runnable profile can take up to 5 minutes" extra={matrixReady ? <RDKProfileRows profiles={rdkMatrix!.profiles} activeProfile={activeProfile} busy={busy} onRun={onRunRDK} /> : rdkProbe ? <><span>Profile: {rdkProbe.profile}</span><span>Knowledge: {rdkProbe.binding.knowledgeVersion} · Build: {rdkProbe.binding.buildStatus}{rdkProbe.binding.dirty ? ' (dirty)' : ''}</span><span>Not covered: {rdkProbe.notCovered.join(', ')}</span>{rdkProbe.sources?.map((source) => <button key={source} className="readiness-source" onClick={() => void api.openExternalURL(source)}>{source}</button>)}</> : !rdkApplicable ? <span>Available for built-in or explicitly managed models on a detected X5, S100, or S600.</span> : undefined} action={!matrixReady && has('models.rdk-probe.v1') && rdkApplicable ? <button className="secondary-button" disabled={busy} onClick={() => onRunRDK('read-only-rdk-diagnostic-v1')}>{activeStage === 'rdk' && <LoaderCircle size={13} className="spin" />}{runLabel('rdk', rdkProbe)}</button> : undefined} />
+    </div>
+    <div className="readiness-footer"><Info size={14} /><span>Opening this panel reads private board evidence without calling a model. Only Run actions make model requests; results stay bound to this exact model, board, build, and named scope.</span><button className="primary-button" onClick={onClose}>Done</button></div>
+  </section></div>;
+}
+
+function ReadinessLayer({index, title, subtitle, state, detail, duration, extra, action}: {index: string; title: string; subtitle: string; state: string; detail: string; duration: string; extra?: ReactNode; action?: ReactNode}) {
+	return <section className={`readiness-layer ${state}`}><span className="readiness-index">{index}</span><ReadinessStateIcon state={state} /><div className="readiness-layer-copy"><div><strong>{title}</strong><small>{subtitle}</small></div><p>{detail}</p>{extra && <div className="readiness-extra">{extra}</div>}<span className="readiness-duration">{state === 'unsupported' ? 'Not available for this model or connection' : duration}</span></div><div className="readiness-action">{action}</div></section>;
+}
+
+function RDKProfileRows({profiles, activeProfile, busy, onRun}: {profiles: ModelRDKProfileStatus[]; activeProfile: string; busy: boolean; onRun: (profile: string) => void}) {
+	return <div className="rdk-profile-list">{profiles.map((profile) => {
+		const state = rdkProfileState(profile, activeProfile);
+		const runnable = profile.availability === 'available';
+		return <div className={`rdk-profile-row ${state}`} key={profile.id}>
+			<ReadinessStateIcon state={state} />
+			<div className="rdk-profile-copy"><div><strong>{profile.name}</strong><small>{profile.evidenceClass} · {rdkProfileEvidenceLabel(profile)}</small></div><p>{profile.description}</p>{profile.evidenceState === 'stale' && profile.staleReasons.length > 0 && <span>Changed: {profile.staleReasons.join(', ')}</span>}{profile.result && <><span>Knowledge: {profile.result.binding.knowledgeVersion} · Build: {profile.result.binding.buildStatus}</span>{profile.result.sources?.map((source) => <button key={source} className="readiness-source" onClick={() => void api.openExternalURL(source)}>{source}</button>)}</>}<span>Not covered: {profile.notCovered.join(', ')}</span></div>
+			<button className="secondary-button" disabled={busy || !runnable} onClick={() => onRun(profile.id)}>{state === 'running' && <LoaderCircle size={13} className="spin" />}{profile.availability === 'planned' ? 'Planned' : profile.availability === 'unsupported-target' ? 'Unavailable' : profile.result ? 'Run again' : 'Run'}</button>
+		</div>;
+	})}</div>;
+}
+
+function ReadinessStateIcon({state}: {state: string}) {
+  if (state === 'running') return <LoaderCircle className="readiness-state spin" size={17} />;
+  if (state === 'failed') return <XCircle className="readiness-state" size={17} />;
+  if (state === 'passed') return <Check className="readiness-state" size={17} />;
+  if (state === 'partial') return <ShieldCheck className="readiness-state" size={17} />;
+  return <Activity className="readiness-state" size={17} />;
+}
+
 function BoardDialog({boards, busy, onClose, onConnect, onSave, onRemove}: {boards: Board[]; busy: boolean; onClose: () => void; onConnect: (board: Board) => void; onSave: (board: Board) => Promise<void>; onRemove: (board: Board) => Promise<void>}) {
   const [editing, setEditing] = useState(boards.length === 0);
   const [form, setForm] = useState<Board>({id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''});
@@ -1255,30 +1586,25 @@ function AboutDialog({appVersion, connection, onInstall, onClose}: {appVersion: 
   const [installing, setInstalling] = useState(false);
   const [failure, setFailure] = useState('');
   const [success, setSuccess] = useState('');
-  const request = useRef(0);
   const boardID = connection?.board.id ?? '';
   const activeTasks = connection?.daemon?.activeTasks ?? 0;
   const checkUpdate = useCallback(async () => {
-    if (!boardID) return;
-    const active = ++request.current;
+    if (!boardID || checking || installing) return;
     setChecking(true);
     setFailure('');
     try {
-      const result = await api.checkBoardUpdate(boardID);
-      if (request.current === active) setCheck(result);
+      setCheck(await api.checkBoardUpdate(boardID));
     } catch (reason) {
-      if (request.current === active) setFailure(friendlyError(String(reason)));
+      setFailure(friendlyError(String(reason)));
     } finally {
-      if (request.current === active) setChecking(false);
+      setChecking(false);
     }
-  }, [boardID]);
+  }, [boardID, checking, installing]);
   useEffect(() => {
-    request.current += 1;
     setCheck(null);
     setSuccess('');
     if (boardID) void checkUpdate();
-    return () => {request.current += 1;};
-  }, [boardID, connection?.daemon?.version, checkUpdate]);
+  }, [boardID, connection?.daemon?.version]);
   const install = async () => {
     if (installing || check?.status !== 'available' || activeTasks > 0) return;
     setInstalling(true);
@@ -1295,10 +1621,131 @@ function AboutDialog({appVersion, connection, onInstall, onClose}: {appVersion: 
     }
   };
   const updateTone = failure ? 'failed' : check?.status === 'available' ? 'available' : check ? 'current' : 'checking';
-  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose} disabled={installing}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className={`board-update-state ${updateTone}`}>{checking || installing ? <LoaderCircle size={17} className="spin" /> : failure ? <AlertTriangle size={17} /> : check?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{installing ? `Installing v${check?.availableVersion ?? ''}` : checking ? 'Checking stable releases' : failure ? 'Update unavailable' : check?.status === 'available' ? `Version ${check.availableVersion} is ready` : check?.status === 'source-older' ? 'Installed version is newer' : check ? 'Up to date' : 'Connect a board to check'}</strong><small>{installing ? 'Downloading, verifying, installing, and reconnecting.' : failure || success || check?.message || 'Update status is available after connecting a board.'}</small></span></div>{activeTasks > 0 && <div className="update-blocked"><Info size={14} /><span>{activeTasks} active board task{activeTasks === 1 ? '' : 's'} must finish or stop before updating.</span></div>}<div className="update-actions">{check?.status === 'available' && <button className="primary-button" disabled={installing || checking || activeTasks > 0} onClick={() => void install()}>{installing ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Update to v{check.availableVersion}</button>}<button className="secondary-button" disabled={installing || checking || !connection} onClick={() => void checkUpdate()}><RefreshCw size={14} className={checking ? 'spin' : ''} />Check again</button></div><div className="update-guidance"><ShieldCheck size={15} /><span><strong>Transactional board update</strong><small>Configuration and conversations stay in place. Downgrades are refused, releases are verified, and failed installs restore the previous runtime.</small></span></div><div className="command-list"><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose} disabled={installing}>Done</button></div></div></div></div>;
+  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose} disabled={installing}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Pi contract" value={build?.piCompatibilitySha256 ? build.piCompatibilitySha256.slice(0, 12) : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className={`board-update-state ${updateTone}`}>{checking || installing ? <LoaderCircle size={17} className="spin" /> : failure ? <AlertTriangle size={17} /> : check?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{installing ? `Installing v${check?.availableVersion ?? ''}` : checking ? 'Checking stable releases' : failure ? 'Update unavailable' : check?.status === 'available' ? `Version ${check.availableVersion} is ready` : check?.status === 'source-older' ? 'Installed version is newer' : check ? 'Up to date' : 'Connect a board to check'}</strong><small>{installing ? 'Downloading, verifying, installing, and reconnecting.' : failure || success || check?.message || 'Update status is available after connecting a board.'}</small></span></div>{activeTasks > 0 && <div className="update-blocked"><Info size={14} /><span>{activeTasks} active board task{activeTasks === 1 ? '' : 's'} must finish or stop before updating.</span></div>}<div className="update-actions">{check?.status === 'available' && <button className="primary-button" disabled={installing || checking || activeTasks > 0} onClick={() => void install()}>{installing ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Update to v{check.availableVersion}</button>}<button className="secondary-button" disabled={installing || checking || !connection} onClick={() => void checkUpdate()}><RefreshCw size={14} className={checking ? 'spin' : ''} />Check again</button></div><div className="update-guidance"><ShieldCheck size={15} /><span><strong>Transactional board update</strong><small>Configuration and conversations stay in place. Downgrades are refused, releases are verified, and failed installs restore the previous runtime.</small></span></div><div className="command-list"><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose} disabled={installing}>Done</button></div></div></div></div>;
 }
 
-function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boardId: string; boardName: string; boardTarget: string; onClose: () => void}) {
+const providerAPIs: Array<{value: ManagedProvider['api']; label: string}> = [
+  {value: 'openai-completions', label: 'OpenAI Chat Completions'},
+  {value: 'openai-responses', label: 'OpenAI Responses'},
+  {value: 'anthropic-messages', label: 'Anthropic Messages'},
+  {value: 'google-generative-ai', label: 'Google Generative AI'},
+];
+
+function ProviderDialog({boardId, boardName, onChanged, onClose}: {boardId: string; boardName: string; onChanged: (result: ProviderMutationResult) => Promise<void>; onClose: () => void}) {
+  const emptyForm: AddManagedProviderRequest = {id: '', name: '', baseUrl: '', api: 'openai-completions', model: '', modelName: '', contextWindow: 128000, maxTokens: 16384, reasoning: false, image: false, authHeader: false};
+  const [providers, setProviders] = useState<ManagedProvider[]>([]);
+  const [form, setForm] = useState<AddManagedProviderRequest>(emptyForm);
+  const [adding, setAdding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState('');
+  const [pendingApply, setPendingApply] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<ManagedProvider | null>(null);
+  const [rotateTarget, setRotateTarget] = useState<ManagedProvider | null>(null);
+  const [confirmSharedRotation, setConfirmSharedRotation] = useState(false);
+  const [hasKey, setHasKey] = useState(false);
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  const request = useRef(0);
+
+  const load = useCallback(async () => {
+    const active = ++request.current;
+    setLoading(true);
+    setFailure('');
+    try {
+      const result = await api.providers(boardId);
+      if (request.current === active) setProviders(result);
+    } catch (reason) {
+      if (request.current === active) setFailure(friendlyError(String(reason)));
+    } finally {
+      if (request.current === active) setLoading(false);
+    }
+  }, [boardId]);
+
+  useEffect(() => {void load(); return () => {request.current += 1; if (apiKeyRef.current) apiKeyRef.current.value = '';};}, [load]);
+
+  const finishMutation = async (result: ProviderMutationResult) => {
+    setPendingApply(!result.applied);
+    await load();
+    await onChanged(result);
+  };
+  const add = async (event: FormEvent) => {
+    event.preventDefault();
+    const apiKey = apiKeyRef.current?.value ?? '';
+    if (!apiKey) return;
+    setBusy(true);
+    setFailure('');
+    try {
+      const result = await api.addProvider(boardId, form, apiKey);
+      if (apiKeyRef.current) apiKeyRef.current.value = '';
+      setHasKey(false);
+      setForm(emptyForm);
+      setAdding(false);
+      await finishMutation(result);
+    } catch (reason) {
+      setFailure(friendlyError(String(reason)));
+    } finally {
+      if (apiKeyRef.current) apiKeyRef.current.value = '';
+      setHasKey(false);
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!removeTarget) return;
+    setBusy(true);
+    setFailure('');
+    try {
+      const result = await api.removeProvider(boardId, removeTarget.id);
+      setRemoveTarget(null);
+      await finishMutation(result);
+    } catch (reason) {
+      setFailure(friendlyError(String(reason)));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const rotate = async (event: FormEvent) => {
+    event.preventDefault();
+    const apiKey = apiKeyRef.current?.value ?? '';
+    if (!rotateTarget || !apiKey || (rotateTarget.credentialUsers > 1 && !confirmSharedRotation)) return;
+    setBusy(true);
+    setFailure('');
+    try {
+      const result = await api.rotateProvider(boardId, rotateTarget.id, apiKey, confirmSharedRotation);
+      if (apiKeyRef.current) apiKeyRef.current.value = '';
+      setHasKey(false);
+      setConfirmSharedRotation(false);
+      setRotateTarget(null);
+      await finishMutation(result);
+    } catch (reason) {
+      setFailure(friendlyError(String(reason)));
+    } finally {
+      if (apiKeyRef.current) apiKeyRef.current.value = '';
+      setHasKey(false);
+      setBusy(false);
+    }
+  };
+  const apply = async () => {
+    setBusy(true);
+    setFailure('');
+    try {
+      const result = await api.applyProviderConfiguration(boardId);
+      await finishMutation(result);
+    } catch (reason) {
+      setFailure(friendlyError(String(reason)));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const canSubmit = form.id.length > 0 && form.baseUrl.length > 0 && form.model.length > 0 && hasKey && Number(form.contextWindow) >= 1024 && Number(form.maxTokens) >= 128 && Number(form.maxTokens) <= Number(form.contextWindow);
+
+  return <div className="modal-backdrop"><section className="modal provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title"><div className="modal-header"><div><span className="modal-eyebrow">{boardName}</span><h2 id="provider-dialog-title">Model providers</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh providers" onClick={() => void load()} disabled={loading || busy}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose} disabled={busy}><X size={18} /></button></div></div>
+    {pendingApply && <div className="provider-pending"><AlertTriangle size={16} /><span><strong>Saved on the board</strong><small>Apply when active Agent work is idle.</small></span><button className="secondary-button" onClick={() => void apply()} disabled={busy}>{busy && <LoaderCircle size={13} className="spin" />}Apply</button></div>}
+    {!adding && !rotateTarget ? <><div className="provider-list">{loading && providers.length === 0 ? <div className="provider-empty"><LoaderCircle size={17} className="spin" /><span>Reading board providers</span></div> : providers.map((provider) => <article className="provider-row" key={provider.id}><div className="provider-icon"><KeyRound size={16} /></div><div className="provider-copy"><div><strong>{provider.name || provider.id}</strong><span className={`provider-key-state ${provider.credential}`}>{provider.credential === 'ready' ? 'Key ready' : 'Key missing'}</span>{provider.credentialUsers > 1 && <span className="provider-key-state shared">Shared by {provider.credentialUsers}</span>}</div><small>{provider.api}</small><div className="provider-models">{provider.models.map((model) => <span key={model.id}><code>{model.name || model.id}</code><small>{model.reasoning ? 'Reasoning' : 'Standard'}{model.image ? ' · Images' : ''} · {Math.round(model.contextWindow / 1000)}K</small></span>)}</div></div><div className="provider-actions"><button className="icon-button compact" title={`Rotate key for ${provider.name || provider.id}`} onClick={() => {setFailure(''); setRemoveTarget(null); setHasKey(false); setConfirmSharedRotation(false); setRotateTarget(provider);}} disabled={busy}><RefreshCw size={14} /></button><button className="icon-button compact danger-icon" title={`Remove ${provider.name || provider.id}`} onClick={() => {setFailure(''); setRotateTarget(null); setRemoveTarget(provider);}} disabled={busy}><Trash2 size={14} /></button></div></article>)}{!loading && providers.length === 0 && <div className="provider-empty"><KeyRound size={19} /><span><strong>No managed providers</strong><small>D-Robotics models remain available.</small></span></div>}</div><footer className="provider-footer"><span><ShieldCheck size={13} />Keys stay in the board's private credential file.</span><button className="primary-button" onClick={() => {setFailure(''); setRemoveTarget(null); setRotateTarget(null); setAdding(true);}} disabled={busy}><Plus size={14} />Add provider</button></footer></> : adding ? <form className="form-grid provider-form" onSubmit={(event) => void add(event)}><div className="form-row provider-identity"><label><span>Provider ID</span><input value={form.id} onChange={(event) => setForm({...form, id: event.target.value.toLowerCase()})} pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="acme" autoFocus required /></label><label><span>Display name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} maxLength={120} placeholder="Acme Gateway" /></label></div><label><span>API base URL</span><input type="url" value={form.baseUrl} onChange={(event) => setForm({...form, baseUrl: event.target.value})} placeholder="https://models.example.com/v1" required /></label><label><span>Protocol</span><select value={form.api} onChange={(event) => setForm({...form, api: event.target.value as ManagedProvider['api']})}>{providerAPIs.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label><div className="form-row provider-identity"><label><span>Model ID</span><input value={form.model} onChange={(event) => setForm({...form, model: event.target.value})} placeholder="coder-v2" required /></label><label><span>Model name</span><input value={form.modelName} onChange={(event) => setForm({...form, modelName: event.target.value})} maxLength={120} placeholder="Acme Coder" /></label></div><div className="form-row provider-limits"><label><span>Context window</span><input type="number" min="1024" max="4000000" value={form.contextWindow} onChange={(event) => setForm({...form, contextWindow: Number(event.target.value)})} required /></label><label><span>Max output</span><input type="number" min="128" max="131072" value={form.maxTokens} onChange={(event) => setForm({...form, maxTokens: Number(event.target.value)})} required /></label></div><div className="provider-toggles"><label><input type="checkbox" checked={form.reasoning} onChange={(event) => setForm({...form, reasoning: event.target.checked})} /><span>Reasoning</span></label><label><input type="checkbox" checked={form.image} onChange={(event) => setForm({...form, image: event.target.checked})} /><span>Image input</span></label><label><input type="checkbox" checked={form.authHeader} onChange={(event) => setForm({...form, authHeader: event.target.checked})} /><span>Authorization header</span></label></div><label><span>API key</span><input ref={apiKeyRef} type="password" autoComplete="new-password" onInput={(event) => setHasKey((event.currentTarget as HTMLInputElement).value.length > 0)} required /></label>{failure && <div className="provider-failure"><AlertTriangle size={14} />{failure}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => {if (apiKeyRef.current) apiKeyRef.current.value = ''; setHasKey(false); setAdding(false);}} disabled={busy}>Cancel</button><button className="primary-button" disabled={!canSubmit || busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <KeyRound size={15} />}Save on board</button></div></form> : <form className="form-grid provider-form provider-rotate-form" onSubmit={(event) => void rotate(event)}><div className="provider-rotate-context"><RefreshCw size={16} /><span><strong>Rotate key for {rotateTarget!.name || rotateTarget!.id}</strong><small>Provider metadata and model settings stay unchanged.</small></span></div><label><span>New API key</span><input ref={apiKeyRef} type="password" autoComplete="new-password" autoFocus onInput={(event) => setHasKey((event.currentTarget as HTMLInputElement).value.length > 0)} required /></label>{rotateTarget!.credentialUsers > 1 && <label className="provider-shared-confirm"><input type="checkbox" checked={confirmSharedRotation} onChange={(event) => setConfirmSharedRotation(event.target.checked)} /><span>This key is shared by {rotateTarget!.credentialUsers} providers. Rotate it for all of them.</span></label>}{failure && <div className="provider-failure"><AlertTriangle size={14} />{failure}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => {if (apiKeyRef.current) apiKeyRef.current.value = ''; setHasKey(false); setConfirmSharedRotation(false); setRotateTarget(null);}} disabled={busy}>Cancel</button><button className="primary-button" disabled={!hasKey || busy || (rotateTarget!.credentialUsers > 1 && !confirmSharedRotation)}>{busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}Rotate key</button></div></form>}
+    {failure && !adding && !rotateTarget && <div className="provider-failure"><AlertTriangle size={14} />{failure}</div>}{removeTarget && <div className="provider-remove-confirm" role="alert"><AlertTriangle size={16} /><span><strong>Remove {removeTarget.name || removeTarget.id}?</strong><small>The provider and its unshared board credential will be removed.</small></span><button className="secondary-button" onClick={() => setRemoveTarget(null)} disabled={busy}>Cancel</button><button className="danger-button" onClick={() => void remove()} disabled={busy}>{busy && <LoaderCircle size={13} className="spin" />}Remove</button></div>}
+  </section></div>;
+}
+
+function ExtensionCenterDialog({boardId, boardName, boardTarget, taskId, taskName, onClose}: {boardId: string; boardName: string; boardTarget: string; taskId: string; taskName: string; onClose: () => void}) {
   const [catalog, setCatalog] = useState<ExtensionCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState('');
@@ -1310,7 +1757,7 @@ function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boar
     let cancelled = false;
     setLoading(true);
     setFailure('');
-    api.extensions(boardId).then((result) => {
+    api.extensions(boardId, taskId).then((result) => {
       if (!cancelled) setCatalog(result);
     }).catch((reason) => {
       if (!cancelled) setFailure(friendlyError(String(reason)));
@@ -1318,7 +1765,7 @@ function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boar
       if (!cancelled) setLoading(false);
     });
     return () => {cancelled = true;};
-  }, [boardId, revision]);
+  }, [boardId, taskId, revision]);
 
   const target = boardTarget.trim().toLowerCase();
   const health = catalog ? extensionCatalogHealth(catalog) : null;
@@ -1326,19 +1773,19 @@ function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boar
   const entries = catalog ? filterExtensions(catalog.entries, query, kind) : [];
   const kinds = catalog ? ['all', ...Array.from(new Set(catalog.entries.map((entry) => entry.kind)))] : ['all'];
 
-  return <div className="modal-backdrop"><section className="modal extension-center-modal" role="dialog" aria-modal="true" aria-labelledby="extension-center-title"><div className="modal-header"><div><span className="modal-eyebrow">{boardName}</span><h2 id="extension-center-title">Capabilities</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh capabilities" onClick={() => setRevision((value) => value + 1)} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div></div>
+  return <div className="modal-backdrop"><section className="modal extension-center-modal" role="dialog" aria-modal="true" aria-labelledby="extension-center-title"><div className="modal-header"><div><span className="modal-eyebrow">{boardName} · {taskId ? taskName || 'Selected task' : 'Global'}</span><h2 id="extension-center-title">Capabilities</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh capabilities" onClick={() => setRevision((value) => value + 1)} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div></div>
     {loading && !catalog ? <div className="extension-center-loading"><LoaderCircle size={18} className="spin" /><span>Reading the board catalog</span></div> : failure && !catalog ? <div className="extension-center-failure"><AlertTriangle size={18} /><span><strong>Catalog unavailable</strong><small>{failure}</small></span><button className="secondary-button" onClick={() => setRevision((value) => value + 1)}>Retry</button></div> : catalog && summary && health ? <>
       <div className="extension-overview"><div className={`extension-health ${health.healthy ? 'healthy' : 'warning'}`}>{health.healthy ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}<span><strong>{health.healthy ? 'Board-enforced catalog' : 'Catalog needs review'}</strong><small>{health.healthy ? `v${catalog.productVersion} · read-only inventory · ${target ? target.toUpperCase() : 'target unknown'}` : health.issues.join(' · ')}</small></span></div><div className="extension-stats"><span><strong>{summary.supported}</strong><small>For this board</small></span><span><strong>{summary.required}</strong><small>Required</small></span><span><strong>{summary.skills}</strong><small>Skills</small></span><span><strong>{summary.total}</strong><small>Total</small></span></div></div>
       {catalog.diagnostics && catalog.diagnostics.length > 0 && <div className="extension-sources" aria-label="Configured capability sources">{catalog.diagnostics.map((diagnostic) => <span key={diagnostic.source} className={`source-${diagnostic.status}`} title={diagnostic.message}>{extensionSourceIcon(diagnostic.status)}<strong>{extensionSourceLabel(diagnostic.source)}</strong><small>{extensionSourceStatus(diagnostic.status)}</small></span>)}</div>}
       <div className="extension-controls"><label className="extension-search"><Search size={14} /><input aria-label="Search capabilities" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search capabilities" /></label><div className="extension-kind-tabs" role="tablist" aria-label="Capability type">{kinds.map((value) => <button key={value} type="button" role="tab" aria-selected={kind === value} className={kind === value ? 'selected' : ''} onClick={() => setKind(value)}>{value === 'all' ? 'All' : extensionKindLabel(value)}</button>)}</div></div>
       <div className="extension-list">{entries.map((entry) => {
         const targetState = extensionTargetState(entry, target);
-        const Icon = entry.kind === 'skill' ? Brain : entry.kind === 'provider' ? Bot : entry.kind === 'integration' ? Wrench : Box;
+        const Icon = entry.kind === 'skill' ? Brain : entry.kind === 'provider' ? Bot : entry.kind === 'integration' ? Wrench : entry.kind === 'package' ? Package : entry.kind === 'prompt' ? FilePenLine : entry.kind === 'theme' ? Palette : Box;
         const permissions = entry.permissions ?? [];
         const targets = entry.targets ?? [];
         const provides = entry.provides ?? [];
         const requires = entry.requires ?? [];
-        return <article className={`extension-row extension-${entry.kind} extension-${targetState.state}`} key={entry.id}><div className="extension-row-icon"><Icon size={17} /></div><div className="extension-row-main"><div className="extension-row-heading"><strong>{entry.name}</strong><span className={`extension-state state-${targetState.state}`}>{targetState.label}</span></div><p>{entry.description}</p><div className="extension-meta"><span>{extensionKindLabel(entry.kind)}</span><code>{entry.version === 'configured' ? 'Configured' : `v${entry.version}`}</code><span>{entry.origin}</span><span>{entry.scope}</span></div>{permissions.length > 0 && <div className="extension-permissions"><ShieldCheck size={12} /><span>{permissions.map(extensionPermissionLabel).join(' · ')}</span></div>}<details className="extension-details"><summary>Technical details<ChevronRight className="details-chevron" size={12} /></summary><div><InfoRow label="ID" value={entry.id} mono copy={entry.id} /><InfoRow label="Runtime" value={entry.runtime} /><InfoRow label="Targets" value={targets.length ? targets.map((value) => value.toUpperCase()).join(', ') : 'All'} />{provides.length > 0 && <InfoRow label="Provides" value={provides.join(', ')} />}{requires.length > 0 && <InfoRow label="Requires" value={requires.join(', ')} />}</div></details></div></article>;
+        return <article className={`extension-row extension-${entry.kind} extension-${targetState.state}`} key={entry.id}><div className="extension-row-icon"><Icon size={17} /></div><div className="extension-row-main"><div className="extension-row-heading"><strong>{entry.name}</strong><span className={`extension-state state-${targetState.state}`}>{targetState.label}</span></div><p>{entry.description}</p><div className="extension-meta"><span>{extensionKindLabel(entry.kind)}</span><code>{entry.version === 'configured' || entry.version === 'declared' || entry.version === 'unversioned' ? entry.version : `v${entry.version}`}</code><span>{entry.origin}</span><span>{entry.scope}</span></div>{permissions.length > 0 && <div className="extension-permissions"><ShieldCheck size={12} /><span>{permissions.map(extensionPermissionLabel).join(' · ')}</span></div>}<details className="extension-details"><summary>Technical details<ChevronRight className="details-chevron" size={12} /></summary><div><InfoRow label="ID" value={entry.id} mono copy={entry.id} /><InfoRow label="Runtime" value={entry.runtime} /><InfoRow label="Trust" value={entry.trust} /><InfoRow label="Targets" value={targets.length ? targets.map((value) => value.toUpperCase()).join(', ') : 'All'} />{entry.statusDetail && <InfoRow label="Evidence" value={entry.statusDetail} />}{provides.length > 0 && <InfoRow label="Provides" value={provides.join(', ')} />}{requires.length > 0 && <InfoRow label="Requires" value={requires.join(', ')} />}</div></details></div></article>;
       })}{entries.length === 0 && <div className="extension-empty"><Search size={19} /><span>No matching capabilities</span></div>}</div>
       <footer className="extension-footer"><span><ShieldCheck size={13} />Execution: {catalog.policy.executionAuthority} · permissions: {catalog.policy.permissionAuthority}{catalog.capturedAt ? ` · ${relativeTime(catalog.capturedAt)}` : ''}</span><button className="primary-button" onClick={onClose}>Done</button></footer>
     </> : null}
@@ -1346,23 +1793,23 @@ function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boar
 }
 
 function extensionPermissionLabel(permission: string) {
-  const labels: Record<string, string> = {'model-network': 'Model network', workspace: 'Workspace', subprocess: 'Commands', 'rdk-devices': 'RDK devices', 'user-state': 'User state'};
+  const labels: Record<string, string> = {'model-network': 'Model network', workspace: 'Workspace', subprocess: 'Commands', 'rdk-devices': 'RDK devices', 'user-state': 'User state', 'current-user': 'Current user', 'model-context': 'Model context', 'agent-tools': 'Agent tools', tui: 'Terminal UI'};
   return labels[permission] ?? permission;
 }
 
 function extensionSourceLabel(source: string) {
-  const labels: Record<string, string> = {providers: 'Providers', hooks: 'Hooks', lsp: 'LSP'};
+  const labels: Record<string, string> = {providers: 'Providers', 'managed-providers': 'Managed providers', hooks: 'Hooks', lsp: 'LSP', 'pi-settings': 'Pi settings', 'user-extensions': 'User extensions', 'user-skills': 'User skills', 'shared-skills': 'Shared skills', 'user-prompts': 'User prompts', 'user-themes': 'User themes', 'project-resources': 'Project resources', 'project-settings': 'Project settings', 'project-extensions': 'Project extensions', 'project-skills': 'Project skills', 'project-prompts': 'Project prompts', 'project-themes': 'Project themes', 'project-shared-skills': 'Project shared skills'};
   return labels[source] ?? source;
 }
 
 function extensionSourceStatus(status: string) {
-  const labels: Record<string, string> = {ok: 'Inspected', missing: 'Not configured', invalid: 'Invalid', unsafe: 'Unsafe file', unreadable: 'Unreadable', truncated: 'Limited'};
+  const labels: Record<string, string> = {ok: 'Inspected', missing: 'Not configured', contextual: 'Select a task', untrusted: 'Not trusted', invalid: 'Invalid', unsafe: 'Unsafe file', unreadable: 'Unreadable', partial: 'Partially inspected', truncated: 'Limited'};
   return labels[status] ?? status;
 }
 
 function extensionSourceIcon(status: string) {
   if (status === 'ok') return <Check size={11} />;
-  if (status === 'missing') return <Info size={11} />;
+  if (status === 'missing' || status === 'contextual' || status === 'untrusted') return <Info size={11} />;
   return <AlertTriangle size={11} />;
 }
 
@@ -1419,7 +1866,7 @@ function BoardMonitor({connection, connectionState, snapshot, task}: {connection
   const bandwidth = activeDDRBandwidth(snapshot);
   const acceleratorProcesses = snapshot.accelerator?.available ? snapshot.accelerator.processes ?? [] : [];
   const recovery = taskRecovery(task);
-  const taskAlerts = [recovery ? {tone: 'danger', label: recovery.message} : null, task?.logTruncated ? {tone: 'warning', label: 'Older task events were truncated.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
+  const taskAlerts = [recovery ? {tone: 'danger', label: recovery.message} : null, task?.logTruncated ? {tone: 'warning', label: 'This long task retains its newest event history.'} : null].filter(Boolean) as Array<{tone: string; label: string}>;
   const alerts = [...health.issues, ...taskAlerts];
   return <>
     <CompatibilityPanel connection={connection} />
@@ -1455,12 +1902,52 @@ function CompatibilityPanel({connection}: {connection: Connection}) {
   </InspectorSection>;
 }
 
+function SupportDiagnosticsDialog({bundle, onClose}: {bundle: SupportBundle; onClose: () => void}) {
+  const presentation = supportBundlePresentation(bundle);
+  const findings = bundle.findings ?? [];
+  const icon = presentation.tone === 'failed' ? <XCircle size={18} /> : presentation.tone === 'partial' ? <AlertTriangle size={18} /> : <ShieldCheck size={18} />;
+  return <div className="modal-backdrop"><section className="modal support-modal" role="dialog" aria-modal="true" aria-labelledby="support-title">
+    <div className="modal-header"><div><span className="modal-eyebrow">Private board diagnostics</span><h2 id="support-title">Diagnostic results</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div>
+    <div className="support-content">
+      <div className={`support-summary ${presentation.tone}`}>{icon}<span><strong>{presentation.label}</strong><small>{presentation.summary}</small></span></div>
+      <div className="support-counts"><span><strong>{bundle.checks.pass}</strong>Passed</span><span><strong>{bundle.checks.info ?? 0}</strong>Information</span><span><strong>{bundle.checks.warn}</strong>Warnings</span><span><strong>{bundle.checks.fail}</strong>Failed</span></div>
+      <div className="support-findings">{findings.length > 0 ? findings.map((finding) => <article className={`support-finding ${finding.severity}`} key={finding.code}>{finding.severity === 'error' ? <XCircle size={15} /> : finding.severity === 'warning' ? <AlertTriangle size={15} /> : <Info size={15} />}<div><span>{finding.scope}</span><strong>{finding.title}</strong><p>{finding.summary}</p><small>{finding.action}</small></div></article>) : <div className="support-empty"><ShieldCheck size={17} /><span>No action is required by the current checks.</span></div>}</div>
+      <div className="support-file"><Download size={15} /><span><strong>Saved privately</strong><small>{bundle.path}</small></span><CopyButton value={bundle.path} /></div>
+      <div className="support-privacy"><ShieldCheck size={14} /><span>No conversations, prompts, tool content, credentials, project files, or raw logs are included. Review the saved file before sharing it.</span></div>
+    </div>
+    <div className="support-footer"><span>{formatBytes(bundle.sizeBytes)} · SHA-256 {bundle.sha256.slice(0, 12)}</span><button className="primary-button" onClick={onClose}>Done</button></div>
+  </section></div>;
+}
+
+function ReadinessDiagnosticsDialog({report, loading, onRefresh, onRepair, onClose}: {report: DiagnosticReport | null; loading: boolean; onRefresh: () => void; onRepair: (action: string) => void; onClose: () => void}) {
+  const tone = report?.status === 'action-required' ? 'failed' : report?.status === 'attention' ? 'partial' : 'passed';
+  const icon = tone === 'failed' ? <XCircle size={18} /> : tone === 'partial' ? <AlertTriangle size={18} /> : <ShieldCheck size={18} />;
+  const label = report?.status === 'action-required' ? 'Action required' : report?.status === 'attention' ? 'Needs attention' : 'Ready';
+  return <div className="modal-backdrop"><section className="modal support-modal" role="dialog" aria-modal="true" aria-labelledby="readiness-title">
+    <div className="modal-header"><div><span className="modal-eyebrow">Board readiness</span><h2 id="readiness-title">Installation and runtime</h2></div><div className="modal-header-actions"><button className="icon-button" title="Check again" onClick={onRefresh} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose} disabled={loading}><X size={18} /></button></div></div>
+    {!report && loading ? <div className="deployment-loading"><LoaderCircle size={17} className="spin" />Checking the board without changing it</div> : !report ? <div className="support-content"><div className="support-empty"><AlertTriangle size={17} /><span>Readiness diagnostics are unavailable for this connection. Update the board-side Hobot Code, reconnect, and check again.</span></div></div> : <div className="support-content">
+      <div className={`support-summary ${tone}`}>{icon}<span><strong>{label}</strong><small>{report.status === 'healthy' ? 'The current installation is ready for Agent work.' : 'Review the findings and apply only the bounded repairs you approve.'}</small></span></div>
+      <div className="support-counts"><span><strong>{report.summary.pass}</strong>Passed</span><span><strong>{report.summary.info}</strong>Information</span><span><strong>{report.summary.warn}</strong>Warnings</span><span><strong>{report.summary.fail}</strong>Failed</span></div>
+      <div className="support-findings">{report.findings.length > 0 ? report.findings.map((finding) => <article className={`support-finding ${finding.severity}`} key={finding.code}>{finding.severity === 'error' ? <XCircle size={15} /> : finding.severity === 'warning' ? <AlertTriangle size={15} /> : <Info size={15} />}<div><span>{finding.scope}</span><strong>{finding.title}</strong><p>{finding.summary}</p><small>{finding.action}</small></div></article>) : <div className="support-empty"><ShieldCheck size={17} /><span>No action is required by the current checks.</span></div>}</div>
+      {report.repairs.length > 0 && <div className="diagnostic-repairs">{report.repairs.map((repair) => <div key={repair.id} className={repair.status}><ShieldCheck size={15} /><span><strong>{repair.summary}</strong><small>{repair.reason}</small></span>{repair.status === 'available' && <button className="secondary-button" onClick={() => onRepair(repair.id)} disabled={loading}>Repair</button>}</div>)}</div>}
+      <details className="diagnostic-checks"><summary>All checks<ChevronRight className="details-chevron" size={13} /></summary><div>{report.checks.map((check) => <div key={check.name} className={check.status}><span>{check.status}</span><strong>{check.name}</strong><small>{check.summary}</small></div>)}</div></details>
+      <div className="support-privacy"><ShieldCheck size={14} /><span>This inspection is read-only and does not create a support file, call a model, or include conversation and project content.</span></div>
+    </div>}
+    <div className="support-footer"><span>{report ? `Checked ${relativeTime(report.capturedAt)}` : loading ? 'Checking' : 'Unavailable'}</span><button className="primary-button" onClick={onClose} disabled={loading}>Done</button></div>
+  </section></div>;
+}
+
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
 
 function TaskSandboxInspector({task}: {task: Task}) {
   const sandbox = task.sandbox;
   if (!sandbox) return null;
-  return <InspectorSection title="Agent boundary"><InfoRow label="Profile" value={`${task.sandboxMode || sandbox.effective} · ${sandbox.backend}`} /><InfoRow label="File writes" value={sandbox.filesystemRestricted ? 'Restricted' : 'Host access'} /><InfoRow label="Devices" value={sandbox.devicesRestricted ? 'Minimal devices' : task.sandboxMode === 'off' ? 'Host access' : 'Board hardware'} /><InfoRow label="Privileges" value={sandbox.capabilitiesDropped ? 'Dropped' : 'Host privileges'} /><InfoRow label="Network" value={sandbox.networkRestricted ? 'Restricted' : 'Shared for model access'} />{sandbox.reason && <div className="deployment-summary">{sandbox.reason}</div>}</InspectorSection>;
+  const network = task.networkMode === 'model-only'
+    ? 'Model only · tools isolated'
+    : task.networkMode === 'offline'
+      ? 'Offline · fully isolated'
+      : 'Shared';
+  return <InspectorSection title="Agent boundary"><InfoRow label="Profile" value={`${task.sandboxMode || sandbox.effective} · ${sandbox.backend}`} /><InfoRow label="File writes" value={sandbox.filesystemRestricted ? 'Restricted' : 'Host access'} /><InfoRow label="Devices" value={sandbox.devicesRestricted ? 'Minimal devices' : task.sandboxMode === 'off' ? 'Host access' : 'Board hardware'} /><InfoRow label="Privileges" value={sandbox.capabilitiesDropped ? 'Dropped' : 'Host privileges'} /><InfoRow label="Network" value={network} />{sandbox.reason && <div className="deployment-summary">{sandbox.reason}</div>}</InspectorSection>;
 }
 function InfoRow({label, value, mono, copy}: {label: string; value: string; mono?: boolean; copy?: string}) { return <div className="info-row"><span>{label}</span><div><strong className={mono ? 'mono' : ''}>{value}</strong>{copy && <CopyButton value={copy} />}</div></div>; }
 function CopyButton({value}: {value: string}) { const [copied, setCopied] = useState(false); return <button type="button" className="copy-button" title={copied ? 'Copied' : 'Copy'} onClick={() => void navigator.clipboard.writeText(value).then(() => {setCopied(true); window.setTimeout(() => setCopied(false), 1200);})}>{copied ? <Check size={13} /> : <Clipboard size={13} />}</button>; }

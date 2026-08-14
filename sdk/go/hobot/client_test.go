@@ -30,7 +30,13 @@ while IFS= read -r line; do
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","board":"D-Robotics RDK S100","boardId":"s100","hostname":"rdk","rdkOsVersion":"4.0.2","kernel":"6.1.83","architecture":"arm64","cpuCores":8,"loadAverage":[0.5,0.4,0.3],"memory":{"totalBytes":8589934592,"availableBytes":4294967296},"disk":{"path":"/root","totalBytes":68719476736,"availableBytes":34359738368},"thermalZones":[{"name":"pvt_bpu","celsius":52.5}],"bpuDevices":["/dev/bpu","/dev/bpu_core0"],"bpuCores":[{"index":0,"name":"BPU 0","utilizationPercent":42,"currentFrequencyHz":1000000000,"maximumFrequencyHz":1500000000}],"bpuTelemetry":{"status":"available","source":"sysfs-ratio-devfreq"},"aiMemory":{"available":true,"bpuAllocationAvailable":true,"ionAvailable":true,"cmaAvailable":false,"dmaBufAvailable":true,"bpuAllocatedBytes":33554432,"ionAllocatedBytes":134217728,"dmaBufBytes":4194304,"dmaBufObjects":1},"rdkUtilities":{"hrt_model_exec":true},"uptimeSeconds":3600}}\n' "$id"
       ;;
 	*'"method":"support.bundle"'*)
-	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"112233445566","createdAt":"2026-08-12T00:00:00Z","path":"/private/support.json","sizeBytes":18,"sha256":"demo","content":"eyJzYWZlIjp0cnVlfQo=","excluded":["prompts"],"checks":{"pass":4,"warn":1,"fail":0}}}\n' "$id"
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"112233445566","createdAt":"2026-08-12T00:00:00Z","path":"/private/hobot-code-support-demo.json","sizeBytes":14,"sha256":"7eeccb134911ebae5c9ab93e29604540babeda8e0f5a634d92fc0a1d3dc45c52","content":"eyJzYWZlIjp0cnVlfQo=","excluded":["prompts"],"checks":{"pass":4,"warn":1,"fail":0}}}\n' "$id"
+	  ;;
+	*'"method":"diagnostics.inspect"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"schemaVersion":1,"capturedAt":"2026-08-12T00:00:00Z","status":"attention","summary":{"pass":1,"info":0,"warn":1,"fail":0},"checks":[{"name":"configuration-current","status":"pass","summary":"agentd is current"},{"name":"model-configuration","status":"warn","summary":"no provider"}],"findings":[{"code":"model-configuration","severity":"warning","scope":"models","title":"No provider","summary":"No provider is configured.","action":"Configure a provider.","count":1}],"repairs":[]}}\n' "$id"
+	  ;;
+	*'"method":"diagnostics.repair"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"schemaVersion":1,"action":"private-runtime-permissions","changed":1,"report":{"schemaVersion":1,"capturedAt":"2026-08-12T00:00:00Z","status":"healthy","summary":{"pass":1,"info":0,"warn":0,"fail":0},"checks":[{"name":"state-directory","status":"pass","summary":"private permissions"}],"findings":[],"repairs":[]}}}\n' "$id"
 	  ;;
     *'"method":"deployment.inspect"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"capturedAt":"2026-08-12T00:00:00Z","cwd":"/root/models","board":"D-Robotics RDK S100","boardId":"s100","rdkOsVersion":"4.0.5","artifacts":[{"path":"/root/models/detector_nashe.hbm","relativePath":"detector_nashe.hbm","name":"detector_nashe.hbm","kind":"rdk-hbm","sizeBytes":1024,"modifiedAt":"2026-08-12T00:00:00Z","compatibility":"candidate","reason":"march matches"}],"truncated":false}}\n' "$id"
@@ -68,8 +74,11 @@ while IFS= read -r line; do
     *'"method":"task.restart"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"starting","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:02Z","lastSequence":7,"restartCount":1}}\n' "$id"
       ;;
-    *'"method":"task.subscribe"'*)
-      printf '{"protocol":1,"id":"%%s","ok":true,"result":{"replayed":0,"following":true}}\n' "$id"
+    *'"method":"task.network"'*)
+      printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"stopped","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:02Z","lastSequence":7,"sandboxMode":"workspace","networkMode":"offline","sandbox":{"requested":"workspace","effective":"workspace","backend":"bubblewrap","filesystemRestricted":true,"devicesRestricted":true,"capabilitiesDropped":true,"networkRestricted":true}}}\n' "$id"
+      ;;
+	*'"method":"task.subscribe"'*)
+	  printf '{"protocol":1,"id":"%%s","ok":true,"result":{"replayed":0,"following":true,"retainedFrom":5,"retainedThrough":7,"latestSequence":8,"historyTruncated":true,"cursorExpired":true}}\n' "$id"
       printf '%%s\n' '{"protocol":1,"kind":"event","taskId":"00112233445566778899aabb","sequence":8,"time":"2026-08-11T00:00:02Z","event":{"type":"agent_settled"},"normalized":{"schema":2,"type":"task.idle"}}'
       exit 0
       ;;
@@ -92,7 +101,7 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	capabilities, err := client.GetCapabilities(ctx)
 	if err != nil || capabilities.EventSchema != 2 {
@@ -107,8 +116,16 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}
 	bundle, err := client.SupportBundle(ctx, true)
-	if err != nil || string(bundle.Content) != "{\"safe\":true}\n" || bundle.Path != "/private/support.json" || bundle.Checks.Pass != 4 {
+	if err != nil || string(bundle.Content) != "{\"safe\":true}\n" || bundle.Path != "/private/hobot-code-support-demo.json" || bundle.Checks.Pass != 4 {
 		t.Fatalf("support bundle=%+v err=%v", bundle, err)
+	}
+	diagnostics, err := client.Diagnostics(ctx)
+	if err != nil || diagnostics.SchemaVersion != 1 || diagnostics.Summary.Warn != 1 || len(diagnostics.Findings) != 1 {
+		t.Fatalf("diagnostics=%+v err=%v", diagnostics, err)
+	}
+	repaired, err := client.RepairDiagnostics(ctx, "private-runtime-permissions", true)
+	if err != nil || repaired.Changed != 1 || repaired.Report.Status != "healthy" {
+		t.Fatalf("diagnostic repair=%+v err=%v", repaired, err)
 	}
 	inspection, err := client.InspectDeployment(ctx, "/root/models")
 	if err != nil || inspection.BoardID != "s100" || len(inspection.Artifacts) != 1 || inspection.Artifacts[0].Compatibility != "candidate" {
@@ -158,6 +175,10 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	if err != nil || restarted.RestartCount != 1 || restarted.Status != "starting" {
 		t.Fatalf("restarted=%+v err=%v", restarted, err)
 	}
+	networked, err := client.SetNetworkMode(ctx, page.Tasks[0].ID, "offline")
+	if err != nil || networked.NetworkMode != "offline" || !networked.Sandbox.NetworkRestricted {
+		t.Fatalf("network boundary=%+v err=%v", networked, err)
+	}
 	content, err := os.ReadFile(starts)
 	if err != nil || string(content) != "start\n" {
 		t.Fatalf("control bridge was not reused: %q err=%v", content, err)
@@ -171,14 +192,15 @@ func TestSubscriptionUsesDedicatedBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// The race detector can delay process startup substantially on loaded CI hosts.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var received Event
-	ready := false
-	err = client.SubscribeWithReady(ctx, "00112233445566778899aabb", 7, func() {
-		ready = true
+	var ready SubscriptionState
+	err = client.SubscribeWithState(ctx, "00112233445566778899aabb", 7, func(state SubscriptionState) {
+		ready = state
 	}, func(event Event) error {
-		if !ready {
+		if !ready.Following {
 			t.Fatal("event arrived before subscription acknowledgement")
 		}
 		received = event
@@ -187,8 +209,23 @@ func TestSubscriptionUsesDedicatedBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if ready.RetainedFrom != 5 || ready.RetainedThrough != 7 || ready.LatestSequence != 8 || !ready.HistoryTruncated || !ready.CursorExpired {
+		t.Fatalf("subscription retention state was not decoded: %+v", ready)
+	}
 	if received.Sequence != 8 || received.Normalized == nil || received.Normalized.Type != "task.idle" {
 		t.Fatalf("unexpected event: %+v", received)
+	}
+	legacyReady := false
+	err = client.SubscribeWithReady(ctx, "00112233445566778899aabb", 7, func() {
+		legacyReady = true
+	}, func(event Event) error {
+		if !legacyReady {
+			t.Fatal("event arrived before subscription acknowledgement")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

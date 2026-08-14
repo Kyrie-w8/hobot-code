@@ -54,6 +54,7 @@ type SandboxCapability struct {
 	Available        bool     `json:"available"`
 	Backend          string   `json:"backend,omitempty"`
 	Profiles         []string `json:"profiles,omitempty"`
+	NetworkModes     []string `json:"networkModes,omitempty"`
 	FilesystemWrites bool     `json:"filesystemWritesRestricted"`
 	Devices          bool     `json:"devicesRestricted"`
 	Capabilities     bool     `json:"capabilitiesDropped"`
@@ -83,6 +84,7 @@ type ExtensionEntry struct {
 	Name           string   `json:"name"`
 	Version        string   `json:"version"`
 	Kind           string   `json:"kind"`
+	ResourceType   string   `json:"resourceType,omitempty"`
 	Description    string   `json:"description"`
 	Origin         string   `json:"origin"`
 	Scope          string   `json:"scope"`
@@ -124,15 +126,16 @@ type DaemonInfo struct {
 }
 
 type BuildIdentity struct {
-	Status       string     `json:"status"`
-	Reason       string     `json:"reason,omitempty"`
-	Commit       string     `json:"commit,omitempty"`
-	Dirty        *bool      `json:"dirty,omitempty"`
-	BuiltAt      *time.Time `json:"builtAt,omitempty"`
-	Target       string     `json:"target,omitempty"`
-	BinarySHA256 string     `json:"binarySha256,omitempty"`
-	PiVersion    string     `json:"piVersion,omitempty"`
-	PiCommit     string     `json:"piCommit,omitempty"`
+	Status                string     `json:"status"`
+	Reason                string     `json:"reason,omitempty"`
+	Commit                string     `json:"commit,omitempty"`
+	Dirty                 *bool      `json:"dirty,omitempty"`
+	BuiltAt               *time.Time `json:"builtAt,omitempty"`
+	Target                string     `json:"target,omitempty"`
+	BinarySHA256          string     `json:"binarySha256,omitempty"`
+	PiVersion             string     `json:"piVersion,omitempty"`
+	PiCommit              string     `json:"piCommit,omitempty"`
+	PiCompatibilitySHA256 string     `json:"piCompatibilitySha256,omitempty"`
 }
 
 type ThermalZone struct {
@@ -258,20 +261,66 @@ type SystemSnapshot struct {
 }
 
 type SupportBundle struct {
-	ID        string              `json:"id"`
-	CreatedAt time.Time           `json:"createdAt"`
-	Path      string              `json:"path"`
-	SizeBytes int                 `json:"sizeBytes"`
-	SHA256    string              `json:"sha256"`
-	Content   []byte              `json:"content,omitempty"`
-	Excluded  []string            `json:"excluded"`
-	Checks    SupportCheckSummary `json:"checks"`
+	SchemaVersion int                 `json:"schemaVersion"`
+	ID            string              `json:"id"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	Path          string              `json:"path"`
+	SizeBytes     int                 `json:"sizeBytes"`
+	SHA256        string              `json:"sha256"`
+	Content       []byte              `json:"content,omitempty"`
+	Excluded      []string            `json:"excluded"`
+	Status        string              `json:"status"`
+	Checks        SupportCheckSummary `json:"checks"`
+	Findings      []SupportFinding    `json:"findings"`
 }
 
 type SupportCheckSummary struct {
 	Pass int `json:"pass"`
+	Info int `json:"info"`
 	Warn int `json:"warn"`
 	Fail int `json:"fail"`
+}
+
+type SupportFinding struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Scope    string `json:"scope"`
+	Title    string `json:"title"`
+	Summary  string `json:"summary"`
+	Action   string `json:"action"`
+	Count    int    `json:"count,omitempty"`
+}
+
+type DiagnosticReport struct {
+	SchemaVersion int                      `json:"schemaVersion"`
+	CapturedAt    time.Time                `json:"capturedAt"`
+	Status        string                   `json:"status"`
+	Summary       SupportCheckSummary      `json:"summary"`
+	Checks        []SupportCheck           `json:"checks"`
+	Findings      []SupportFinding         `json:"findings"`
+	Repairs       []DiagnosticRepairAction `json:"repairs"`
+}
+
+type SupportCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+}
+
+type DiagnosticRepairAction struct {
+	ID                   string `json:"id"`
+	Executor             string `json:"executor"`
+	Status               string `json:"status"`
+	RequiresConfirmation bool   `json:"requiresConfirmation"`
+	Summary              string `json:"summary"`
+	Reason               string `json:"reason"`
+}
+
+type DiagnosticRepairResult struct {
+	SchemaVersion int              `json:"schemaVersion"`
+	Action        string           `json:"action"`
+	Changed       int              `json:"changed"`
+	Report        DiagnosticReport `json:"report"`
 }
 
 type DeploymentArtifact struct {
@@ -447,6 +496,7 @@ type Task struct {
 	Model            string             `json:"model,omitempty"`
 	PermissionMode   string             `json:"permissionMode,omitempty"`
 	SandboxMode      string             `json:"sandboxMode"`
+	NetworkMode      string             `json:"networkMode"`
 	Sandbox          TaskSandboxStatus  `json:"sandbox"`
 	ParentTaskID     string             `json:"parentTaskId,omitempty"`
 	ForkSequence     uint64             `json:"forkSequence,omitempty"`
@@ -533,9 +583,24 @@ type TaskPage struct {
 }
 
 type EventPage struct {
-	Events    []Event `json:"events"`
-	NextAfter uint64  `json:"nextAfter,omitempty"`
-	HasMore   bool    `json:"hasMore"`
+	Events           []Event `json:"events"`
+	NextAfter        uint64  `json:"nextAfter,omitempty"`
+	HasMore          bool    `json:"hasMore"`
+	RetainedFrom     uint64  `json:"retainedFrom,omitempty"`
+	RetainedThrough  uint64  `json:"retainedThrough,omitempty"`
+	LatestSequence   uint64  `json:"latestSequence,omitempty"`
+	HistoryTruncated bool    `json:"historyTruncated"`
+	CursorExpired    bool    `json:"cursorExpired"`
+}
+
+type SubscriptionState struct {
+	Replayed         int    `json:"replayed"`
+	Following        bool   `json:"following"`
+	RetainedFrom     uint64 `json:"retainedFrom,omitempty"`
+	RetainedThrough  uint64 `json:"retainedThrough,omitempty"`
+	LatestSequence   uint64 `json:"latestSequence,omitempty"`
+	HistoryTruncated bool   `json:"historyTruncated"`
+	CursorExpired    bool   `json:"cursorExpired"`
 }
 
 type StartTaskRequest struct {
@@ -548,6 +613,7 @@ type StartTaskRequest struct {
 	PermissionMode string         `json:"permissionMode,omitempty"`
 	WorkspaceMode  string         `json:"workspaceMode,omitempty"`
 	SandboxMode    string         `json:"sandboxMode,omitempty"`
+	NetworkMode    string         `json:"networkMode,omitempty"`
 }
 
 type ForkTaskRequest struct {
@@ -560,6 +626,7 @@ type ForkTaskRequest struct {
 	Model          string         `json:"model,omitempty"`
 	PermissionMode string         `json:"permissionMode,omitempty"`
 	SandboxMode    string         `json:"sandboxMode,omitempty"`
+	NetworkMode    string         `json:"networkMode,omitempty"`
 }
 
 type ImageContent struct {
@@ -576,11 +643,45 @@ type ModelOption struct {
 	Default          bool              `json:"default,omitempty"`
 	Capabilities     ModelCapabilities `json:"capabilities"`
 	CapabilitySource string            `json:"capabilitySource"`
+	Managed          bool              `json:"managed,omitempty"`
+	ModelOnly        bool              `json:"modelOnly,omitempty"`
 }
 
 type ModelCapabilities struct {
 	Reasoning  bool `json:"reasoning"`
 	ImageInput bool `json:"imageInput"`
+}
+
+type ManagedProviderModel struct {
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	ContextWindow int    `json:"contextWindow"`
+	MaxTokens     int    `json:"maxTokens"`
+	Reasoning     bool   `json:"reasoning"`
+	Image         bool   `json:"image"`
+}
+
+type ManagedProvider struct {
+	ID              string                 `json:"id"`
+	Name            string                 `json:"name,omitempty"`
+	API             string                 `json:"api"`
+	Models          []ManagedProviderModel `json:"models"`
+	Credential      string                 `json:"credential"`
+	CredentialUsers int                    `json:"credentialUsers"`
+}
+
+type AddManagedProviderRequest struct {
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	BaseURL       string `json:"baseUrl"`
+	API           string `json:"api"`
+	Model         string `json:"model"`
+	ModelName     string `json:"modelName,omitempty"`
+	ContextWindow int    `json:"contextWindow,omitempty"`
+	MaxTokens     int    `json:"maxTokens,omitempty"`
+	Reasoning     bool   `json:"reasoning,omitempty"`
+	Image         bool   `json:"image,omitempty"`
+	AuthHeader    bool   `json:"authHeader,omitempty"`
 }
 
 type ModelHealth struct {
@@ -607,16 +708,129 @@ type ModelConformanceCheck struct {
 }
 
 type ModelConformance struct {
-	Provider   string                  `json:"provider"`
-	Model      string                  `json:"model"`
-	Status     string                  `json:"status"`
-	Message    string                  `json:"message"`
-	CheckedAt  time.Time               `json:"checkedAt"`
-	ExpiresAt  time.Time               `json:"expiresAt"`
-	DurationMS int64                   `json:"durationMs,omitempty"`
-	Attempts   int                     `json:"attempts"`
-	Cached     bool                    `json:"cached"`
-	Checks     []ModelConformanceCheck `json:"checks"`
+	SchemaVersion int                     `json:"schemaVersion"`
+	Scope         string                  `json:"scope"`
+	RuntimeStatus string                  `json:"agentRuntimeStatus"`
+	RDKTaskStatus string                  `json:"rdkTaskStatus"`
+	Provider      string                  `json:"provider"`
+	Model         string                  `json:"model"`
+	Status        string                  `json:"status"`
+	Message       string                  `json:"message"`
+	CheckedAt     time.Time               `json:"checkedAt"`
+	ExpiresAt     time.Time               `json:"expiresAt"`
+	DurationMS    int64                   `json:"durationMs,omitempty"`
+	Attempts      int                     `json:"attempts"`
+	Cached        bool                    `json:"cached"`
+	Checks        []ModelConformanceCheck `json:"checks"`
+}
+
+type ModelRuntimeProbeCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type ModelRuntimeProbe struct {
+	SchemaVersion      int                      `json:"schemaVersion"`
+	Scope              string                   `json:"scope"`
+	Provider           string                   `json:"provider"`
+	Model              string                   `json:"model"`
+	Status             string                   `json:"status"`
+	Category           string                   `json:"category,omitempty"`
+	Message            string                   `json:"message"`
+	ReasoningDeclared  bool                     `json:"reasoningDeclared"`
+	ImageInputDeclared bool                     `json:"imageInputDeclared"`
+	CheckedAt          time.Time                `json:"checkedAt"`
+	DurationMS         int64                    `json:"durationMs,omitempty"`
+	Checks             []ModelRuntimeProbeCheck `json:"checks"`
+	Pending            []string                 `json:"pending"`
+}
+
+type ModelRDKProbeCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type ModelRDKProbeBinding struct {
+	ProductVersion        string `json:"productVersion"`
+	BuildStatus           string `json:"buildStatus"`
+	Commit                string `json:"commit,omitempty"`
+	Dirty                 *bool  `json:"dirty,omitempty"`
+	BuildTarget           string `json:"buildTarget,omitempty"`
+	AgentdBinarySHA256    string `json:"agentdBinarySha256,omitempty"`
+	PiVersion             string `json:"piVersion,omitempty"`
+	PiCommit              string `json:"piCommit,omitempty"`
+	PiCompatibilitySHA256 string `json:"piCompatibilitySha256,omitempty"`
+	ExpertPromptSHA256    string `json:"expertPromptSha256"`
+	RDKExtensionSHA256    string `json:"rdkExtensionSha256"`
+	KnowledgePackSHA256   string `json:"knowledgePackSha256"`
+	KnowledgeVersion      string `json:"knowledgeVersion"`
+	KnowledgeUpdatedAt    string `json:"knowledgeUpdatedAt"`
+	Board                 string `json:"board"`
+	BoardID               string `json:"boardId"`
+	RDKOSVersion          string `json:"rdkOsVersion"`
+	Architecture          string `json:"architecture"`
+}
+
+type ModelRDKProbe struct {
+	SchemaVersion   int                  `json:"schemaVersion"`
+	Scope           string               `json:"scope"`
+	Profile         string               `json:"profile"`
+	Provider        string               `json:"provider"`
+	Model           string               `json:"model"`
+	Status          string               `json:"status"`
+	ReleaseEligible bool                 `json:"releaseEligible"`
+	Category        string               `json:"category,omitempty"`
+	Message         string               `json:"message"`
+	CheckedAt       time.Time            `json:"checkedAt"`
+	DurationMS      int64                `json:"durationMs,omitempty"`
+	Binding         ModelRDKProbeBinding `json:"binding"`
+	Sources         []string             `json:"sources,omitempty"`
+	Checks          []ModelRDKProbeCheck `json:"checks"`
+	NotCovered      []string             `json:"notCovered"`
+}
+
+type ModelRDKProfileStatus struct {
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Workflow      string         `json:"workflow"`
+	EvidenceClass string         `json:"evidenceClass"`
+	Description   string         `json:"description"`
+	Availability  string         `json:"availability"`
+	EvidenceState string         `json:"evidenceState"`
+	Targets       []string       `json:"targets"`
+	NotCovered    []string       `json:"notCovered"`
+	StaleReasons  []string       `json:"staleReasons"`
+	Result        *ModelRDKProbe `json:"result,omitempty"`
+}
+
+type ModelRDKMatrix struct {
+	SchemaVersion int                     `json:"schemaVersion"`
+	Provider      string                  `json:"provider"`
+	Model         string                  `json:"model"`
+	BoardID       string                  `json:"boardId"`
+	RDKOSVersion  string                  `json:"rdkOsVersion"`
+	Architecture  string                  `json:"architecture"`
+	CapturedAt    time.Time               `json:"capturedAt"`
+	Profiles      []ModelRDKProfileStatus `json:"profiles"`
+}
+
+type ModelQualification struct {
+	SchemaVersion int                `json:"schemaVersion"`
+	Provider      string             `json:"provider"`
+	Model         string             `json:"model"`
+	State         string             `json:"state"`
+	Level         string             `json:"level"`
+	Outcome       string             `json:"outcome"`
+	UpdatedAt     time.Time          `json:"updatedAt,omitempty"`
+	StaleReasons  []string           `json:"staleReasons"`
+	StaleLayers   []string           `json:"staleLayers"`
+	ExpiredLayers []string           `json:"expiredLayers"`
+	Health        *ModelHealth       `json:"health,omitempty"`
+	Conformance   *ModelConformance  `json:"conformance,omitempty"`
+	Runtime       *ModelRuntimeProbe `json:"runtime,omitempty"`
+	RDK           *ModelRDKProbe     `json:"rdk,omitempty"`
 }
 
 type WorkspaceEntry struct {

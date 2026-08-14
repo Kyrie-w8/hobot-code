@@ -18,6 +18,9 @@ const (
 	sandboxModeSystem    = "system"
 	sandboxModeOff       = "off"
 	sandboxUnavailable   = "unavailable"
+	networkModeShared    = "shared"
+	networkModeModelOnly = "model-only"
+	networkModeOffline   = "offline"
 )
 
 var protectedSandboxRoots = []string{"/boot", "/dev", "/etc", "/proc", "/sys", "/usr", "/var/lib"}
@@ -80,6 +83,68 @@ func normalizeSandboxMode(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("sandbox mode must be review, workspace, system, or off")
 	}
+}
+
+func normalizeNetworkMode(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return networkModeShared, nil
+	}
+	switch value {
+	case networkModeShared, networkModeModelOnly, networkModeOffline:
+		return value, nil
+	default:
+		return "", fmt.Errorf("network mode must be shared, model-only, or offline")
+	}
+}
+
+func resolveNetworkMode(value, sandboxMode string, status taskSandboxStatus) (string, taskSandboxStatus, error) {
+	mode, err := normalizeNetworkMode(value)
+	if err != nil {
+		return "", taskSandboxStatus{}, err
+	}
+	if mode != networkModeShared && (sandboxMode == sandboxModeOff || status.Backend != "bubblewrap") {
+		return "", taskSandboxStatus{}, fmt.Errorf("%s network mode requires an active bubblewrap sandbox", mode)
+	}
+	status.NetworkRestricted = mode != networkModeShared
+	if mode == networkModeOffline {
+		status.Reason = "network namespace is isolated; use a local model that does not require network access"
+	} else if mode == networkModeModelOnly {
+		status.Reason = "network namespace is isolated; only configured model providers are reachable through the board broker"
+	} else if status.Backend == "bubblewrap" {
+		status.Reason = "host network remains available for model and developer services"
+	}
+	return mode, status, nil
+}
+
+func (manager *taskManager) resolveTaskNetworkMode(value, sandboxMode string, status taskSandboxStatus) (string, taskSandboxStatus, error) {
+	mode, resolved, err := resolveNetworkMode(value, sandboxMode, status)
+	if err != nil || mode == networkModeShared {
+		return mode, resolved, err
+	}
+	if err := probeSandboxNetworkBackend(manager.cfg.SandboxBinary); err != nil {
+		return "", taskSandboxStatus{}, fmt.Errorf("%s network sandbox self-test failed: %w", mode, err)
+	}
+	if mode == networkModeModelOnly && !modelEgressAvailable(manager.cfg) {
+		return "", taskSandboxStatus{}, fmt.Errorf("model-only network mode requires a configured supported model provider and model egress broker")
+	}
+	return mode, resolved, nil
+}
+
+func normalizePersistedNetwork(value, sandboxMode string, status taskSandboxStatus) (string, taskSandboxStatus) {
+	mode, err := normalizeNetworkMode(value)
+	if err != nil || (mode != networkModeShared && sandboxMode == sandboxModeOff) {
+		mode = networkModeShared
+	}
+	status.NetworkRestricted = mode != networkModeShared
+	if mode == networkModeOffline {
+		status.Reason = "network namespace is isolated; use a local model that does not require network access"
+	} else if mode == networkModeModelOnly {
+		status.Reason = "network namespace is isolated; only configured model providers are reachable through the board broker"
+	} else if status.Backend == "bubblewrap" {
+		status.Reason = "host network remains available for model and developer services"
+	}
+	return mode, status
 }
 
 func defaultSandboxMode(permissionMode string, deployment bool) string {
@@ -172,7 +237,7 @@ func resolveForegroundSandbox(cfg config, requested string) (string, taskSandbox
 	return mode, sandboxStatus(mode, "bubblewrap", "host network remains available for model and developer services"), nil
 }
 
-func foregroundSandboxCommand(cfg config, cwd, mode string, agentArgs []string) (string, []string, error) {
+func foregroundSandboxCommand(cfg config, cwd, mode, networkMode string, agentArgs []string, preserveCredential ...bool) (string, []string, error) {
 	writable, err := foregroundSandboxWritableDirectories(cfg, cwd, mode)
 	if err != nil {
 		return "", nil, err
@@ -181,6 +246,9 @@ func foregroundSandboxCommand(cfg config, cwd, mode string, agentArgs []string) 
 		"--unshare-user", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
 		"--die-with-parent", "--cap-drop", "ALL",
 		"--ro-bind", "/", "/", "--dev", "/dev",
+	}
+	if networkMode != networkModeShared {
+		args = append(args, "--unshare-net")
 	}
 	if mode == sandboxModeSystem {
 		for _, device := range sandboxHardwareDevices() {
@@ -211,6 +279,22 @@ func foregroundSandboxCommand(cfg config, cwd, mode string, agentArgs []string) 
 	for _, path := range writable {
 		args = append(args, "--bind", path, path)
 	}
+	if networkMode == networkModeModelOnly && pathIsDirectory(cfg.ModelEgressRoot) {
+		args = append(args, "--ro-bind", cfg.ModelEgressRoot, cfg.ModelEgressRoot)
+		args = append(args,
+			"--setenv", modelEgressSocketEnv, cfg.ModelEgressSocket,
+			"--setenv", modelEgressProvidersEnv, modelEgressProviderList(cfg),
+		)
+	} else if networkMode == networkModeOffline && pathIsDirectory(cfg.ModelEgressRoot) {
+		args = append(args, "--tmpfs", cfg.ModelEgressRoot)
+	}
+	if len(preserveCredential) > 0 && preserveCredential[0] {
+		if err := ensurePrivateDir(gatewayCredentialDirectory(cfg)); err != nil {
+			return "", nil, fmt.Errorf("prepare sandbox credential mount: %w", err)
+		}
+		args = appendSandboxCredentialTransport(args, cfg, gatewayTokenFDPlaceholder)
+	}
+	args = appendMaskedCredentialFiles(args, cfg)
 	args = append(args, "--chdir", cwd, "--", cfg.AgentBinary)
 	args = append(args, agentArgs...)
 	return cfg.SandboxBinary, args, nil
@@ -331,6 +415,18 @@ func (manager *taskManager) sandboxCommand(metadata taskMetadata, agentArgs []st
 		"--die-with-parent", "--new-session", "--cap-drop", "ALL",
 		"--ro-bind", "/", "/",
 	}
+	if metadata.NetworkMode != networkModeShared {
+		if err := probeSandboxNetworkBackend(manager.cfg.SandboxBinary); err != nil {
+			return "", nil, taskSandboxStatus{}, fmt.Errorf("%s network sandbox self-test failed: %w", metadata.NetworkMode, err)
+		}
+		args = append(args, "--unshare-net")
+		status.NetworkRestricted = true
+		if metadata.NetworkMode == networkModeModelOnly {
+			status.Reason = "network namespace is isolated; only the D-Robotics model gateway is reachable through the board broker"
+		} else {
+			status.Reason = "network namespace is isolated; use a local model that does not require network access"
+		}
+	}
 	args = append(args, "--dev", "/dev")
 	if mode == sandboxModeSystem {
 		for _, device := range sandboxHardwareDevices() {
@@ -368,10 +464,29 @@ func (manager *taskManager) sandboxCommand(metadata taskMetadata, agentArgs []st
 			args = append(args, "--tmpfs", privateState)
 		}
 	}
+	if metadata.NetworkMode == networkModeModelOnly {
+		if !pathIsDirectory(manager.cfg.ModelEgressRoot) {
+			return "", nil, taskSandboxStatus{}, fmt.Errorf("model egress broker is unavailable; restart agentd")
+		}
+		args = append(args, "--ro-bind", manager.cfg.ModelEgressRoot, manager.cfg.ModelEgressRoot)
+		args = append(args,
+			"--setenv", modelEgressSocketEnv, manager.cfg.ModelEgressSocket,
+			"--setenv", modelEgressProvidersEnv, modelEgressProviderList(manager.cfg),
+		)
+	} else if metadata.NetworkMode == networkModeOffline && pathIsDirectory(manager.cfg.ModelEgressRoot) {
+		args = append(args, "--tmpfs", manager.cfg.ModelEgressRoot)
+	}
 	// Remount the policy directory rather than its file so daemon-side atomic
 	// replacements remain visible to the long-running worker.
 	args = append(args, "--bind", filepath.Join(manager.cfg.SessionDir, metadata.ID), filepath.Join(manager.cfg.SessionDir, metadata.ID))
 	args = append(args, "--ro-bind", filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"), filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"))
+	if metadata.NetworkMode == networkModeShared && gatewayCredentialPayload(manager.cfg) != "" {
+		if err := ensurePrivateDir(gatewayCredentialDirectory(manager.cfg)); err != nil {
+			return "", nil, taskSandboxStatus{}, fmt.Errorf("prepare sandbox credential mount: %w", err)
+		}
+		args = appendSandboxCredentialTransport(args, manager.cfg, "3")
+	}
+	args = appendMaskedCredentialFiles(args, manager.cfg)
 	args = append(args, "--chdir", metadata.Cwd, "--", manager.cfg.AgentBinary)
 	args = append(args, agentArgs...)
 	return manager.cfg.SandboxBinary, args, status, nil
@@ -403,6 +518,26 @@ func pathIsSafeSandboxMount(path string) bool {
 	return err == nil && info.Mode()&os.ModeSymlink == 0 && (info.IsDir() || info.Mode().IsRegular())
 }
 
+func appendMaskedCredentialFiles(args []string, cfg config) []string {
+	for _, path := range []string{filepath.Join(cfg.ConfigRoot, "hobot.env")} {
+		if pathIsSafeSandboxMount(path) {
+			args = append(args, "--ro-bind", "/dev/null", path)
+		}
+	}
+	return args
+}
+
+func appendSandboxCredentialTransport(args []string, cfg config, descriptor string) []string {
+	directory := gatewayCredentialDirectory(cfg)
+	file := gatewayCredentialFile(cfg)
+	return append(args,
+		"--tmpfs", directory,
+		"--perms", "0600", "--file", descriptor, file,
+		"--unsetenv", gatewayTokenFDEnvironment,
+		"--setenv", gatewayTokenFileEnvironment, file,
+	)
+}
+
 func sandboxHardwareDevices() []string {
 	entries, err := os.ReadDir("/dev")
 	if err != nil {
@@ -427,11 +562,22 @@ func sandboxHardwareDevices() []string {
 }
 
 func probeSandboxBackend(path string) error {
+	return probeSandboxBackendWithArgs(path, nil)
+}
+
+func probeSandboxNetworkBackend(path string) error {
+	return probeSandboxBackendWithArgs(path, []string{"--unshare-net"})
+}
+
+func probeSandboxBackendWithArgs(path string, extra []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, path,
+	args := []string{
 		"--unshare-user", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
-		"--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true")
+	}
+	args = append(args, extra...)
+	args = append(args, "--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true")
+	command := exec.CommandContext(ctx, path, args...)
 	output, err := command.CombinedOutput()
 	if ctx.Err() != nil {
 		return fmt.Errorf("timed out")
@@ -558,7 +704,7 @@ func (manager *taskManager) sandboxReadOnlyPaths() []string {
 
 func sandboxSupportCheck(cfg config) supportCheck {
 	if cfg.SandboxBinary == "" {
-		return supportCheck{Name: "os-sandbox", Status: "warn", Summary: "available only on Linux board targets"}
+		return supportCheck{Name: "os-sandbox", Status: "info", Summary: "available only on Linux board targets"}
 	}
 	if cfg.SandboxBinary == sandboxUnavailable {
 		return supportCheck{Name: "os-sandbox", Status: "fail", Summary: "bubblewrap is not installed"}
@@ -569,11 +715,14 @@ func sandboxSupportCheck(cfg config) supportCheck {
 	if err := probeSandboxBackend(cfg.SandboxBinary); err != nil {
 		return supportCheck{Name: "os-sandbox", Status: "fail", Summary: "bubblewrap self-test failed"}
 	}
-	return supportCheck{Name: "os-sandbox", Status: "pass", Summary: "bubblewrap filesystem, device, and capability isolation is available; network is shared"}
+	if err := probeSandboxNetworkBackend(cfg.SandboxBinary); err != nil {
+		return supportCheck{Name: "os-sandbox", Status: "warn", Summary: "filesystem, device, and capability isolation is available; offline networking is unavailable"}
+	}
+	return supportCheck{Name: "os-sandbox", Status: "pass", Summary: "bubblewrap filesystem, device, capability, and offline-network isolation is available"}
 }
 
 func sandboxCapabilityStatus(cfg config) sandboxCapability {
-	capability := sandboxCapability{Profiles: []string{sandboxModeOff}}
+	capability := sandboxCapability{Profiles: []string{sandboxModeOff}, NetworkModes: []string{networkModeShared}}
 	if cfg.SandboxBinary == "" {
 		capability.Reason = "OS sandboxing is available on Linux board targets"
 		return capability
@@ -596,6 +745,17 @@ func sandboxCapabilityStatus(cfg config) sandboxCapability {
 	capability.FilesystemWrites = true
 	capability.Devices = true
 	capability.Capabilities = true
-	capability.Reason = "host network remains available for model and developer services"
+	if err := probeSandboxNetworkBackend(cfg.SandboxBinary); err == nil {
+		capability.NetworkModes = []string{networkModeShared}
+		if modelEgressAvailable(cfg) {
+			capability.NetworkModes = append(capability.NetworkModes, networkModeModelOnly)
+		}
+		capability.NetworkModes = append(capability.NetworkModes, networkModeOffline)
+		capability.Network = true
+		capability.Reason = "shared networking is the default; model-only restricts egress to configured model providers; offline requires a local model"
+	} else {
+		capability.NetworkModes = []string{networkModeShared}
+		capability.Reason = "filesystem isolation is available, but this kernel cannot create the offline network namespace"
+	}
 	return capability
 }

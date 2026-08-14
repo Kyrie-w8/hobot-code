@@ -80,6 +80,13 @@ func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy.RootMode = "confirm"
+	withoutNetwork := policy.Rules[:0]
+	for _, rule := range policy.Rules {
+		if rule.Tool != "network" {
+			withoutNetwork = append(withoutNetwork, rule)
+		}
+	}
+	policy.Rules = withoutNetwork
 	policy.Rules = append([]permissionRule{{Tool: "bash", Action: "allow", TargetHash: strings.Repeat("a", 64)}}, policy.Rules...)
 	legacy, err := json.Marshal(policy)
 	if err != nil {
@@ -100,7 +107,8 @@ func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 	}
 	var migrated taskPermissionPolicy
 	if json.Unmarshal(content, &migrated) != nil || migrated.RootMode != "policy" ||
-		permissionAction(migrated, "bash") != "allow" || migrated.Rules[0].TargetHash != strings.Repeat("a", 64) {
+		permissionAction(migrated, "bash") != "allow" || permissionAction(migrated, "network") != "ask" ||
+		migrated.Rules[0].TargetHash != strings.Repeat("a", 64) || !hasPermissionRule(migrated, "network") {
 		t.Fatalf("legacy developer policy was not migrated safely: %s", content)
 	}
 }

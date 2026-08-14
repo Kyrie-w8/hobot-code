@@ -12,6 +12,7 @@ export const DEFAULT_POLICY = Object.freeze({
     Object.freeze({ tool: "write", action: "ask" }),
     Object.freeze({ tool: "edit", action: "ask" }),
     Object.freeze({ tool: "bash", action: "ask" }),
+    Object.freeze({ tool: "network", action: "ask" }),
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
     Object.freeze({ tool: "quality_gate", action: "ask" }),
@@ -37,6 +38,7 @@ export const DEVELOPER_POLICY = Object.freeze({
     Object.freeze({ tool: "write", action: "allow" }),
     Object.freeze({ tool: "edit", action: "allow" }),
     Object.freeze({ tool: "bash", action: "allow" }),
+    Object.freeze({ tool: "network", action: "ask" }),
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
     Object.freeze({ tool: "memory_search", action: "allow" }),
@@ -148,9 +150,23 @@ function cloneDefaultPolicy() {
 function isLegacyDeveloperPolicy(policy) {
   if (policy.rootMode !== "confirm" || policy.default !== DEVELOPER_POLICY.default) return false;
   const broadRules = policy.rules.filter((rule) => !rule.targetHash);
-  return broadRules.length === DEVELOPER_POLICY.rules.length
-    && broadRules.every((rule, index) => rule.tool === DEVELOPER_POLICY.rules[index].tool
-      && rule.action === DEVELOPER_POLICY.rules[index].action);
+  const candidates = [
+    DEVELOPER_POLICY.rules,
+    DEVELOPER_POLICY.rules.filter((rule) => rule.tool !== "network"),
+  ];
+  return candidates.some((expected) => broadRules.length === expected.length
+    && broadRules.every((rule, index) => rule.tool === expected[index].tool
+      && rule.action === expected[index].action));
+}
+
+function migrateLegacyDeveloperPolicy(policy) {
+  const exactRules = policy.rules.filter((rule) => rule.targetHash);
+  const broadRules = policy.rules.filter((rule) => !rule.targetHash);
+  if (!broadRules.some((rule) => rule.tool === "network")) {
+    const bashIndex = broadRules.findIndex((rule) => rule.tool === "bash");
+    broadRules.splice(bashIndex + 1, 0, { tool: "network", action: "ask" });
+  }
+  return parsePolicy({ ...policy, rootMode: "policy", rules: [...exactRules, ...broadRules] });
 }
 
 export function parsePolicy(value) {
@@ -206,7 +222,7 @@ export async function loadPolicy(path) {
     const raw = JSON.parse(await readFile(path, "utf8"));
     let policy = parsePolicy(raw);
     const legacyDeveloper = raw.schemaVersion === 2 && isLegacyDeveloperPolicy(policy);
-    if (legacyDeveloper) policy = parsePolicy({ ...policy, rootMode: "policy" });
+    if (legacyDeveloper) policy = migrateLegacyDeveloperPolicy(policy);
     if (raw.schemaVersion === 1 || legacyDeveloper) {
       try {
         await writePolicy(path, policy);

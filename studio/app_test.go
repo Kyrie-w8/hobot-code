@@ -100,6 +100,22 @@ func TestWorkspaceChangesRejectsInvalidTaskIDBeforeConnecting(t *testing.T) {
 	}
 }
 
+func TestModelQualificationRejectsUnknownBoardBeforeConnecting(t *testing.T) {
+	app := NewApp()
+	if _, err := app.ProbeModelRuntime("missing", "drobotics/kimi-k3"); err == nil || !strings.Contains(err.Error(), "board does not exist") {
+		t.Fatalf("runtime probe error = %v", err)
+	}
+	if _, err := app.ProbeModelRDK("missing", "drobotics/kimi-k3", "read-only-rdk-diagnostic-v1"); err == nil || !strings.Contains(err.Error(), "board does not exist") {
+		t.Fatalf("RDK probe error = %v", err)
+	}
+	if _, err := app.GetModelRDKMatrix("missing", "drobotics/kimi-k3"); err == nil || !strings.Contains(err.Error(), "board does not exist") {
+		t.Fatalf("RDK matrix read error = %v", err)
+	}
+	if _, err := app.GetModelQualification("missing", "drobotics/kimi-k3"); err == nil || !strings.Contains(err.Error(), "board does not exist") {
+		t.Fatalf("qualification read error = %v", err)
+	}
+}
+
 func TestBoardUpdateRejectsUnknownOrDisconnectedBoard(t *testing.T) {
 	app := NewApp()
 	if _, err := app.CheckBoardUpdate("missing"); err == nil || !strings.Contains(err.Error(), "not connected") {
@@ -108,36 +124,18 @@ func TestBoardUpdateRejectsUnknownOrDisconnectedBoard(t *testing.T) {
 	if _, err := app.InstallBoardUpdate("missing"); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("unexpected update install error: %v", err)
 	}
-	if len(app.updating) != 0 {
-		t.Fatal("failed update left the board update lock held")
-	}
-}
-
-func TestBoardUpdateSerializesPerBoard(t *testing.T) {
-	app := NewApp()
-	if err := app.beginBoardUpdate("board"); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.beginBoardUpdate("board"); err == nil {
-		t.Fatal("concurrent update was accepted")
-	}
-	if err := app.beginBoardUpdate("other"); err != nil {
-		t.Fatalf("independent board update was blocked: %v", err)
-	}
-	app.finishBoardUpdate("board")
-	app.finishBoardUpdate("other")
 }
 
 func TestConnectionCompatibilityMatrix(t *testing.T) {
 	allCapabilities := []string{
-		"extensions.catalog.v1", "tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "models.conformance.v1", "system.snapshot",
-		"support.bundle.v1", "deployments.v1", "tasks.fork", "tasks.queue.v1", "tasks.failure.v1", "tasks.turn-evidence.v1", "events.items.v1", "workspaces.browse", "workspaces.changes.v1", "workspaces.isolation.v1", "workspaces.write-leases.v1", "workspaces.delivery.v1", "tasks.sandbox.v1", "build.identity.v1",
+		"extensions.catalog.v1", "tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "models.conformance.v1", "models.runtime-probe.v1", "models.rdk-probe.v1", "models.rdk-matrix.v1", "models.qualification.v1", "providers.manage.v1", "system.snapshot", "diagnostics.inspect.v1", "diagnostics.repair.v1",
+		"support.bundle.v1", "deployments.v1", "tasks.fork", "tasks.queue.v1", "tasks.failure.v1", "tasks.turn-evidence.v1", "events.items.v1", "events.retention.v1", "workspaces.browse", "workspaces.changes.v1", "workspaces.isolation.v1", "workspaces.write-leases.v1", "workspaces.delivery.v1", "tasks.sandbox.v1", "tasks.network.v1", "build.identity.v1", "pi.compatibility.v1",
 	}
 	dirty := false
 	info := hobot.DaemonInfo{
-		Version: "0.26.0", Protocol: hobot.ProtocolVersion,
-		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 4, Capabilities: allCapabilities, Sandbox: hobot.SandboxCapability{Available: true, Backend: "bubblewrap", Profiles: []string{"review", "workspace", "system", "off"}}},
-		Build:        hobot.BuildIdentity{Status: "verified", Commit: strings.Repeat("a", 40), Dirty: &dirty, Target: "linux-arm64", PiVersion: "0.84.1"},
+		Version: "0.27.0", Protocol: hobot.ProtocolVersion,
+		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 4, Capabilities: allCapabilities, Sandbox: hobot.SandboxCapability{Available: true, Backend: "bubblewrap", Profiles: []string{"review", "workspace", "system", "off"}, NetworkModes: []string{"shared", "offline"}}},
+		Build:        hobot.BuildIdentity{Status: "verified", Commit: strings.Repeat("a", 40), Dirty: &dirty, Target: "linux-arm64", PiVersion: "0.84.1", PiCompatibilitySHA256: strings.Repeat("d", 64)},
 	}
 	snapshot := &hobot.SystemSnapshot{BoardID: "s100", RDKOSVersion: "4.0.5"}
 	compatible, err := assessConnectionCompatibility(info, snapshot, nil)
@@ -204,13 +202,13 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.26.0" {
+	if currentStudioVersion() != "0.27.0" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {
 		t.Fatalf("exposed Studio version = %q, want %q", app.GetAppVersion(), currentStudioVersion())
 	}
-	if !differentReleaseLine("0.26.0", "0.25.9") || differentReleaseLine("0.26.0", "0.26.1") {
+	if !differentReleaseLine("0.27.0", "0.26.9") || differentReleaseLine("0.27.0", "0.27.1") {
 		t.Fatal("release line comparison is incorrect")
 	}
 	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {
@@ -340,9 +338,10 @@ func TestStudioTaskIsLive(t *testing.T) {
 	}
 }
 
-func TestStudioModelsOnlyExposeDRobotics(t *testing.T) {
+func TestStudioModelsExposeBuiltInsAndExplicitManagedProviders(t *testing.T) {
 	models := studioModels([]hobot.ModelOption{
 		{Provider: "anthropic", ID: "claude-sonnet", Name: "Claude Sonnet"},
+		{Provider: "acme", ID: "coder", Name: "Acme Coder", Managed: true},
 		{Provider: "drobotics", ID: "claude-sonnet", Name: "Claude via gateway"},
 		{Provider: "drobotics", ID: "kimi-k3", Name: "kimi-k3", Default: true, Capabilities: hobot.ModelCapabilities{Reasoning: true, ImageInput: true}, CapabilitySource: "runtime-model-table"},
 		{Provider: "drobotics", ID: "qwen3.8-max", Name: "qwen3.8-max"},
@@ -350,7 +349,7 @@ func TestStudioModelsOnlyExposeDRobotics(t *testing.T) {
 		{Provider: "drobotics", ID: "deepseek/deepseek-v4-flash", Name: "deepseek/deepseek-v4-flash", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
 		{Provider: "drobotics", ID: "deepseek-v4-pro", Name: "deepseek-v4-pro", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
 	})
-	if len(models) != 5 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" || models[3].ID != "deepseek/deepseek-v4-flash" || models[4].ID != "deepseek-v4-pro" {
+	if len(models) != 6 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" || models[3].ID != "deepseek/deepseek-v4-flash" || models[4].ID != "deepseek-v4-pro" || models[5].Provider != "acme" || models[5].ID != "coder" {
 		t.Fatalf("unexpected Studio models: %+v", models)
 	}
 	if !models[0].Default || !models[0].Capabilities.ImageInput || models[0].CapabilitySource != "runtime-model-table" {

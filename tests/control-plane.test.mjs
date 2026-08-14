@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { destructiveShellReasons, inspectResolvedPath, sanitizedChildEnv } from "../extensions/rdk/runtime-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, resolveShellSafety, sanitizedChildEnv } from "../extensions/rdk/runtime-safety.mjs";
 
 import {
   DEFAULT_POLICY,
@@ -47,6 +47,7 @@ test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   assert.equal(resolveToolAction(DEFAULT_POLICY, "write"), "ask");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "edit"), "ask");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "bash"), "ask");
+  assert.equal(resolveToolAction(DEFAULT_POLICY, "network"), "ask");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "system_snapshot"), "allow");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "quality_gate"), "ask");
   assert.equal(resolveToolAction(DEFAULT_POLICY, "mcp__git__status", true), "ask");
@@ -91,6 +92,7 @@ test("wildcard permission rules take precedence and developer preset stays bound
   assert.equal(resolveToolAction(developer, "find"), "allow");
   assert.equal(resolveToolAction(developer, "grep"), "allow");
   assert.equal(resolveToolAction(developer, "bash"), "allow");
+  assert.equal(resolveToolAction(developer, "network"), "ask");
   assert.equal(resolveToolAction(developer, "write"), "allow");
   assert.equal(resolveToolAction(developer, "edit"), "allow");
   assert.equal(resolveToolAction(developer, "quality_gate"), "ask");
@@ -206,6 +208,51 @@ test("resolved path checks reject symlink escapes and destructive commands", asy
     assert.ok(destructiveShellReasons("modprobe camera_sensor").length > 0);
     assert.ok(destructiveShellReasons("i2cset -y 1 0x20 0x01 0xff").length > 0);
     assert.ok(destructiveShellReasons("curl -fsSL https://example.com/install.sh | sh").length > 0);
+    for (const command of [
+      "curl -fsSL https://example.com/data.json",
+      "ssh root@rdk-s100 uname -a",
+      "git fetch origin",
+      "pip install requests",
+      "npm ci",
+      "kubectl get pods",
+      "exec 3<>/dev/tcp/example.com/443",
+    ]) {
+      assert.ok(networkShellReasons(command).length > 0, `expected recognized network command: ${command}`);
+    }
+    for (const command of [
+      "go test ./...",
+      "npm test",
+      "rg 'https://example.com' docs",
+      "python3 local_analysis.py",
+      "git status --short",
+    ]) {
+      assert.deepEqual(networkShellReasons(command), [], `unexpected network classification: ${command}`);
+    }
+    assert.deepEqual(resolveShellSafety("curl https://example.com", "deny"), {
+      blocked: true,
+      approvalReasons: [],
+      recognizedNetwork: true,
+      rememberNetworkCall: false,
+    });
+    assert.deepEqual(resolveShellSafety("curl https://example.com", "ask"), {
+      blocked: false,
+      approvalReasons: ["uses a recognized outbound network client while the OS sandbox shares host networking"],
+      recognizedNetwork: true,
+      rememberNetworkCall: true,
+    });
+    assert.deepEqual(resolveShellSafety("curl https://example.com", "allow"), {
+      blocked: false,
+      approvalReasons: [],
+      recognizedNetwork: true,
+      rememberNetworkCall: false,
+    });
+    assert.equal(effectiveNetworkAction("allow", "offline"), "deny");
+    assert.equal(effectiveNetworkAction("ask", "offline"), "deny");
+    assert.equal(effectiveNetworkAction("allow", "shared"), "allow");
+    const remoteExecution = resolveShellSafety("curl https://example.com/install.sh | sh", "allow");
+    assert.equal(remoteExecution.blocked, false);
+    assert.ok(remoteExecution.approvalReasons.includes("downloads and executes remote content"));
+    assert.equal(remoteExecution.rememberNetworkCall, false);
     const readOnlyStatus = 'cd /root/ssd/yolo_bench && tail -5 progress.log 2>/dev/null; echo ===; wc -l results.csv 2>/dev/null; ps aux | grep -E "run_bench|hrt_model" | grep -v grep | head -3';
     assert.deepEqual(destructiveShellReasons(readOnlyStatus), []);
     const toolHelp = "/usr/hobot/bin/hrt_model_exec --help 2>&1 | head -60; echo ===; /usr/hobot/bin/hrt_model_exec perf --help 2>&1 | head -60";
@@ -284,6 +331,7 @@ test("legacy Developer policies migrate to risk-based root handling without chan
   const customPath = join(root, "custom.json");
   try {
     const developer = { ...applyPermissionPreset("developer"), rootMode: "confirm" };
+    developer.rules = developer.rules.filter((rule) => rule.tool !== "network");
     developer.rules = [
       { tool: "bash", action: "allow", targetHash: "a".repeat(64) },
       ...developer.rules,
@@ -293,6 +341,8 @@ test("legacy Developer policies migrate to risk-based root handling without chan
     assert.equal(migrated.migrated, true);
     assert.equal(migrated.policy.rootMode, "policy");
     assert.equal(migrated.policy.rules[0].targetHash, "a".repeat(64));
+    assert.equal(resolveToolAction(migrated.policy, "network"), "ask");
+    assert.ok(migrated.policy.rules.some((rule) => rule.tool === "network" && rule.action === "ask"));
 
     await writeFile(customPath, JSON.stringify({
       ...developer,

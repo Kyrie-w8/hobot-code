@@ -8,9 +8,11 @@ Hobot Code 采用“上游交互运行时 + 薄板卡适配层”的结构。Pi 
 
 Hobot Code 遵循“小核心、强扩展、板端裁决”的原则。Agent 循环、会话、任务恢复、权限、资源租约和审计属于稳定核心；模型 Provider、RDK 工具、Skills、MCP、Hook 与 LSP 通过明确能力边界接入。只有需要共享生命周期、权限或持久状态的能力才进入核心，单一工作流优先保留为 Skill 或扩展，避免把每项新功能都固化为守护进程接口。
 
-`extensions/catalog.json` 是与产品版本绑定的 `hobot.extensions/v1` 清单。`agentd` 启动时严格校验 schema、版本、重复 ID、入口路径和随包文件；每次 `extensions.list` 再以独立的只读适配器汇总私有用户 Provider、Hook 与 LSP 配置，并只返回脱敏状态。CLI、SDK 和 Studio 消费同一契约，不扫描未知目录。清单不加载代码、不改变启用状态，也不授予权限；真正的扩展执行由固定 Pi 运行时负责，工具权限与系统安全边界仍由板端判定。后续来源通过有界适配器扩展该目录，而不是进入任务执行主链路。
+`extensions/catalog.json` 是与产品版本绑定的 `hobot.extensions/v1` 清单。`agentd` 启动时严格校验 schema、版本、重复 ID、入口路径和随包文件；每次 `extensions.list` 再以独立的只读适配器汇总私有用户 Provider、Hook、LSP，以及 Pi 固定的 extensions、Skills、prompts、themes 和 package 声明。CLI、SDK 和 Studio 消费同一契约。项目资源只能通过已经存在且信任项目资源的任务 ID 读取，客户端不能提交任意目录。所有扫描都有所有权、符号链接、写权限、深度和数量边界，且只返回虚拟入口名，不回传设置中的路径或 URL。
 
-扩展演进分三步进行：先完成内置能力发现和兼容性；再聚合 Pi packages、Skills、MCP、Hook、LSP 与 Provider 的状态；最后才引入经过签名、版本约束和隔离的第三方插件宿主。插件崩溃不得拖垮 `agentd`，客户端不得绕过板端安装、权限和审计。热加载在有独立宿主、撤销语义和故障隔离前保持关闭。
+清单不加载代码、不改变启用状态，也不授予权限；`declared`/`discovered` 是库存证据，不是运行状态。真正的扩展执行由固定 Pi 运行时负责，工具权限与系统安全边界仍由板端判定。Pi 的 MCP 通常由 extension/package 实现；在没有独立可验证注册表时，不虚构 MCP 条目。后续来源继续通过有界适配器扩展，而不是进入任务执行主链路。
+
+扩展演进分三步进行：内置能力发现和兼容性已完成；Pi packages、Skills、Prompt、themes、Hook、LSP 与 Provider 已进入只读来源控制面；下一步才是可验证加载状态、显式启停，以及经过签名、版本约束和隔离的第三方插件宿主。插件崩溃不得拖垮 `agentd`，客户端不得绕过板端安装、权限和审计。热加载在有独立宿主、撤销语义和故障隔离前保持关闭。
 
 ## 桌面端与 SSH Bridge
 
@@ -21,6 +23,8 @@ Hobot Code 遵循“小核心、强扩展、板端裁决”的原则。Agent 循
 桌面端按用户选定的板端项目目录组织项目与任务分支，隔离 worktree 的内部路径不会被当成新项目。项目是导航概念，任务的工作目录和会话仍由板端元数据决定；目录浏览、创建、隔离预检和模型枚举由 `agentd` 执行，Mac 端不猜测板端文件系统或 Provider 配置。Changes 视图同样只接受任务 ID，由板端把它绑定到持久化工作目录后执行只读、有界 Git 检查；客户端不能借此指定任意路径、执行 Git 扩展或读取未跟踪文件内容。共享目录中的改动可能来自其他 Agent 或人工操作，因此该快照不承担单 Agent 归因。
 
 桌面端展示 schema-4 normalized events；兼容客户端仍可继续读取 schema-3 的 `type + data` 表示。用户 Prompt 由 `agentd` 作为私有任务事件持久化，前端据此恢复完整用户轮次，并将碎片化的 thinking、工具和回答聚合成对话；schema 4 同时提供稳定的 item 类型、状态与有界工具预览，前端不再需要解析 Provider 私有字段。板端仍保留原始 Pi RPC 事件用于调试和协议兼容。审批结果通过 task command 发回 `agentd`，最终工具权限和安全边界仍由板端决定，客户端无法绕过。历史消息编辑和侧边任务都是服务端 session 树分支：前者从指定用户消息之前继续，后者从最新已稳定叶节点继续，两者都保留源任务并继承板端权限判定。
+
+诊断同样以板端为唯一事实来源。`agentd` 从固定只读证据生成支持包，完成故障分级和恢复建议；CLI 与 Studio 只展示该结构化结果。Go SDK 在保存前校验 schema、枚举、边界、文件名、大小、SHA-256，以及内嵌内容与 manifest 的一致性。旧版 v1 结果可以读取，但客户端只做保守展示，不把缺失的服务端判断补造成结论。
 
 ## 运行路径
 
@@ -35,7 +39,9 @@ flowchart LR
 
   A --> P["Provider registry"]
   P --> K["D-Robotics Kimi adapter"]
-  P --> V["Pi and models.json providers"]
+	P --> V["Pi login and self-managed providers"]
+	A --> MP["Validated managed providers"]
+	MP --> P
 
   A --> B["Pi coding tools"]
   A --> R["RDK extension"]
@@ -69,7 +75,7 @@ flowchart LR
 
 `agentd` 是 Go 编写的按用户常驻控制面，只负责后台任务、事件日志、进程组和客户端重连。每个任务启动发行包内同一个 `runtime/hobot --mode rpc` worker，因此 TUI 与后台模式共享模型、工具、权限、Skills、RDK 知识和系统 Prompt，不存在第二套 Agent 实现。
 
-CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取。每个用户默认最多两个常驻 worker；新工作会挂起最久未使用的 idle worker，但不会打断正在工作或等待审批的 Agent。槽位忙时 Prompt 进入板端私有 FIFO 队列，断线或 daemon 重启后仍可恢复；已经启动的副作用操作不会自动重放。终态也作为持久事件发送，客户端可区分任务结束与传输断线；对外失败原因是稳定脱敏结构，原始诊断只写入板端私有日志。事件、队列输入和 stderr 均有硬上限。
+CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取；达到空间上限时原子滚动为最新连续窗口，并返回明确的保留边界，不会停止后续持久化。每个用户默认最多两个常驻 worker；新工作会挂起最久未使用的 idle worker，但不会打断正在工作或等待审批的 Agent。槽位忙时 Prompt 进入板端私有 FIFO 队列，断线或 daemon 重启后仍可恢复；已经启动的副作用操作不会自动重放。终态也作为持久事件发送，客户端可区分任务结束与传输断线；对外失败原因是稳定脱敏结构，原始诊断只写入板端私有日志。事件保留窗口、队列输入和 stderr 均有硬上限。
 
 daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但活动任务只会标记为 `interrupted`。每轮有界账本保存工具计数、未闭合调用和不含文件名的 Git 状态摘要，让客户端能说明哪些完成、哪些未知；非 Git 副作用始终按未知处理。系统不会自动重放 Prompt、审批或工具调用，以免重复产生文件、进程和硬件副作用。用户可显式从已校验的 Pi session 恢复同一对话；新客户端通过 SSH 上的 stdio bridge 消费稳定的 Hobot 事件 schema，不直接依赖 Pi 内部事件。协议细节见 [agentd 协议](agentd-protocol.md)。
 
@@ -143,6 +149,8 @@ Pi JSONL 会话位于 `~/.local/state/hobot-code/sessions`。Hobot Code 在同�
 
 升级前，旧命令与运行时会写入 `/usr/local/lib/hobot-code-backups/<UTC timestamp>`。回滚同样需要 root，并且只接受同时包含旧运行时与旧启动命令的完整备份；首次安装没有前一版本时不可回滚。成功恢复的备份会以 `.hobot-restored` 标记并拒绝再次使用，避免同一备份重复切换运行时。回滚不删除当前用户的配置、会话、记忆或目标。
 
-启动器的默认 `hobot` 和 `persistent` 子命令都通过 agentd 的前台执行入口进入版本化 Pi TUI。Linux RDK 默认使用 `system` bubblewrap 档位：宿主文件系统只读，只将当前工作区与 Hobot Code 自身状态重新开放为可写，并按白名单映射 BPU 与多媒体设备；`review`、`workspace` 和显式 `off` 的边界见配置文档。网络仍与宿主共享，不能把该层描述为网络隔离。
+启动器的默认 `hobot` 和 `persistent` 子命令都通过 agentd 的前台执行入口进入版本化 Pi TUI。Linux RDK 默认使用 `system` bubblewrap 档位：宿主文件系统只读，只将当前工作区与 Hobot Code 自身状态重新开放为可写，并按白名单映射 BPU 与多媒体设备；`review`、`workspace` 和显式 `off` 的边界见配置文档。网络有三档：`shared` 保留宿主网络；`model-only` 切断 worker 网络，仅将 agentd 的私有模型 Socket 挂入沙箱；`offline` 连模型 Socket 也不可见。代理覆盖内置 D-Robotics Provider，以及配置了板端凭据的 Hobot 受管 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses Provider。Google Generative AI、Pi 登录和自管 `models.json` 必须使用 `shared`。
+
+D-Robotics 网关 token 和受管 Provider 密钥在启动后立即从进程环境移除。`shared` 模式仍通过匿名文件描述符和沙箱 tmpfs 一次性文件交给 Provider；`model-only` 模式只由 agentd 持有密钥，worker 使用 Pi 的原生协议适配器生成请求，再通过 Unix Socket 提交给代理。每次后台 worker 启动前，agentd 都把 Pi 的非凭据运行配置复制到任务私有目录，让 Pi 可以安全管理 `settings.json.lock`，而全局配置继续只读；Pi 登录认证只在 `shared` 模式进入该快照。agentd 在启动时冻结精确 Provider、模型、origin 和协议路径白名单：Anthropic 固定 `/v1/messages`，OpenAI Chat Completions 固定 `/chat/completions`，OpenAI Responses 固定 `/responses`；代理自行添加认证，拒绝重定向、任意路径、任意方法、未声明模型和超限数据。配置变化必须重启 daemon，配置指纹不同的模型操作会失败关闭。审计只记录 Provider、状态、字节数与耗时。模型 Socket 的目录为 `0700`、文件为 `0600`，Linux 还验证连接 UID。它限制的是任意互联网出口，不阻止同用户宿主进程或 Agent 把数据发送给已批准的模型服务，也不能阻止同用户进程消耗相应额度。
 
 `persistent` 把同一个前台入口置于当前用户的专用 `tmux -L hobot-code` 服务中。终端连接只是可分离的客户端，因此 SSH 断开不触发 Agent 或工具进程退出；重新附着后继续使用同一个进程和屏幕状态。专用服务从只读的随包配置启用鼠标、扩展按键、焦点事件和 256 色终端，不读取或修改普通 `tmux` 服务。会话名经过严格约束并统一添加 `hobot-code-` 前缀。该层不承担板卡重启或进程崩溃恢复。

@@ -9,6 +9,7 @@ fi
 
 root_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 node "$root_dir/scripts/validate-version.mjs"
+node "$root_dir/scripts/validate-pi-compatibility.mjs" --source "$root_dir"
 version=$(sed -n '1p' "$root_dir/VERSION")
 
 lock_value() {
@@ -203,7 +204,7 @@ node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.
   "$root_dir/pi-runtime/package.json" "$stage_dir/runtime/package.json" "$version"
 
 if [ "$dirty" -eq 0 ]; then
-  git -C "$root_dir" archive --format=tar -o "$temp_dir/source.tar" "$commit" -- README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE docs extensions skills knowledge prompts
+  git -C "$root_dir" archive --format=tar -o "$temp_dir/source.tar" "$commit" -- README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE docs extensions runtime-probes skills knowledge prompts
   tar -xf "$temp_dir/source.tar" -C "$stage_dir"
 else
   install -m 0644 "$root_dir/README.md" "$stage_dir/README.md"
@@ -211,7 +212,7 @@ else
   install -m 0644 "$root_dir/CONTRIBUTING.md" "$stage_dir/CONTRIBUTING.md"
   install -m 0644 "$root_dir/SECURITY.md" "$stage_dir/SECURITY.md"
   install -m 0644 "$root_dir/LICENSE" "$stage_dir/LICENSE"
-  for source_name in docs extensions skills knowledge prompts; do
+  for source_name in docs extensions runtime-probes skills knowledge prompts; do
     mkdir -p "$stage_dir/$source_name"
     cp -R "$root_dir/$source_name/." "$stage_dir/$source_name/"
   done
@@ -222,11 +223,12 @@ fi
 install -m 0644 "$stage_dir/CHANGELOG.md" "$stage_dir/runtime/CHANGELOG.md"
 
 install -m 0644 "$root_dir/pi-runtime/pi.lock" "$stage_dir/PI_RUNTIME"
+install -m 0644 "$root_dir/pi-runtime/compatibility.json" "$stage_dir/PI_COMPATIBILITY.json"
 install -m 0644 "$root_dir/pi-runtime/tools.lock" "$stage_dir/TOOLS_RUNTIME"
-for config_name in settings.json models.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
+for config_name in settings.json models.json providers.json permissions.json memory.json goals.json hooks.json notifications.json lsp.json; do
   install -m 0644 "$root_dir/packaging/pi/$config_name" "$stage_dir/config/$config_name"
 done
-install -m 0600 "$root_dir/packaging/pi/hobot.env.example" "$stage_dir/config/hobot.env.example"
+install -m 0644 "$root_dir/packaging/pi/hobot.env.example" "$stage_dir/config/hobot.env.example"
 install -m 0644 "$root_dir/packaging/pi/tmux.conf" "$stage_dir/config/tmux.conf"
 install -m 0755 "$root_dir/packaging/pi/hobot-launcher" "$stage_dir/hobot-launcher"
 install -m 0755 "$agentd_binary" "$stage_dir/agentd"
@@ -234,6 +236,8 @@ install -m 0755 "$root_dir/scripts/install-pi.sh" "$stage_dir/install.sh"
 install -m 0755 "$root_dir/scripts/rollback-pi.sh" "$stage_dir/rollback.sh"
 install -m 0755 "$root_dir/scripts/hobot-release.sh" "$stage_dir/release.sh"
 install -m 0755 "$root_dir/scripts/uninstall-pi.sh" "$stage_dir/uninstall.sh"
+install -m 0755 "$root_dir/scripts/verify-model-egress-runtime.py" "$stage_dir/verify-model-egress-runtime.py"
+install -m 0755 "$root_dir/scripts/verify-install-lifecycle.py" "$stage_dir/verify-install-lifecycle.py"
 install -m 0644 "$root_dir/LICENSES/pi-mono-MIT.txt" "$stage_dir/licenses/pi-mono-MIT.txt"
 install -m 0644 "$root_dir/LICENSE" "$stage_dir/licenses/hobot-code-MIT.txt"
 

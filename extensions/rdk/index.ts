@@ -42,9 +42,13 @@ import { formatCacheMetrics, recordCacheObservation, resetCacheMetrics } from ".
 import { createDroboticsModelConfig } from "./drobotics-models.mjs";
 import { DEFAULT_DROBOTICS_BASE_URL, streamDrobotics } from "./drobotics-provider.ts";
 import { GoalStore, type GoalRecord } from "./goal-store.ts";
+import { captureGatewayCredentials, serializeGatewayCredentials } from "./gateway-credential.mjs";
+import { resolveModelEgressProviders, resolveModelEgressSocket } from "./model-egress.mjs";
 import { acquireHardwareResourceLease, hardwareResourcesForTool } from "./hardware-resource-lease.mjs";
 import { runHooks, type HookConfig } from "./hook-runner.ts";
 import { LspManager, type LspConfig } from "./lsp-manager.ts";
+import { registerManagedProviders } from "./managed-providers.mjs";
+import { createManagedProviderEgressStream } from "./managed-provider-egress.ts";
 import {
   MemoryStore,
   type MemoryContext,
@@ -55,7 +59,7 @@ import {
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
-import { destructiveShellReasons, inspectResolvedPath } from "./runtime-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety } from "./runtime-safety.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 import { acquireWorkspaceWriteLease } from "./workspace-write-lease.mjs";
@@ -203,12 +207,34 @@ function sandboxRuntimeStatus() {
   const mode = String(process.env.HOBOT_CODE_SANDBOX_MODE ?? "off").trim() || "off";
   const backend = String(process.env.HOBOT_CODE_SANDBOX_BACKEND ?? "none").trim() || "none";
   const scope = String(process.env.HOBOT_CODE_SANDBOX_SCOPE ?? (process.env.HOBOT_CODE_BACKGROUND_TASK ? "background" : "unmanaged")).trim();
+  const network = String(process.env.HOBOT_CODE_NETWORK_MODE ?? "shared").trim() === "offline" ? "offline" : "shared";
   return {
     scope,
     mode,
     backend,
-    network: "shared",
+    network,
     managed: backend !== "none" && mode !== "off",
+  };
+}
+
+function credentialRuntimeStatus(configured: boolean, managed: { configured: number; missing: number }) {
+  const sandbox = sandboxRuntimeStatus();
+  return {
+    drobotics: {
+      configured,
+      processEnvironment: "removed",
+      managedTransport: sandbox.managed ? "sandbox-private-file" : "anonymous-fd",
+      configFile: sandbox.managed ? "masked" : "host-permissions-only",
+    },
+	managedProviders: {
+		configured: managed.configured,
+		missingCredential: managed.missing,
+		processEnvironment: "removed",
+		managedTransport: sandbox.managed ? "sandbox-private-file" : "anonymous-fd",
+		configFile: sandbox.managed ? "masked" : "host-permissions-only",
+	},
+	otherProviders: "pi-or-provider-dependent",
+    limitation: "same-process extensions and host administrators remain trusted",
   };
 }
 
@@ -693,6 +719,11 @@ function gateReport(state: QualityGateState, status: QualityGateStatus): string 
 export default function rdkExtension(pi: ExtensionAPI) {
   // Fail before registering tools when any runtime path override is relative.
   resolveUserPaths();
+	const gatewayCredentials = captureGatewayCredentials();
+	const gatewayCredential = gatewayCredentials.drobotics;
+	const gatewayCredentialPayload = serializeGatewayCredentials(gatewayCredentials);
+	const modelEgressSocket = resolveModelEgressSocket();
+	const modelEgressProviders = resolveModelEgressProviders();
   const baseUrl = process.env.ANTHROPIC_BASE_URL || DEFAULT_DROBOTICS_BASE_URL;
   const modelId = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
   const modelIds = [...new Set([modelId, ...BUILTIN_DROBOTICS_MODELS])];
@@ -706,6 +737,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     ? Math.min(configuredMaxTokens, 131_072)
     : 8192;
   const sideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
+  const runtimeProbeMode = process.env.HOBOT_CODE_RUNTIME_PROBE === "1";
+  const rdkProbeMode = process.env.HOBOT_CODE_RDK_PROBE === "1";
   let disposeSideAgent = async (): Promise<void> => undefined;
   let currentSnapshot: BoardSnapshot | undefined;
   let currentExpertPrompt: string | undefined;
@@ -1083,10 +1116,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
     };
   }
 
-  pi.registerProvider("drobotics", {
+	pi.registerProvider("drobotics", {
     name: "D-Robotics AI Gateway",
     baseUrl,
-    apiKey: "$ANTHROPIC_AUTH_TOKEN",
+	apiKey: gatewayCredential || (modelEgressProviders.has("drobotics") ? "hobot-model-egress" : undefined),
     api: "drobotics-anthropic",
     streamSimple: streamDrobotics,
     models: modelIds.map((id) => createDroboticsModelConfig(id, {
@@ -1094,7 +1127,16 @@ export default function rdkExtension(pi: ExtensionAPI) {
       contextWindow,
       maxTokens,
     })),
-  });
+	});
+	const managedProviderCatalog = registerManagedProviders(pi, gatewayCredentials.providerKeys, process.env, {
+		modelEgressSocket,
+		modelEgressProviders,
+		createModelEgressStream: createManagedProviderEgressStream,
+	});
+	const managedProviderCredentialStatus = {
+		configured: managedProviderCatalog.diagnostics.filter((item) => item.status === "configured").length,
+		missing: managedProviderCatalog.diagnostics.filter((item) => item.status === "missing-credential").length,
+	};
 
   pi.registerTool({
     name: "system_snapshot",
@@ -1315,7 +1357,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     const loadedPolicy = await loadPolicy(permissionPolicyPath());
     permissionPolicy = loadedPolicy.policy as PermissionPolicy;
     permissionPolicyError = loadedPolicy.error;
-    applyDeniedTools();
+    if (rdkProbeMode) pi.setActiveTools(["system_snapshot", "rdk_docs_search"]);
+    else applyDeniedTools();
     await restoreQualityState(ctx);
     setQualityStatus(ctx, await evaluateQualityStatus(ctx.cwd));
 
@@ -1410,15 +1453,16 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     await refreshPermissionPolicy();
-    applyDeniedTools();
+    if (rdkProbeMode) pi.setActiveTools(["system_snapshot", "rdk_docs_search"]);
+    else applyDeniedTools();
 	workspaceFingerprintWarningShown = false;
-	await captureWorkspaceTurnFingerprint(ctx.cwd);
-    if (sideAgentMode) return undefined;
+	if (!rdkProbeMode) await captureWorkspaceTurnFingerprint(ctx.cwd);
+    if (sideAgentMode || runtimeProbeMode) return undefined;
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
     const expertPrompt = currentExpertPrompt ?? await renderExpertPrompt(snapshot);
     currentExpertPrompt = expertPrompt;
-    const status = await evaluateQualityStatus(ctx.cwd);
+    const status = rdkProbeMode ? "disabled" : await evaluateQualityStatus(ctx.cwd);
     setQualityStatus(ctx, status);
     const qualityContext = qualityGateState.commands.length > 0
       ? [
@@ -1428,7 +1472,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         ].join("\n")
       : undefined;
     let recalled: MemoryRecord[] = [];
-    if (memoryConfig.enabled && memoryConfig.autoRecall && memoryStore && currentMemoryContext && memoryConfig.maxInjected > 0) {
+    if (!rdkProbeMode && memoryConfig.enabled && memoryConfig.autoRecall && memoryStore && currentMemoryContext && memoryConfig.maxInjected > 0) {
       try {
         recalled = memoryStore.recall(String(event.prompt ?? ""), currentMemoryContext, memoryConfig.maxInjected);
         setMemoryStatus(ctx);
@@ -1444,7 +1488,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           formatMemoryRecords(recalled),
         ].join("\n")
       : undefined;
-    currentGoal = goalStore?.current(resolve(ctx.cwd));
+    currentGoal = rdkProbeMode ? undefined : goalStore?.current(resolve(ctx.cwd));
     setGoalStatus(ctx);
     const goalContext = currentGoal
       ? [
@@ -1614,6 +1658,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
     const approvalReasons: string[] = [];
+    const rememberTools: string[] = [];
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
     const callAlreadyAllowed = hasAllowedToolCall(permissionPolicy, event.toolName, event.input);
     if (requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName) && !callAlreadyAllowed) {
@@ -1632,7 +1677,18 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     if (event.toolName === "bash") {
       const command = String(event.input.command ?? "");
-      approvalReasons.push(...destructiveShellReasons(command));
+      const offlineNetwork = sandboxRuntimeStatus().network === "offline";
+      const shellSafety = resolveShellSafety(
+        command,
+        effectiveNetworkAction(resolveToolCallAction(permissionPolicy, "network", event.input), offlineNetwork ? "offline" : "shared"),
+      );
+      if (shellSafety.blocked) {
+        return { block: true, reason: offlineNetwork
+          ? "network access is disabled by the task's OS network boundary"
+          : `network access is denied by ${permissionPolicyPath()}` };
+      }
+      approvalReasons.push(...shellSafety.approvalReasons);
+      if (shellSafety.rememberNetworkCall) rememberTools.push("network");
     }
 
     if (approvalReasons.length > 0) {
@@ -1651,8 +1707,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
       ].join("\n");
       const dangerousShell = event.toolName === "bash"
         && destructiveShellReasons(String(event.input.command ?? "")).length > 0;
+      if (action === "ask" || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName)) {
+        rememberTools.unshift(event.toolName);
+      }
       const canRemember = !dangerousShell && (action === "ask"
-        || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName));
+        || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName)
+        || rememberTools.length > 0);
       const choice = await ctx.ui.select(
         `Allow ${event.toolName}?\n\n${detail}`,
         canRemember
@@ -1661,7 +1721,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
         sideAgentMode ? { timeout: SIDE_AGENT_APPROVAL_TIMEOUT_MS } : undefined,
       );
       if (choice === APPROVAL_ALLOW_TASK) {
-        const next = setPolicyCallRule(permissionPolicy, event.toolName, event.input, "allow") as PermissionPolicy;
+        let next = permissionPolicy;
+        for (const tool of [...new Set(rememberTools)]) {
+          next = setPolicyCallRule(next, tool, event.input, "allow") as PermissionPolicy;
+        }
         permissionPolicy = await writePolicy(permissionPolicyPath(), next) as PermissionPolicy;
         permissionPolicyError = undefined;
       } else if (choice !== APPROVAL_ALLOW_ONCE) {
@@ -1881,6 +1944,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           `Root mode: ${permissionPolicy.rootMode}`,
           `Default: ${permissionPolicy.default}`,
           `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}; network shared)`,
+          `Recognized network commands: ${resolveToolAction(permissionPolicy, "network")}`,
           permissionPolicyError ? `Fallback: ${permissionPolicyError}` : undefined,
           `Hidden tools: ${hidden.length > 0 ? hidden.join(", ") : "none"}`,
           "Effective tool permissions:",
@@ -2324,6 +2388,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           lsp: lspManager?.status(),
           legacySessions: resolve(resolveUserPaths().stateRoot, "legacy-sessions"),
           sandbox: sandboxRuntimeStatus(),
+          credentials: credentialRuntimeStatus(Boolean(gatewayCredential), managedProviderCredentialStatus),
         },
       };
       if (String(args ?? "").trim() === "json") {
@@ -2354,6 +2419,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
         `LSP processes: ${((lspManager?.status().running as unknown[] | undefined) ?? []).length}`,
         `Legacy sessions: ${resolve(resolveUserPaths().stateRoot, "legacy-sessions")}`,
         `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}) | network shared`,
+        `D-Robotics credential: ${gatewayCredential ? "configured" : "missing"} | removed from tool environment${sandboxRuntimeStatus().managed ? " | hobot.env masked" : ""}`,
+		`Managed provider credentials: ${managedProviderCredentialStatus.configured} configured, ${managedProviderCredentialStatus.missing} missing | removed from tool environment${sandboxRuntimeStatus().managed ? " | hobot.env masked" : ""}`,
+		"Pi login and self-managed provider credentials: Pi or provider-dependent isolation",
         warnings.length > 0 ? `Warnings:\n- ${warnings.join("\n- ")}` : "Warnings: none",
         "Use /doctor json for the complete machine-readable report.",
       ].join("\n"), warnings.length > 0 ? "warning" : "info");
@@ -2463,8 +2531,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
-  if (!sideAgentMode) {
-    disposeSideAgent = registerSideAgent(pi);
+  if (!sideAgentMode && !rdkProbeMode) {
+		disposeSideAgent = registerSideAgent(pi, gatewayCredentialPayload);
     pi.registerCommand("detach", {
       description: "Detach this persistent Hobot Code client and keep the Agent running",
       handler: async (args, ctx) => {

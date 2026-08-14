@@ -329,10 +329,14 @@ func detectRDKOSVersion() string {
 	content := firstTextFile("/etc/os-release")
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(line, "VERSION_ID=") {
-			return strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+			return normalizeRDKOSReleaseVersion(strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\""))
 		}
 	}
 	return "unknown"
+}
+
+func normalizeRDKOSReleaseVersion(version string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(version, "V"), "v")
 }
 
 func kernelRelease() string {

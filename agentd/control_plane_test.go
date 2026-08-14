@@ -54,6 +54,34 @@ func TestModelTableAndSelection(t *testing.T) {
 	}
 }
 
+func TestListModelsMarksOnlyExplicitManagedProviders(t *testing.T) {
+	root := t.TempDir()
+	providerConfig := filepath.Join(root, "providers.json")
+	if err := os.WriteFile(providerConfig, []byte(`{"schemaVersion":1,"providers":[{"id":"acme","baseUrl":"https://models.example/v1","api":"openai-completions","credentialEnv":"HOBOT_CODE_PROVIDER_KEY_ACME","models":[{"id":"coder"}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(root, "fake-hobot")
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\nprintf '%s\\n' 'provider model context max-out thinking images' 'drobotics kimi-k3 1M 8K yes yes' 'acme coder 64K 4K yes no' 'anthropic claude 200K 8K yes yes'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := encodeGatewayCredentialBundle(gatewayCredentialBundle{SchemaVersion: 1, DRobotics: "drobotics-secret", ProviderKeys: map[string]string{
+		"HOBOT_CODE_PROVIDER_KEY_ACME": "acme-secret",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := listModels(config{AgentDir: root, ManagedProviderConfig: providerConfig, AgentBinary: agent, DRoboticsBaseURL: defaultDroboticsBaseURL, gatewayCredential: credential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 || models[0].Managed || !models[1].Managed || models[2].Managed {
+		t.Fatalf("managed model provenance was not applied exactly: %+v", models)
+	}
+	if !models[0].ModelOnly || !models[1].ModelOnly || models[2].ModelOnly {
+		t.Fatalf("model-only capability was not applied from exact broker routes: %+v", models)
+	}
+}
+
 func TestWorkspaceBrowserCreatesRealDirectories(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "existing"), 0o700); err != nil {
@@ -161,7 +189,7 @@ func TestEditEventHistoryKeepsOnlyEventsBeforeReplacedPrompt(t *testing.T) {
 	if err := os.WriteFile(sourcePath, content.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	eventBytes, lastSequence, err := writeEditEventHistory(targetPath, sourcePath, "source", "edited", 3, 1<<20)
+	eventBytes, lastSequence, err := writeEditEventHistory(targetPath, sourcePath, "source", "edited", false, 3, 1<<20)
 	if err != nil || eventBytes <= 0 || lastSequence != 2 {
 		t.Fatalf("copy edit history failed: bytes=%d sequence=%d err=%v", eventBytes, lastSequence, err)
 	}
@@ -197,7 +225,7 @@ func TestEditEventHistoryTruncatesAtAUserTurn(t *testing.T) {
 	if err := os.WriteFile(sourcePath, content.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := writeEditEventHistory(targetPath, sourcePath, "source", "edited", 5, 1600); err != nil {
+	if _, _, err := writeEditEventHistory(targetPath, sourcePath, "source", "edited", false, 5, 1600); err != nil {
 		t.Fatal(err)
 	}
 	copied, err := readEvents(targetPath, "edited", 0)

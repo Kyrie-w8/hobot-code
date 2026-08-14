@@ -27,7 +27,18 @@ test('entry state describes packaging and target support without claiming execut
   assert.deepEqual(extensionTargetState({...entries[2], status: 'configured'}, 's600'), {state: 'included', label: 'Configured'});
   assert.deepEqual(extensionTargetState({...entries[2], status: 'missing'}, 's600'), {state: 'unavailable', label: 'Command missing'});
   assert.deepEqual(extensionTargetState({...entries[2], status: 'disabled'}, 's600'), {state: 'listed', label: 'Disabled'});
+  assert.deepEqual(extensionTargetState({...entries[2], status: 'discovered'}, 's600'), {state: 'included', label: 'Discovered'});
+  assert.deepEqual(extensionTargetState({...entries[2], status: 'declared'}, 's600'), {state: 'listed', label: 'Declared'});
   assert.equal(extensionKindLabel('skill'), 'Skill');
+  assert.equal(extensionKindLabel('package'), 'Package');
+  assert.equal(extensionKindLabel('prompt'), 'Prompt');
+  assert.equal(extensionKindLabel('theme'), 'Theme');
+});
+
+test('task-context and trust diagnostics are informational safety boundaries', () => {
+  assert.deepEqual(extensionCatalogHealth({...catalog, diagnostics: [{source: 'project-resources', status: 'contextual'}]}), {healthy: true, issues: []});
+  assert.deepEqual(extensionCatalogHealth({...catalog, diagnostics: [{source: 'project-resources', status: 'untrusted'}]}), {healthy: true, issues: []});
+  assert.deepEqual(extensionCatalogHealth({...catalog, diagnostics: [{source: 'project-skills', status: 'partial'}]}).issues, ['1 configured source could not be inspected']);
 });
 
 test('catalog summary and filters are deterministic and capability-aware', () => {

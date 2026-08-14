@@ -10,8 +10,62 @@ if [ "$#" -gt 1 ]; then
   exit 2
 fi
 
-backup_root=/usr/local/lib/hobot-code-backups
-lock_dir=/usr/local/lib/hobot-code.install.lock
+testing=${HOBOT_CODE_TESTING:-0}
+install_root=
+if [ -n "${HOBOT_CODE_TEST_INSTALL_ROOT:-}" ]; then
+  if [ "$testing" != 1 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT requires HOBOT_CODE_TESTING=1\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_INSTALL_ROOT" in
+    /|''|*[!A-Za-z0-9_./-]*)
+      printf 'HOBOT_CODE_TEST_INSTALL_ROOT is unsafe: %s\n' "$HOBOT_CODE_TEST_INSTALL_ROOT" >&2
+      exit 1
+      ;;
+    /*) ;;
+    *) printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be absolute\n' >&2; exit 1 ;;
+  esac
+  if [ -L "$HOBOT_CODE_TEST_INSTALL_ROOT" ] || [ ! -d "$HOBOT_CODE_TEST_INSTALL_ROOT" ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
+  install_root_logical=$(CDPATH= cd -L -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -L)
+  install_root=$(CDPATH= cd -P -- "$HOBOT_CODE_TEST_INSTALL_ROOT" && pwd -P)
+  if [ "$install_root_logical" != "$install_root" ] || [ "$(stat -c %u "$install_root")" -ne 0 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not traverse links and must be owned by root\n' >&2
+    exit 1
+  fi
+  install_root_mode=$(stat -c %a "$install_root")
+  if [ $((0$install_root_mode & 022)) -ne 0 ]; then
+    printf 'HOBOT_CODE_TEST_INSTALL_ROOT must not be writable by group or other users\n' >&2
+    exit 1
+  fi
+fi
+
+local_lib_root="$install_root/usr/local/lib"
+local_bin_root="$install_root/usr/local/bin"
+local_sbin_root="$install_root/usr/local/sbin"
+runtime_root="$local_lib_root/hobot-code"
+backup_root="$local_lib_root/hobot-code-backups"
+launcher_path="$local_bin_root/hobot"
+rollback_path="$local_sbin_root/hobot-rollback"
+lock_dir="$local_lib_root/hobot-code.install.lock"
+legacy_config="$install_root/etc/hobot-code"
+legacy_state="$install_root/var/lib/hobot-code"
+etc_root="$install_root/etc"
+var_lib_root="$install_root/var/lib"
+proc_root=/proc
+if [ -n "${HOBOT_CODE_TEST_PROC_ROOT:-}" ]; then
+  if [ "$testing" != 1 ] || [ -z "$install_root" ]; then
+    printf 'HOBOT_CODE_TEST_PROC_ROOT requires an isolated test install root\n' >&2
+    exit 1
+  fi
+  case "$HOBOT_CODE_TEST_PROC_ROOT" in /*) proc_root=$HOBOT_CODE_TEST_PROC_ROOT ;; *) printf 'HOBOT_CODE_TEST_PROC_ROOT must be absolute\n' >&2; exit 1 ;; esac
+  if [ -L "$proc_root" ] || [ ! -d "$proc_root" ]; then
+    printf 'HOBOT_CODE_TEST_PROC_ROOT must be a real directory\n' >&2
+    exit 1
+  fi
+fi
 requested_backup=${1:-}
 rollback_complete=0
 runtime_swapped=0
@@ -63,29 +117,29 @@ cleanup() {
   if [ "$status" -ne 0 ] && [ "$rollback_complete" -ne 1 ] && [ "$runtime_swapped" -eq 1 ]; then
     printf 'Rollback failed; restoring the runtime that was active before rollback.\n' >&2
     if [ "$had_previous_runtime" -eq 1 ] && [ -n "$previous_runtime" ] && [ -d "$previous_runtime" ]; then
-      if [ -d /usr/local/lib/hobot-code ]; then
-        mv /usr/local/lib/hobot-code "/usr/local/lib/hobot-code-failed-rollback-$$"
+      if [ -d "$runtime_root" ]; then
+        mv "$runtime_root" "$local_lib_root/hobot-code-failed-rollback-$$"
       fi
-      mv "$previous_runtime" /usr/local/lib/hobot-code
-    elif [ "$had_previous_runtime" -eq 0 ] && [ -d /usr/local/lib/hobot-code ]; then
-      mv /usr/local/lib/hobot-code "/usr/local/lib/hobot-code-failed-rollback-$$"
+      mv "$previous_runtime" "$runtime_root"
+    elif [ "$had_previous_runtime" -eq 0 ] && [ -d "$runtime_root" ]; then
+      mv "$runtime_root" "$local_lib_root/hobot-code-failed-rollback-$$"
     fi
     if [ "$launcher_swapped" -eq 1 ]; then
       if [ -n "$previous_launcher" ] && [ -f "$previous_launcher" ]; then
-        mv "$previous_launcher" /usr/local/bin/hobot
+        mv "$previous_launcher" "$launcher_path"
       else
-        rm -f /usr/local/bin/hobot
+        rm -f "$launcher_path"
       fi
     fi
     if [ "$rollback_command_swapped" -eq 1 ]; then
       if [ -n "$previous_rollback" ] && [ -f "$previous_rollback" ]; then
-        mv "$previous_rollback" /usr/local/sbin/hobot-rollback
+        mv "$previous_rollback" "$rollback_path"
       else
-        rm -f /usr/local/sbin/hobot-rollback
+        rm -f "$rollback_path"
       fi
     fi
-    if [ "$legacy_config_restored" -eq 1 ]; then rm -rf /etc/hobot-code; fi
-    if [ "$legacy_state_restored" -eq 1 ]; then rm -rf /var/lib/hobot-code; fi
+    if [ "$legacy_config_restored" -eq 1 ]; then rm -rf "$legacy_config"; fi
+    if [ "$legacy_state_restored" -eq 1 ]; then rm -rf "$legacy_state"; fi
   fi
   if [ -n "$staged_runtime" ]; then rm -rf "$staged_runtime"; fi
   if [ -n "$staged_launcher" ]; then rm -f "$staged_launcher"; fi
@@ -124,20 +178,20 @@ refuse_rollback_symlink() {
   fi
 }
 
-for managed_path in "$backup_root" /usr/local/lib/hobot-code /usr/local/bin/hobot /usr/local/sbin/hobot-rollback; do
+for managed_path in "$backup_root" "$runtime_root" "$launcher_path" "$rollback_path"; do
   refuse_rollback_symlink "$managed_path"
 done
-if [ -e /usr/local/lib/hobot-code ] && [ ! -d /usr/local/lib/hobot-code ]; then
-  printf 'Expected the current runtime to be a directory: /usr/local/lib/hobot-code\n' >&2
+if [ -e "$runtime_root" ] && [ ! -d "$runtime_root" ]; then
+  printf 'Expected the current runtime to be a directory: %s\n' "$runtime_root" >&2
   exit 1
 fi
-for managed_command in /usr/local/bin/hobot /usr/local/sbin/hobot-rollback; do
+for managed_command in "$launcher_path" "$rollback_path"; do
   if [ -e "$managed_command" ] && [ ! -f "$managed_command" ]; then
     printf 'Expected a managed command file or an absent path: %s\n' "$managed_command" >&2
     exit 1
   fi
 done
-for root_owned_path in "$backup_root" /usr/local/lib/hobot-code /usr/local/bin/hobot /usr/local/sbin/hobot-rollback; do
+for root_owned_path in "$backup_root" "$runtime_root" "$launcher_path" "$rollback_path"; do
   if [ -e "$root_owned_path" ] && [ "$(stat -c %u "$root_owned_path")" -ne 0 ]; then
     printf 'Managed rollback path must be owned by root: %s\n' "$root_owned_path" >&2
     exit 1
@@ -146,12 +200,12 @@ done
 
 active_hobot_pids() {
   detected_pids=
-  for process_path in /proc/[0-9]*; do
+  for process_path in "$proc_root"/[0-9]*; do
     [ -r "$process_path/exe" ] || continue
     executable=$(readlink "$process_path/exe" 2>/dev/null || true)
     executable=${executable% (deleted)}
     case "$executable" in
-      /usr/local/lib/hobot-code/hobot|/usr/local/lib/hobot-code/agentd)
+      "$runtime_root/hobot"|"$runtime_root/agentd")
         process_id=${process_path##*/}
         detected_pids="${detected_pids}${detected_pids:+ }$process_id"
         ;;
@@ -198,8 +252,8 @@ is_unused_backup() {
 }
 
 backup_dir=$requested_backup
-if [ -z "$backup_dir" ] && [ -r /usr/local/lib/hobot-code/LAST_BACKUP ]; then
-  candidate=$(sed -n '1p' /usr/local/lib/hobot-code/LAST_BACKUP)
+if [ -z "$backup_dir" ] && [ -r "$runtime_root/LAST_BACKUP" ]; then
+  candidate=$(sed -n '1p' "$runtime_root/LAST_BACKUP")
   if is_unused_backup "$candidate"; then
     backup_dir=$candidate
   fi
@@ -259,12 +313,12 @@ if [ -e "$restored_marker" ]; then
   printf 'Backup has already been restored: %s\n' "$backup_dir" >&2
   exit 1
 fi
-if { [ -e /etc/hobot-code ] || [ -L /etc/hobot-code ]; } && [ -d "$backup_dir/legacy-etc-hobot-code" ]; then
-  printf 'Refusing to overwrite existing /etc/hobot-code during rollback\n' >&2
+if { [ -e "$legacy_config" ] || [ -L "$legacy_config" ]; } && [ -d "$backup_dir/legacy-etc-hobot-code" ]; then
+  printf 'Refusing to overwrite existing %s during rollback\n' "$legacy_config" >&2
   exit 1
 fi
-if { [ -e /var/lib/hobot-code ] || [ -L /var/lib/hobot-code ]; } && [ -d "$backup_dir/legacy-var-hobot-code" ]; then
-  printf 'Refusing to overwrite existing /var/lib/hobot-code during rollback\n' >&2
+if { [ -e "$legacy_state" ] || [ -L "$legacy_state" ]; } && [ -d "$backup_dir/legacy-var-hobot-code" ]; then
+  printf 'Refusing to overwrite existing %s during rollback\n' "$legacy_state" >&2
   exit 1
 fi
 
@@ -281,9 +335,9 @@ if [ -d "$backup_dir/legacy-var-hobot-code" ]; then
   var_required_kib=$((var_required_kib + 8192))
 fi
 
-runtime_device=$(stat -c %d /usr/local/lib)
-etc_device=$(stat -c %d /etc)
-var_device=$(stat -c %d /var/lib)
+runtime_device=$(stat -c %d "$local_lib_root")
+etc_device=$(stat -c %d "$etc_root")
+var_device=$(stat -c %d "$var_lib_root")
 if [ "$etc_device" = "$runtime_device" ]; then
   runtime_required_kib=$((runtime_required_kib + etc_required_kib))
   etc_required_kib=0
@@ -307,72 +361,72 @@ check_available_space() {
     exit 1
   fi
 }
-check_available_space "$runtime_required_kib" /usr/local/lib 'rollback'
-check_available_space "$etc_required_kib" /etc 'legacy configuration restore'
-check_available_space "$var_required_kib" /var/lib 'legacy state restore'
+check_available_space "$runtime_required_kib" "$local_lib_root" 'rollback'
+check_available_space "$etc_required_kib" "$etc_root" 'legacy configuration restore'
+check_available_space "$var_required_kib" "$var_lib_root" 'legacy state restore'
 
-staged_runtime=$(mktemp -d /usr/local/lib/hobot-code.rollback.XXXXXX)
+staged_runtime=$(mktemp -d "$local_lib_root/hobot-code.rollback.XXXXXX")
 chmod 0755 "$staged_runtime"
 cp -R "$backup_dir/runtime-installed/." "$staged_runtime/"
-staged_launcher=$(mktemp /usr/local/bin/hobot.rollback.XXXXXX)
+staged_launcher=$(mktemp "$local_bin_root/hobot.rollback.XXXXXX")
 install -m 0755 "$backup_dir/hobot-command" "$staged_launcher"
 if [ -f "$backup_dir/hobot-rollback-command" ]; then
-  staged_rollback=$(mktemp /usr/local/sbin/hobot-rollback.rollback.XXXXXX)
+  staged_rollback=$(mktemp "$local_sbin_root/hobot-rollback.rollback.XXXXXX")
   install -m 0755 "$backup_dir/hobot-rollback-command" "$staged_rollback"
 fi
 "$staged_runtime/hobot" --version >/dev/null
 
-previous_runtime=$(mktemp -d /usr/local/lib/hobot-code-before-rollback.XXXXXX)
+previous_runtime=$(mktemp -d "$local_lib_root/hobot-code-before-rollback.XXXXXX")
 rmdir "$previous_runtime"
-previous_launcher=$(mktemp /usr/local/bin/hobot.before-rollback.XXXXXX)
-previous_rollback=$(mktemp /usr/local/sbin/hobot-rollback.before-rollback.XXXXXX)
-if [ -d /usr/local/lib/hobot-code ]; then
+previous_launcher=$(mktemp "$local_bin_root/hobot.before-rollback.XXXXXX")
+previous_rollback=$(mktemp "$local_sbin_root/hobot-rollback.before-rollback.XXXXXX")
+if [ -d "$runtime_root" ]; then
   had_previous_runtime=1
   runtime_swapped=1
-  mv /usr/local/lib/hobot-code "$previous_runtime"
+  mv "$runtime_root" "$previous_runtime"
 else
   runtime_swapped=1
 fi
-if [ -f /usr/local/bin/hobot ]; then
-  install -m 0755 /usr/local/bin/hobot "$previous_launcher"
+if [ -f "$launcher_path" ]; then
+  install -m 0755 "$launcher_path" "$previous_launcher"
 else
   rm -f "$previous_launcher"
 fi
-if [ -f /usr/local/sbin/hobot-rollback ]; then
-  install -m 0755 /usr/local/sbin/hobot-rollback "$previous_rollback"
+if [ -f "$rollback_path" ]; then
+  install -m 0755 "$rollback_path" "$previous_rollback"
 else
   rm -f "$previous_rollback"
 fi
 
-mv "$staged_runtime" /usr/local/lib/hobot-code
+mv "$staged_runtime" "$runtime_root"
 launcher_swapped=1
-mv "$staged_launcher" /usr/local/bin/hobot
+mv "$staged_launcher" "$launcher_path"
 rollback_command_swapped=1
 if [ -n "$staged_rollback" ]; then
-  mv "$staged_rollback" /usr/local/sbin/hobot-rollback
+  mv "$staged_rollback" "$rollback_path"
 else
-  rm -f /usr/local/sbin/hobot-rollback
+  rm -f "$rollback_path"
 fi
 
-if [ ! -f /usr/local/bin/hobot ] || [ ! -x /usr/local/bin/hobot ]; then
+if [ ! -f "$launcher_path" ] || [ ! -x "$launcher_path" ]; then
   printf 'Restored launcher validation failed\n' >&2
   exit 1
 fi
-if [ -n "$staged_rollback" ] && { [ ! -f /usr/local/sbin/hobot-rollback ] || [ ! -x /usr/local/sbin/hobot-rollback ]; }; then
+if [ -n "$staged_rollback" ] && { [ ! -f "$rollback_path" ] || [ ! -x "$rollback_path" ]; }; then
   printf 'Restored rollback command validation failed\n' >&2
   exit 1
 fi
 
 if [ -d "$backup_dir/legacy-etc-hobot-code" ]; then
   legacy_config_restored=1
-  cp -a "$backup_dir/legacy-etc-hobot-code" /etc/hobot-code
+  cp -a "$backup_dir/legacy-etc-hobot-code" "$legacy_config"
 fi
 if [ -d "$backup_dir/legacy-var-hobot-code" ]; then
   legacy_state_restored=1
-  cp -a "$backup_dir/legacy-var-hobot-code" /var/lib/hobot-code
+  cp -a "$backup_dir/legacy-var-hobot-code" "$legacy_state"
 fi
 
-/usr/local/lib/hobot-code/hobot --version
+"$runtime_root/hobot" --version
 if [ "$restored_marker_existed" -eq 0 ]; then
   restored_marker_new="$backup_dir/.hobot-restored.new.$$"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$restored_marker_new"
@@ -388,6 +442,6 @@ rollback_complete=1
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 if [ -n "$previous_runtime" ] && [ -d "$previous_runtime" ]; then
-  mv "$previous_runtime" "/usr/local/lib/hobot-code-failed-$timestamp-$$"
+  mv "$previous_runtime" "$local_lib_root/hobot-code-failed-$timestamp-$$"
 fi
 printf 'Restored Hobot Code from %s\n' "$backup_dir"

@@ -22,7 +22,8 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 |---|---|
 | `hobot.env` | 模型端点、认证和环境覆盖 |
 | `agent/settings.json` | Pi 交互设置 |
-| `agent/models.json` | 自定义 Provider 与模型 |
+| `agent/models.json` | Pi 高级自管、本机或无密钥 Provider 与模型 |
+| `agent/providers.json` | 不含密钥的 Hobot Code 受管 API Provider 元数据 |
 | `agent/auth.json` | `/login` 创建的认证信息 |
 | `agent/permissions.json` | 工具 allow/ask/deny 策略 |
 | `agent/memory.json` | 记忆召回与容量设置 |
@@ -31,7 +32,7 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 | `agent/notifications.json` | SSH 终端通知 |
 | `agent/lsp.json` | 语言服务器与资源上限 |
 
-安装器以 `0600` 写入或迁移托管配置；启动器以 `0600` 创建 `hobot.env` 和缺失的默认 JSON，并以 `0700` 创建配置目录。启动器拒绝关键配置路径上的符号链接；`hobot.env` 还必须属于当前用户，且不能向组或其他用户开放权限。不要把 `hobot.env`、`auth.json` 或含密钥的自定义配置提交到仓库。
+安装器以 `0600` 写入或迁移托管配置；启动器以 `0600` 创建 `hobot.env` 和缺失的默认 JSON，并以 `0700` 创建配置目录。启动器拒绝关键配置路径上的符号链接；`hobot.env` 和受管 `providers.json` 还必须属于当前用户，且不能向组或其他用户开放权限。不要把 `hobot.env`、`auth.json` 或含密钥的自定义配置提交到仓库；`providers.json` 只能包含元数据和 `HOBOT_CODE_PROVIDER_KEY_*` 引用，不能包含真实密钥。
 
 ## 用户状态
 
@@ -44,12 +45,15 @@ Hobot Code 的程序文件由 root 统一安装，配置与可变状态按 OS �
 | `goals/goals.db` | 持久目标状态和事件 |
 | `audit/hooks.jsonl` | 脱敏后的 Hook 审计 |
 | `agentd/agentd.log`、`agentd/agentd.pid` | 当前用户后台服务日志与 PID |
+| `agentd/run/agentd.sock` | 未提供 `XDG_RUNTIME_DIR` 时使用的当前用户私有 daemon socket |
+| `agentd/model-qualification.json` | 精确模型的脱敏分层资格证据、构建绑定与过期/失效状态；不含密钥、Endpoint、Prompt 或模型正文 |
+| `agentd/model-rdk-matrix.json` | 最多 64 个精确模型/工作流的脱敏 RDK 档案证据；规划能力、当前证据和失效证据严格分离 |
 | `agentd/tasks/<task-id>/metadata.json` | 后台任务状态、Pi session 绑定、归档信息、有界审批和事件序号 |
 | `agentd/tasks/<task-id>/events.jsonl` | 可按序号重放的 Pi RPC 事件 |
 | `agentd/tasks/<task-id>/worker.stderr.log` | 有大小上限的 worker 诊断输出 |
 | `legacy-sessions` | 从旧系统布局归档、不再作为活动会话加载的历史会话 |
 
-数据库与状态文件默认使用 `0600`，目录默认使用 `0700`。`legacy-sessions` 是归档语义，不是文件系统只读目录；其文件仍由所属用户控制。
+数据库与状态文件默认使用 `0600`，目录默认使用 `0700`。运行时也会创建并收紧配置根、Agent 配置根、状态根和会话根，防止宽松的预建目录削弱用户隔离。`legacy-sessions` 是归档语义，不是文件系统只读目录；其文件仍由所属用户控制。
 
 `/btw` 的会话和 Prompt 使用按用户隔离的临时目录，关闭时删除。并发租约位于 `/tmp/hobot-code-side-agents-<uid>`，因此默认上限在同一 UID 的进程间共享，而不是跨用户共享。
 
@@ -70,6 +74,7 @@ HOBOT_CODE_STATE_DIR
 HOBOT_CODE_AGENTD_SOCKET
 HOBOT_CODING_AGENT_DIR
 HOBOT_CODING_AGENT_SESSION_DIR
+HOBOT_CODE_MANAGED_PROVIDER_CONFIG
 ```
 
 启动器拒绝相对路径，避免配置或状态随当前工作目录漂移。`XDG_CONFIG_HOME`、`XDG_STATE_HOME` 和 `HOBOT_CODE_CONFIG_DIR` 决定 `hobot.env` 自身的位置，必须在调用 `hobot` 前设置，不能写入该文件；状态、Agent 和会话目录覆盖会在读取 `hobot.env` 后解析。其他单项配置与数据库覆盖见[配置说明](configuration.md#路径与开发覆盖)。

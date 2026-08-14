@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,60 @@ type pendingApproval struct {
 	TimeoutMS   int       `json:"timeoutMs,omitempty"`
 	RequestedAt time.Time `json:"requestedAt"`
 	Active      bool      `json:"active"`
+}
+
+func redactEventImagePayloads(raw json.RawMessage) json.RawMessage {
+	var value any
+	if json.Unmarshal(raw, &value) != nil || !redactStructuredImagePayloads(value) {
+		return raw
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func redactStructuredImagePayloads(value any) bool {
+	changed := false
+	switch current := value.(type) {
+	case []any:
+		for _, item := range current {
+			changed = redactStructuredImagePayloads(item) || changed
+		}
+	case map[string]any:
+		kind, _ := current["type"].(string)
+		switch kind {
+		case "image":
+			if _, present := current["data"]; present {
+				delete(current, "data")
+				current["payloadOmitted"] = true
+				changed = true
+			}
+		case "base64":
+			mediaType, _ := current["media_type"].(string)
+			if mediaType == "" {
+				mediaType, _ = current["mimeType"].(string)
+			}
+			if strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+				if _, present := current["data"]; present {
+					delete(current, "data")
+					current["payloadOmitted"] = true
+					changed = true
+				}
+			}
+		case "image_url":
+			if dataURL, ok := current["image_url"].(string); ok && strings.HasPrefix(strings.ToLower(dataURL), "data:image/") {
+				current["image_url"] = "[image payload omitted]"
+				current["payloadOmitted"] = true
+				changed = true
+			}
+		}
+		for _, item := range current {
+			changed = redactStructuredImagePayloads(item) || changed
+		}
+	}
+	return changed
 }
 
 func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {

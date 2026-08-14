@@ -7,6 +7,7 @@
     { "tool": "write", "action": "ask" },
     { "tool": "edit", "action": "ask" },
     { "tool": "bash", "action": "ask" },
+    { "tool": "network", "action": "ask" },
     { "tool": "system_snapshot", "action": "allow" },
     { "tool": "rdk_docs_search", "action": "allow" },
     { "tool": "quality_gate", "action": "ask" },

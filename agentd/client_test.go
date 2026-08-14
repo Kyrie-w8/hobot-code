@@ -21,11 +21,32 @@ func TestDaemonCallTimeoutOutlivesModelHealthServerTimeout(t *testing.T) {
 	}
 }
 
+func TestEventRetentionNoticeExplainsRecoverableHistoryBoundaries(t *testing.T) {
+	if got := eventRetentionNotice(401, 800, 800, true, true); !strings.Contains(got, "event 401") || !strings.Contains(got, "no longer retained") {
+		t.Fatalf("expired cursor notice = %q", got)
+	}
+	if got := eventRetentionNotice(401, 800, 800, true, false); !strings.Contains(got, "newest activity") {
+		t.Fatalf("rolling retention notice = %q", got)
+	}
+	if got := eventRetentionNotice(1, 300, 500, true, false); !strings.Contains(got, "could not be recovered") {
+		t.Fatalf("legacy durability notice = %q", got)
+	}
+	if got := eventRetentionNotice(1, 10, 10, false, false); got != "" {
+		t.Fatalf("complete history produced a notice: %q", got)
+	}
+}
+
 func TestConfigurationDriftScope(t *testing.T) {
 	for _, method := range []string{"models.list", "models.health", "models.conformance", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork"} {
 		if !daemonMethodNeedsCurrentConfiguration(method) {
 			t.Fatalf("%s should require current configuration", method)
 		}
+	}
+	if daemonMethodNeedsCurrentConfiguration("models.qualification") {
+		t.Fatal("qualification evidence must remain readable so configuration drift can invalidate it")
+	}
+	if !daemonMethodNeedsCurrentConfiguration("models.rdk-matrix") {
+		t.Fatal("RDK matrix discovery must use the current model configuration")
 	}
 	for _, method := range []string{"ping", "task.list", "task.stop", "daemon.shutdown"} {
 		if daemonMethodNeedsCurrentConfiguration(method) {
@@ -187,13 +208,13 @@ func TestInteractiveEditorPreservesMultipleLines(t *testing.T) {
 func TestTaskStartOptions(t *testing.T) {
 	var help bytes.Buffer
 	options, err := parseTaskStartArgs([]string{
-		"--name", "inspect", "--workspace", "worktree", "--model", " drobotics/kimi-k3 ", "--permissions", "developer", "--sandbox", "system", "--trust-project", "--", "check", "board",
+		"--name", "inspect", "--workspace", "worktree", "--model", " drobotics/kimi-k3 ", "--permissions", "developer", "--sandbox", "system", "--network", "offline", "--trust-project", "--", "check", "board",
 	}, "/workspace", &help)
 	if err != nil {
 		t.Fatal(err)
 	}
 	params := options.params
-	if params.Name != "inspect" || params.Cwd != "/workspace" || params.Prompt != "check board" || params.Model != "drobotics/kimi-k3" || params.PermissionMode != "developer" || params.WorkspaceMode != "worktree" || params.SandboxMode != "system" || !params.Approve {
+	if params.Name != "inspect" || params.Cwd != "/workspace" || params.Prompt != "check board" || params.Model != "drobotics/kimi-k3" || params.PermissionMode != "developer" || params.WorkspaceMode != "worktree" || params.SandboxMode != "system" || params.NetworkMode != "offline" || !params.Approve {
 		t.Fatalf("unexpected task start params: %+v", params)
 	}
 	if options.usedApproveAlias {
@@ -221,6 +242,9 @@ func TestTaskStartOptionsRejectInvalidModelAndPermission(t *testing.T) {
 	}
 	if _, err := parseTaskStartArgs([]string{"--sandbox", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "review, workspace, system, or off") {
 		t.Fatalf("invalid sandbox mode was accepted: %v", err)
+	}
+	if _, err := parseTaskStartArgs([]string{"--network", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "shared, model-only, or offline") {
+		t.Fatalf("invalid network mode was accepted: %v", err)
 	}
 }
 

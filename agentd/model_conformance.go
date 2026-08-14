@@ -14,6 +14,10 @@ import (
 const (
 	modelConformanceCacheTTL       = time.Hour
 	modelConformanceRequestTimeout = 45 * time.Second
+	modelConformanceSchema         = 1
+	modelConformanceScope          = "gateway-protocol"
+	modelConformanceRuntimeStatus  = "not-tested"
+	modelConformanceRDKTaskStatus  = "not-tested"
 	conformanceToolName            = "hobot_conformance"
 	conformanceToolCallValue       = "ping"
 	conformanceToolPrompt          = "Call hobot_conformance exactly once with value ping. Do not answer in text."
@@ -33,16 +37,20 @@ type modelConformanceCheck struct {
 }
 
 type modelConformanceResult struct {
-	Provider  string                  `json:"provider"`
-	Model     string                  `json:"model"`
-	Status    string                  `json:"status"`
-	Message   string                  `json:"message"`
-	CheckedAt time.Time               `json:"checkedAt"`
-	ExpiresAt time.Time               `json:"expiresAt"`
-	Duration  int64                   `json:"durationMs,omitempty"`
-	Attempts  int                     `json:"attempts"`
-	Cached    bool                    `json:"cached"`
-	Checks    []modelConformanceCheck `json:"checks"`
+	SchemaVersion int                     `json:"schemaVersion"`
+	Scope         string                  `json:"scope"`
+	RuntimeStatus string                  `json:"agentRuntimeStatus"`
+	RDKTaskStatus string                  `json:"rdkTaskStatus"`
+	Provider      string                  `json:"provider"`
+	Model         string                  `json:"model"`
+	Status        string                  `json:"status"`
+	Message       string                  `json:"message"`
+	CheckedAt     time.Time               `json:"checkedAt"`
+	ExpiresAt     time.Time               `json:"expiresAt"`
+	Duration      int64                   `json:"durationMs,omitempty"`
+	Attempts      int                     `json:"attempts"`
+	Cached        bool                    `json:"cached"`
+	Checks        []modelConformanceCheck `json:"checks"`
 }
 
 type modelConformanceCacheEntry struct {
@@ -55,13 +63,19 @@ type modelConformanceService struct {
 	inflight map[string]chan struct{}
 	now      func() time.Time
 	probe    func(context.Context, modelOption) modelConformanceResult
+	token    string
 }
 
-func newModelConformanceService() *modelConformanceService {
+func newModelConformanceService(token ...string) *modelConformanceService {
 	service := &modelConformanceService{
 		cache: make(map[string]modelConformanceCacheEntry), inflight: make(map[string]chan struct{}), now: time.Now,
 	}
-	service.probe = probeDroboticsModelConformance
+	if len(token) > 0 {
+		service.token = token[0]
+	}
+	service.probe = func(ctx context.Context, model modelOption) modelConformanceResult {
+		return probeDroboticsModelConformanceWithToken(ctx, model, service.token)
+	}
 	return service
 }
 
@@ -129,6 +143,10 @@ func (service *modelConformanceService) check(manager *taskManager, params model
 }
 
 func normalizeModelConformanceResult(result modelConformanceResult) modelConformanceResult {
+	result.SchemaVersion = modelConformanceSchema
+	result.Scope = modelConformanceScope
+	result.RuntimeStatus = modelConformanceRuntimeStatus
+	result.RDKTaskStatus = modelConformanceRDKTaskStatus
 	if result.Checks == nil {
 		result.Checks = []modelConformanceCheck{}
 	}
@@ -186,13 +204,13 @@ func normalizeModelConformanceResult(result modelConformanceResult) modelConform
 	}
 	if fullyVerified {
 		result.Status = "verified"
-		result.Message = "Streaming, tool calls, tool-result continuation, and declared input modes passed verification."
+		result.Message = "The gateway protocol probe passed streaming, tool calls, tool-result continuation, and declared input modes. Agent runtime behavior and RDK task quality were not tested."
 	} else if allRequiredPassed {
 		result.Status = "compatible"
-		result.Message = "The Agent protocol works through the bounded buffered fallback, but tool streaming is incomplete."
+		result.Message = "The gateway protocol probe works through the bounded buffered fallback, but tool streaming is incomplete. Agent runtime behavior and RDK task quality were not tested."
 	} else {
 		result.Status = "failed"
-		result.Message = "The model did not pass the complete Agent protocol verification."
+		result.Message = "The model did not pass the complete gateway protocol probe. Agent runtime behavior and RDK task quality were not tested."
 	}
 	return result
 }
@@ -276,9 +294,13 @@ type conformanceResponse struct {
 }
 
 func probeDroboticsModelConformance(ctx context.Context, model modelOption) modelConformanceResult {
+	return probeDroboticsModelConformanceWithToken(ctx, model, strings.TrimSpace(os.Getenv(gatewayTokenEnvironment)))
+}
+
+func probeDroboticsModelConformanceWithToken(ctx context.Context, model modelOption, token string) modelConformanceResult {
 	started := time.Now()
 	result := modelConformanceResult{Checks: make([]modelConformanceCheck, 0, 4)}
-	token := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN"))
+	token = strings.TrimSpace(token)
 	baseURL := strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL"))
 	if baseURL == "" {
 		baseURL = defaultDroboticsBaseURL

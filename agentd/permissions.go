@@ -56,6 +56,7 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 	switch normalized {
 	case "review":
 		policy.Rules = append(policy.Rules,
+			permissionRule{Tool: "network", Action: "deny"},
 			permissionRule{Tool: "write", Action: "deny"},
 			permissionRule{Tool: "edit", Action: "deny"},
 			permissionRule{Tool: "bash", Action: "deny"},
@@ -67,6 +68,7 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 	case "ask":
 		policy.RootMode = "confirm"
 		policy.Rules = append(policy.Rules,
+			permissionRule{Tool: "network", Action: "ask"},
 			permissionRule{Tool: "write", Action: "ask"},
 			permissionRule{Tool: "edit", Action: "ask"},
 			permissionRule{Tool: "bash", Action: "ask"},
@@ -80,6 +82,7 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 		// calls to the policy while the extension still confirms high-risk work.
 		policy.RootMode = "policy"
 		policy.Rules = append(policy.Rules,
+			permissionRule{Tool: "network", Action: "ask"},
 			permissionRule{Tool: "write", Action: "allow"},
 			permissionRule{Tool: "edit", Action: "allow"},
 			permissionRule{Tool: "bash", Action: "allow"},
@@ -132,6 +135,9 @@ func (current *task) ensurePermissionPolicy(mode string) error {
 		}
 		if isLegacyDeveloperTaskPolicy(policy) {
 			policy.RootMode = "policy"
+			if !hasPermissionRule(policy, "network") {
+				policy.Rules = insertPermissionRuleAfter(policy.Rules, "bash", permissionRule{Tool: "network", Action: "ask"})
+			}
 			updated, marshalErr := json.MarshalIndent(policy, "", "  ")
 			if marshalErr != nil {
 				return marshalErr
@@ -160,13 +166,48 @@ func isLegacyDeveloperTaskPolicy(policy taskPermissionPolicy) bool {
 			broad = append(broad, rule)
 		}
 	}
-	if len(broad) != len(expected.Rules) {
-		return false
-	}
-	for index := range broad {
-		if broad[index].Tool != expected.Rules[index].Tool || broad[index].Action != expected.Rules[index].Action {
-			return false
+	candidates := [][]permissionRule{expected.Rules}
+	withoutNetwork := make([]permissionRule, 0, len(expected.Rules)-1)
+	for _, rule := range expected.Rules {
+		if rule.Tool != "network" {
+			withoutNetwork = append(withoutNetwork, rule)
 		}
 	}
-	return true
+	candidates = append(candidates, withoutNetwork)
+	for _, candidate := range candidates {
+		if len(broad) != len(candidate) {
+			continue
+		}
+		matches := true
+		for index := range broad {
+			if broad[index].Tool != candidate[index].Tool || broad[index].Action != candidate[index].Action {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPermissionRule(policy taskPermissionPolicy, tool string) bool {
+	for _, rule := range policy.Rules {
+		if rule.Tool == tool && rule.TargetHash == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func insertPermissionRuleAfter(rules []permissionRule, tool string, inserted permissionRule) []permissionRule {
+	result := make([]permissionRule, 0, len(rules)+1)
+	for _, rule := range rules {
+		result = append(result, rule)
+		if rule.TargetHash == "" && rule.Tool == tool {
+			result = append(result, inserted)
+		}
+	}
+	return result
 }

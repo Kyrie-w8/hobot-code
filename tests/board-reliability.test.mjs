@@ -7,8 +7,8 @@ import test from "node:test";
 import { assessBoard, classifyTransportError, parseArguments, parseBoard, parseDuration, runReliability, sanitizeSample } from "../scripts/board-reliability.mjs";
 
 const RELEASE_CAPABILITIES = [
-  "build.identity.v1", "events.items.v1", "events.normalized.v4", "events.page", "models.conformance.v1",
-  "support.bundle.v1", "system.snapshot", "tasks.failure.v1", "tasks.lifecycle", "tasks.page", "tasks.queue.v1",
+  "build.identity.v1", "diagnostics.inspect.v1", "diagnostics.repair.v1", "events.items.v1", "events.normalized.v4", "events.page", "events.retention.v1", "models.conformance.v1", "models.runtime-probe.v1", "pi.compatibility.v1",
+  "support.bundle.v1", "support.bundle.v2", "system.snapshot", "tasks.failure.v1", "tasks.lifecycle", "tasks.page", "tasks.queue.v1",
   "tasks.sandbox.v1", "tasks.turn-evidence.v1", "workspaces.changes.v1", "workspaces.isolation.v1",
   "workspaces.write-leases.v1",
 ];
@@ -24,7 +24,7 @@ test("samples retain operational evidence without host, task, or workspace ident
   const sample = sanitizeSample({
     version: "0.26.0", protocol: 1, pid: 42, startedAt: "2026-08-13T00:00:00Z", activeTasks: 1,
     capabilities: { eventSchema: 4, capabilities: ["tasks.lifecycle", "build.identity.v1"], sandbox: { available: true } },
-    build: { status: "verified", commit: "a".repeat(40), binarySha256: "b".repeat(64), piVersion: "0.84.1" },
+    build: { status: "verified", commit: "a".repeat(40), binarySha256: "b".repeat(64), piVersion: "0.84.1", piCompatibilitySha256: "d".repeat(64) },
   }, {
     board: "RDK S100", boardId: "s100", hostname: "private-host", rdkOsVersion: "4.0.5-Beta", architecture: "arm64",
     cpuCores: 8, memory: { totalBytes: 100, availableBytes: 25 }, disk: { totalBytes: 100, availableBytes: 50 },
@@ -40,7 +40,7 @@ test("release assessment distinguishes daily connectivity from reproducible rele
   const sample = {
     service: {
       version: "0.26.0", eventSchema: 4, capabilities: RELEASE_CAPABILITIES, capabilityDigest: "digest",
-      configurationCurrent: true, build: { status: "verified", commit: "a".repeat(40), dirty: false, binarySha256: "b".repeat(64) },
+      configurationCurrent: true, build: { status: "verified", commit: "a".repeat(40), dirty: false, binarySha256: "b".repeat(64), piCompatibilitySha256: "d".repeat(64) },
       sandbox: { available: true, filesystemWritesRestricted: true, devicesRestricted: true, capabilitiesDropped: true, networkRestricted: false },
     },
     target: { boardId: "s100", rdkOsVersion: "4.0.5-Beta" }, taskStatusCounts: {},
@@ -74,7 +74,7 @@ const result = request.method === 'ping' ? {
   version: '0.26.0', protocol: 1, pid: 42, startedAt: '2026-08-13T00:00:00Z', activeTasks: 0, queuedTasks: 0,
   configurationCurrent: true,
   capabilities: {eventSchema: 4, capabilities, sandbox: {available: true, backend: 'bubblewrap', filesystemWritesRestricted: true, devicesRestricted: true, capabilitiesDropped: true, networkRestricted: true}},
-  build: {status: 'verified', commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', dirty: false, builtAt: '2026-08-13T00:00:00Z', target: 'linux-arm64', binarySha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', piVersion: '0.84.1', piCommit: 'cccccccccccccccccccccccccccccccccccccccc'},
+  build: {status: 'verified', commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', dirty: false, builtAt: '2026-08-13T00:00:00Z', target: 'linux-arm64', binarySha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', piVersion: '0.84.1', piCommit: 'cccccccccccccccccccccccccccccccccccccccc', piCompatibilitySha256: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'},
 } : request.method === 'system.snapshot' ? {
   board: 'untrusted remote text', boardId: 's100', hostname: 'private-host', rdkOsVersion: '4.0.5-Beta', architecture: 'arm64', cpuCores: 8,
   loadAverage: [0.1, 0.2, 0.3], memory: {totalBytes: 100, availableBytes: 80}, disk: {totalBytes: 100, availableBytes: 70},

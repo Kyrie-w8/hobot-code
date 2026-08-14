@@ -15,21 +15,23 @@ import (
 )
 
 const (
-	buildInfoSchema          = 2
+	buildInfoSchema          = 3
 	maximumBuildInfoBytes    = int64(64 * 1024)
+	maximumPiContractBytes   = int64(1024 * 1024)
 	maximumAgentdBinaryBytes = int64(128 * 1024 * 1024)
 )
 
 type buildIdentity struct {
-	Status       string    `json:"status"`
-	Reason       string    `json:"reason,omitempty"`
-	Commit       string    `json:"commit,omitempty"`
-	Dirty        *bool     `json:"dirty,omitempty"`
-	BuiltAt      time.Time `json:"builtAt,omitempty"`
-	Target       string    `json:"target,omitempty"`
-	BinarySHA256 string    `json:"binarySha256,omitempty"`
-	PiVersion    string    `json:"piVersion,omitempty"`
-	PiCommit     string    `json:"piCommit,omitempty"`
+	Status                string    `json:"status"`
+	Reason                string    `json:"reason,omitempty"`
+	Commit                string    `json:"commit,omitempty"`
+	Dirty                 *bool     `json:"dirty,omitempty"`
+	BuiltAt               time.Time `json:"builtAt,omitempty"`
+	Target                string    `json:"target,omitempty"`
+	BinarySHA256          string    `json:"binarySha256,omitempty"`
+	PiVersion             string    `json:"piVersion,omitempty"`
+	PiCommit              string    `json:"piCommit,omitempty"`
+	PiCompatibilitySHA256 string    `json:"piCompatibilitySha256,omitempty"`
 }
 
 type packagedBuildInfo struct {
@@ -41,9 +43,10 @@ type packagedBuildInfo struct {
 	Target        string    `json:"target"`
 	AgentdSHA256  string    `json:"agentdSha256"`
 	Pi            struct {
-		Version       string `json:"version"`
-		Commit        string `json:"commit"`
-		ArchiveSHA256 string `json:"archiveSha256"`
+		Version             string `json:"version"`
+		Commit              string `json:"commit"`
+		ArchiveSHA256       string `json:"archiveSha256"`
+		CompatibilitySHA256 string `json:"compatibilitySha256"`
 	} `json:"pi"`
 	Tools struct {
 		FD      string `json:"fd"`
@@ -91,7 +94,24 @@ func readBuildIdentity(executable, metadataPath, expectedVersion string) buildId
 	}
 	if metadata.SchemaVersion != buildInfoSchema || metadata.Version != expectedVersion || !isLowerHex(metadata.Commit, 40) ||
 		metadata.BuiltAt.IsZero() || metadata.Target != runtime.GOOS+"-"+runtime.GOARCH || metadata.AgentdSHA256 != result.BinarySHA256 || metadata.Pi.Version == "" || !isLowerHex(metadata.Pi.Commit, 40) ||
-		!isLowerHex(metadata.Pi.ArchiveSHA256, 64) || metadata.Tools.FD == "" || metadata.Tools.Ripgrep == "" {
+		!isLowerHex(metadata.Pi.ArchiveSHA256, 64) || !isLowerHex(metadata.Pi.CompatibilitySHA256, 64) || metadata.Tools.FD == "" || metadata.Tools.Ripgrep == "" {
+		result.Status = "invalid"
+		result.Reason = "metadata-mismatch"
+		return result
+	}
+	compatibilityPath := filepath.Join(filepath.Dir(metadataPath), "PI_COMPATIBILITY.json")
+	compatibilitySHA256, err := digestRegularFile(compatibilityPath, maximumPiContractBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		result.Status = "invalid"
+		result.Reason = "pi-compatibility-missing"
+		return result
+	}
+	if err != nil {
+		result.Status = "invalid"
+		result.Reason = "pi-compatibility-invalid"
+		return result
+	}
+	if compatibilitySHA256 != metadata.Pi.CompatibilitySHA256 {
 		result.Status = "invalid"
 		result.Reason = "metadata-mismatch"
 		return result
@@ -105,6 +125,7 @@ func readBuildIdentity(executable, metadataPath, expectedVersion string) buildId
 	result.Target = metadata.Target
 	result.PiVersion = metadata.Pi.Version
 	result.PiCommit = metadata.Pi.Commit
+	result.PiCompatibilitySHA256 = compatibilitySHA256
 	return result
 }
 

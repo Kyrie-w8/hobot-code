@@ -35,6 +35,7 @@ type extensionEntry struct {
 	Name           string   `json:"name"`
 	Version        string   `json:"version"`
 	Kind           string   `json:"kind"`
+	ResourceType   string   `json:"resourceType,omitempty"`
 	Description    string   `json:"description"`
 	Origin         string   `json:"origin"`
 	Scope          string   `json:"scope"`

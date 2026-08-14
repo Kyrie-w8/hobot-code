@@ -30,6 +30,12 @@ import {
 
 import { redactSensitiveText } from "./control-plane.mjs";
 import { acquireSideAgentLease } from "./side-agent-lease.mjs";
+import {
+  gatewayCredentialFdEnvironment,
+  sideAgentCredentialStdio,
+  writeSideAgentCredential,
+} from "./gateway-credential.mjs";
+import { sanitizedChildEnv } from "./runtime-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 import {
   applySideAgentEvent,
@@ -175,6 +181,7 @@ class SideAgentRun {
   private readonly cwd: string;
   private readonly parentSession: string | undefined;
   private readonly parentContext: string;
+  private readonly gatewayCredential: string;
 
   constructor(
     id: string,
@@ -185,6 +192,7 @@ class SideAgentRun {
     cwd: string,
     parentSession: string | undefined,
     parentContext: string,
+    gatewayCredential: string,
   ) {
     this.id = id;
     this.initialQuestion = initialQuestion;
@@ -194,6 +202,7 @@ class SideAgentRun {
     this.cwd = cwd;
     this.parentSession = parentSession;
     this.parentContext = parentContext;
+    this.gatewayCredential = gatewayCredential;
     this.finished = new Promise((resolve) => {
       this.finish = resolve;
     });
@@ -293,13 +302,13 @@ class SideAgentRun {
       const child = spawn(invocation.command, invocation.args, {
         cwd: this.cwd,
         shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: sideAgentCredentialStdio(this.gatewayCredential),
         detached: process.platform !== "win32",
-        env: {
-          ...process.env,
+        env: sanitizedChildEnv(process.env, {
           HOBOT_CODE_SIDE_AGENT: "1",
           HOBOT_CODE_SIDE_PARENT_SESSION: this.parentSession ?? "",
-        },
+          ...(this.gatewayCredential ? { [gatewayCredentialFdEnvironment]: "3" } : {}),
+        }),
       });
       this.process = child;
       child.stdin.on("error", (error) => {
@@ -332,10 +341,19 @@ class SideAgentRun {
         this.settleFinished();
         this.changed();
       });
+      writeSideAgentCredential(child, this.gatewayCredential);
       this.phase = "idle";
       this.changed();
       this.sendPrompt(this.initialQuestion, this.parentContext);
     } catch (error) {
+      const child = this.process;
+      if (child && child.exitCode === null && child.signalCode === null) {
+        try {
+          terminateSideAgent(child, "SIGTERM");
+        } catch {
+          // The normal cleanup path below remains bounded.
+        }
+      }
       this.phase = "failed";
       this.addNotice(error instanceof Error ? error.message : String(error));
       this.changed();
@@ -1054,6 +1072,7 @@ async function createSideAgentRun(
   ctx: ExtensionCommandContext,
   parentEntries: unknown[],
   parentContext: string,
+  gatewayCredential: string,
 ): Promise<SideAgentRun> {
   const question = args.trim();
   if (!question) throw new Error("Usage: /btw <task>");
@@ -1090,14 +1109,14 @@ async function createSideAgentRun(
       tools: pi.getActiveTools(),
       projectTrusted: ctx.isProjectTrusted(),
     });
-    return new SideAgentRun(id, question, tempDir, sessionPath, childArgs, ctx.cwd, parentSession, parentContext);
+    return new SideAgentRun(id, question, tempDir, sessionPath, childArgs, ctx.cwd, parentSession, parentContext, gatewayCredential);
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true });
     throw error;
   }
 }
 
-export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
+export function registerSideAgent(pi: ExtensionAPI, gatewayCredential = ""): () => Promise<void> {
   let active: SideAgentRun | undefined;
   let activeLease: SideAgentLease | undefined;
   let activeFocus: { focusSide: () => void; focusMain: () => void } | undefined;
@@ -1188,7 +1207,7 @@ export function registerSideAgent(pi: ExtensionAPI): () => Promise<void> {
         }) as SideAgentLease;
         activeLease = lease;
         if (disposed) return;
-        run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries, parentContext);
+        run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries, parentContext, gatewayCredential);
         active = run;
         if (disposed) return;
         ctx.ui.setStatus("hobot-btw", `btw: open ${lease.activeCount}/${lease.limit}`);

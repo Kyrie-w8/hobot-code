@@ -7,6 +7,10 @@ const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_COMMIT = /^[0-9a-f]{40}$/;
 
+export function isStrictSemVer(value) {
+  return typeof value === "string" && SEMVER.test(value);
+}
+
 export const PI_LOCK_FIELDS = new Set([
   "PI_VERSION",
   "PI_COMMIT",
@@ -62,7 +66,7 @@ function requirePinnedGithubUrl(value, expectedPath, label) {
 export async function validateReleaseSource(rootDirectory) {
   const root = resolve(rootDirectory);
   const version = (await readFile(resolve(root, "VERSION"), "utf8")).trim();
-  if (!SEMVER.test(version)) throw new Error(`VERSION is not strict SemVer: ${version}`);
+  if (!isStrictSemVer(version)) throw new Error(`VERSION is not strict SemVer: ${version}`);
 
   const packageJson = JSON.parse(await readFile(resolve(root, "pi-runtime/package.json"), "utf8"));
   if (packageJson.version !== version) {
@@ -96,7 +100,7 @@ export async function validateReleaseSource(rootDirectory) {
     "pi-runtime/pi.lock",
     PI_LOCK_FIELDS,
   );
-  if (!SEMVER.test(pi.PI_VERSION)) throw new Error(`PI_VERSION is not strict SemVer: ${pi.PI_VERSION}`);
+  if (!isStrictSemVer(pi.PI_VERSION)) throw new Error(`PI_VERSION is not strict SemVer: ${pi.PI_VERSION}`);
   if (!GIT_COMMIT.test(pi.PI_COMMIT)) throw new Error("PI_COMMIT must be a lowercase 40-character Git commit");
   requireSha256(pi.PI_LINUX_ARM64_SHA256, "PI_LINUX_ARM64_SHA256");
   requirePinnedGithubUrl(
@@ -104,14 +108,23 @@ export async function validateReleaseSource(rootDirectory) {
     `/earendil-works/pi/releases/download/v${pi.PI_VERSION}/pi-linux-arm64.tar.gz`,
     "PI_LINUX_ARM64_URL",
   );
+  const piCompatibilityContent = await readFile(resolve(root, "pi-runtime/compatibility.json"), "utf8");
+  const piCompatibility = JSON.parse(piCompatibilityContent);
+  if (piCompatibility.schemaVersion !== 1 || piCompatibility.apiVersion !== "hobot.pi-compatibility/v1") {
+    throw new Error("pi-runtime/compatibility.json has an unsupported schema or API version");
+  }
+  if (piCompatibility.pi?.version !== pi.PI_VERSION || piCompatibility.pi?.commit !== pi.PI_COMMIT) {
+    throw new Error("pi-runtime/compatibility.json does not match pi-runtime/pi.lock");
+  }
+  const piCompatibilitySHA256 = createHash("sha256").update(piCompatibilityContent).digest("hex");
 
   const tools = parseDataLock(
     await readFile(resolve(root, "pi-runtime/tools.lock"), "utf8"),
     "pi-runtime/tools.lock",
     TOOL_LOCK_FIELDS,
   );
-  if (!SEMVER.test(tools.FD_VERSION)) throw new Error(`FD_VERSION is not strict SemVer: ${tools.FD_VERSION}`);
-  if (!SEMVER.test(tools.RIPGREP_VERSION)) {
+  if (!isStrictSemVer(tools.FD_VERSION)) throw new Error(`FD_VERSION is not strict SemVer: ${tools.FD_VERSION}`);
+  if (!isStrictSemVer(tools.RIPGREP_VERSION)) {
     throw new Error(`RIPGREP_VERSION is not strict SemVer: ${tools.RIPGREP_VERSION}`);
   }
   for (const key of TOOL_LOCK_FIELDS) {
@@ -128,7 +141,7 @@ export async function validateReleaseSource(rootDirectory) {
     "RIPGREP_LINUX_ARM64_URL",
   );
 
-  return { root, version, packageJson, extensionCatalog, desktopConfig, pi, tools };
+  return { root, version, packageJson, extensionCatalog, desktopConfig, pi, piCompatibilitySHA256, tools };
 }
 
 export async function writeBuildInfo(rootDirectory, stageDirectory, options) {
@@ -138,7 +151,7 @@ export async function writeBuildInfo(rootDirectory, stageDirectory, options) {
   const builtAt = new Date(options.builtAt);
   if (Number.isNaN(builtAt.valueOf())) throw new Error(`Invalid build timestamp: ${options.builtAt}`);
   const payload = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: release.version,
     commit: options.commit,
     dirty: options.dirty === "1",
@@ -149,6 +162,7 @@ export async function writeBuildInfo(rootDirectory, stageDirectory, options) {
       version: release.pi.PI_VERSION,
       commit: release.pi.PI_COMMIT,
       archiveSha256: release.pi.PI_LINUX_ARM64_SHA256,
+      compatibilitySha256: release.piCompatibilitySHA256,
     },
     tools: {
       fd: release.tools.FD_VERSION,

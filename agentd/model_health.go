@@ -53,13 +53,19 @@ type modelHealthService struct {
 	inflight map[string]chan struct{}
 	now      func() time.Time
 	probe    func(context.Context, modelOption) modelHealthResult
+	token    string
 }
 
-func newModelHealthService() *modelHealthService {
+func newModelHealthService(token ...string) *modelHealthService {
 	service := &modelHealthService{
 		cache: make(map[string]modelHealthCacheEntry), inflight: make(map[string]chan struct{}), now: time.Now,
 	}
-	service.probe = probeDroboticsModel
+	if len(token) > 0 {
+		service.token = token[0]
+	}
+	service.probe = func(ctx context.Context, model modelOption) modelHealthResult {
+		return probeDroboticsModelWithToken(ctx, model, service.token)
+	}
 	return service
 }
 
@@ -151,9 +157,13 @@ type healthAttempt struct {
 }
 
 func probeDroboticsModel(ctx context.Context, model modelOption) modelHealthResult {
+	return probeDroboticsModelWithToken(ctx, model, strings.TrimSpace(os.Getenv(gatewayTokenEnvironment)))
+}
+
+func probeDroboticsModelWithToken(ctx context.Context, model modelOption, token string) modelHealthResult {
 	started := time.Now()
 	result := modelHealthResult{Status: "unavailable", Category: "configuration", Attempts: 0}
-	token := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN"))
+	token = strings.TrimSpace(token)
 	if token == "" {
 		result.Message = modelHealthMessage(result.Category)
 		return result

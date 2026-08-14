@@ -158,7 +158,7 @@ jobs:
             dist/hobot-code-*-macos-arm64.dmg.sha256
           if-no-files-found: error
 
-  publish:
+  draft-release:
     needs:
       - linux-arm64
       - macos-arm64
@@ -175,7 +175,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Publish GitHub release
+      - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -195,7 +195,7 @@ jobs:
             --draft \
             $prerelease
 
-      - name: Verify and publish release
+      - name: Verify draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -227,4 +227,19 @@ jobs:
           }
           verify_checksum "hobot-code-$version-linux-arm64.tar.gz.sha256" "hobot-code-$version-linux-arm64.tar.gz"
           verify_checksum "hobot-code-$version-macos-arm64.dmg.sha256" "hobot-code-$version-macos-arm64.dmg"
-          gh release edit "v$version" --draft=false
+          test "$(gh release view "v$version" --json isDraft --jq '.isDraft')" = true
+
+      - name: Record promotion instructions
+        run: |
+          version=$(sed -n '1p' VERSION)
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Draft release ready for board acceptance
+
+          The release remains private until the exact ARM64 candidate passes every declared scenario on X5, S100, and S600.
+
+          1. Generate the sanitized full matrix as \`hobot-code-$version-board-acceptance.json\`.
+          2. Upload that matrix to draft release \`v$version\`.
+          3. Run the protected **Promote Release** workflow for version \`$version\`.
+
+          Never upload the private per-board reports.
+          EOF

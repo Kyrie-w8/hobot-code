@@ -1,6 +1,6 @@
 {
   "info": {
-    "version": "0.26.0",
+    "version": "0.27.0",
     "protocol": 1,
     "pid": 100,
     "startedAt": "2026-08-13T00:00:00Z",
@@ -20,30 +20,42 @@
         "models.capabilities.v1",
         "models.health.v1",
         "models.conformance.v1",
+        "models.runtime-probe.v1",
+        "models.rdk-probe.v1",
+        "models.rdk-matrix.v1",
+        "models.qualification.v1",
+        "providers.manage.v1",
         "system.snapshot",
+        "diagnostics.inspect.v1",
+        "diagnostics.repair.v1",
         "support.bundle.v1",
+        "support.bundle.v2",
         "deployments.v1",
         "tasks.fork",
         "tasks.queue.v1",
         "tasks.failure.v1",
         "tasks.turn-evidence.v1",
         "events.items.v1",
+        "events.retention.v1",
         "workspaces.browse",
         "workspaces.changes.v1",
         "workspaces.isolation.v1",
         "workspaces.write-leases.v1",
         "workspaces.delivery.v1",
         "tasks.sandbox.v1",
-        "build.identity.v1"
+        "tasks.network.v1",
+        "build.identity.v1",
+        "pi.compatibility.v1"
       ],
       "sandbox": {
         "available": true,
         "backend": "bubblewrap",
         "profiles": ["review", "workspace", "system", "off"],
+        "networkModes": ["shared", "offline"],
         "filesystemWritesRestricted": true,
         "devicesRestricted": true,
         "capabilitiesDropped": true,
-        "networkRestricted": false
+        "networkRestricted": true
       }
     },
     "build": {
@@ -54,7 +66,8 @@
       "target": "linux-arm64",
       "binarySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "piVersion": "0.84.1",
-      "piCommit": "cccccccccccccccccccccccccccccccccccccccc"
+      "piCommit": "cccccccccccccccccccccccccccccccccccccccc",
+      "piCompatibilitySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     }
   },
   "snapshot": {"boardId": "s100", "rdkOsVersion": "4.0.5-Beta"},

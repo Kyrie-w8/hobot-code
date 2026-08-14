@@ -1,7 +1,7 @@
-const knownKinds = new Set(['extension', 'skill', 'provider', 'integration']);
+const knownKinds = new Set(['extension', 'skill', 'provider', 'integration', 'package', 'prompt', 'theme']);
 
 export function extensionKindLabel(kind) {
-  return ({extension: 'Extension', skill: 'Skill', provider: 'Provider', integration: 'Integration'})[kind] ?? 'Capability';
+  return ({extension: 'Extension', skill: 'Skill', provider: 'Provider', integration: 'Integration', package: 'Package', prompt: 'Prompt', theme: 'Theme'})[kind] ?? 'Capability';
 }
 
 export function extensionTargetState(entry, boardId) {
@@ -13,6 +13,8 @@ export function extensionTargetState(entry, boardId) {
   if (entry?.status === 'disabled') return {state: 'listed', label: 'Disabled'};
   if (entry?.status === 'available') return {state: 'included', label: 'Available'};
   if (entry?.status === 'configured') return {state: 'included', label: 'Configured'};
+  if (entry?.status === 'discovered') return {state: 'included', label: 'Discovered'};
+  if (entry?.status === 'declared') return {state: 'listed', label: 'Declared'};
   if (entry?.defaultEnabled) return {state: 'included', label: 'Included'};
   return {state: 'listed', label: 'Available'};
 }
@@ -25,7 +27,7 @@ export function extensionCatalogHealth(catalog) {
   if (catalog?.policy?.hotReload) issues.push('Unisolated hot reload is enabled');
   if (!Array.isArray(catalog?.entries) || catalog.entries.length === 0) issues.push('No packaged capabilities were reported');
   const unhealthySources = (Array.isArray(catalog?.diagnostics) ? catalog.diagnostics : [])
-    .filter((diagnostic) => !['ok', 'missing'].includes(diagnostic.status));
+    .filter((diagnostic) => !['ok', 'missing', 'contextual', 'untrusted'].includes(diagnostic.status));
   if (unhealthySources.length > 0) issues.push(`${unhealthySources.length} configured source${unhealthySources.length === 1 ? '' : 's'} could not be inspected`);
   return {healthy: issues.length === 0, issues};
 }

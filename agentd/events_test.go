@@ -49,3 +49,41 @@ func TestSchemaFourAddsStableItemSemanticsAndBoundedToolDetails(t *testing.T) {
 		t.Fatalf("terminal lifecycle item missing: %+v", failed)
 	}
 }
+
+func TestCompactionLifecycleIsNormalizedWithoutProviderFields(t *testing.T) {
+	started := normalizeWorkerEvent(json.RawMessage(`{"type":"compaction_start","provider":"private-provider","request_id":"private-request","sessionFile":"/root/private.jsonl"}`))
+	if started == nil || started.Type != "compaction_start" || started.Schema != eventSchemaVersion || started.Item != nil {
+		t.Fatalf("unexpected compaction start event: %+v", started)
+	}
+	if len(started.Data) != 0 {
+		t.Fatalf("compaction start retained private provider fields: %+v", started.Data)
+	}
+
+	completed := normalizeWorkerEvent(json.RawMessage(`{"type":"compaction_end","summary":"private model output","tokensBefore":123456,"firstKeptEntryId":"private-entry"}`))
+	if completed == nil || completed.Type != "compaction_end" || completed.Item != nil {
+		t.Fatalf("unexpected compaction end event: %+v", completed)
+	}
+	if len(completed.Data) != 0 {
+		t.Fatalf("compaction end retained private session fields: %+v", completed.Data)
+	}
+}
+
+func TestWorkerEventsOmitStructuredImagePayloads(t *testing.T) {
+	raw := json.RawMessage(`{"type":"retry_start","message":{"content":[{"type":"text","text":"keep"},{"type":"image","data":"private-simple","mimeType":"image/png"}]},"messages":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"private-source"}},{"type":"image_url","image_url":"data:image/webp;base64,private-url"}]}],"data":{"value":"keep-unrelated"}}`)
+	redacted := redactEventImagePayloads(raw)
+	for _, secret := range []string{"private-simple", "private-source", "private-url"} {
+		if strings.Contains(string(redacted), secret) {
+			t.Fatalf("structured image payload %q was retained: %s", secret, redacted)
+		}
+	}
+	for _, retained := range []string{"image/png", "image/jpeg", "keep-unrelated", `"payloadOmitted":true`} {
+		if !strings.Contains(string(redacted), retained) {
+			t.Fatalf("image metadata %q was not retained: %s", retained, redacted)
+		}
+	}
+
+	unrelated := json.RawMessage(`{"type":"response","data":{"value":"data:image/png;base64,not-an-image-block"}}`)
+	if got := redactEventImagePayloads(unrelated); string(got) != string(unrelated) {
+		t.Fatalf("unrelated event data was changed: %s", got)
+	}
+}

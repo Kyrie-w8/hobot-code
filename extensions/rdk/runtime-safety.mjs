@@ -141,3 +141,47 @@ export function destructiveShellReasons(command) {
     .filter(([pattern]) => pattern.test(value))
     .map(([_pattern, reason]) => reason))];
 }
+
+export function networkShellReasons(command) {
+  const value = String(command ?? "");
+  const networkChecks = [
+    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:curl|wget|ssh|scp|sftp|ftp|telnet|nc|ncat|netcat|socat|ping|traceroute|tracepath|dig|host|nslookup|ssh-keyscan)\b/i,
+    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?git\s+(?:clone|fetch|pull|push|ls-remote|submodule\s+(?:add|update))\b/i,
+    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:apt(?:-get)?|dnf|yum|zypper|pacman)\s+(?:download|install|refresh|update|upgrade|dist-upgrade|full-upgrade)\b/i,
+    /(?:^|[;&|()\n]\s*|\s)(?:\/[^\s;|]+\/)?(?:pip3?|npm|npx|pnpm|yarn|bun|cargo|go|gem)\s+(?:add|ci|dlx|fetch|get|install|publish|update)\b/i,
+    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:docker|podman)\s+(?:build|login|pull|push|run)\b/i,
+    /(?:^|[;&|()\n]\s*|\s)(?:\/[^\s;|]+\/)?(?:gh|glab|kubectl)\b/i,
+    /\/dev\/(?:tcp|udp)\//i,
+  ];
+  return networkChecks.some((pattern) => pattern.test(value))
+    ? ["uses a recognized outbound network client while the OS sandbox shares host networking"]
+    : [];
+}
+
+export function resolveShellSafety(command, networkAction = "ask") {
+  const destructiveReasons = destructiveShellReasons(command);
+  const networkReasons = networkShellReasons(command);
+  if (networkReasons.length > 0 && networkAction === "deny") {
+    return {
+      blocked: true,
+      approvalReasons: destructiveReasons,
+      recognizedNetwork: true,
+      rememberNetworkCall: false,
+    };
+  }
+  return {
+    blocked: false,
+    approvalReasons: [
+      ...destructiveReasons,
+      ...(networkReasons.length > 0 && networkAction === "ask" ? networkReasons : []),
+    ],
+    recognizedNetwork: networkReasons.length > 0,
+    rememberNetworkCall: destructiveReasons.length === 0
+      && networkReasons.length > 0
+      && networkAction === "ask",
+  };
+}
+
+export function effectiveNetworkAction(configuredAction, networkMode) {
+  return networkMode === "offline" ? "deny" : configuredAction;
+}

@@ -45,7 +45,7 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &daemonServer{cfg: cfg, manager: manager, started: time.Now().Add(-time.Minute)}
-	bundle, err := server.createSupportBundle(true)
+	bundle, err := server.createSupportBundle(true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +69,9 @@ func TestSupportBundleIsPrivateAndExcludesUserContent(t *testing.T) {
 	if document.System.Hostname != "[redacted]" || len(document.Tasks) != 1 || document.Tasks[0].ErrorFingerprint == "" {
 		t.Fatalf("unexpected sanitized document: %+v", document)
 	}
+	if bundle.SchemaVersion != 2 || document.Manifest.Schema != 2 || document.Status != bundle.Status || document.Findings == nil {
+		t.Fatalf("support bundle v2 metadata is incomplete: bundle=%+v document=%+v", bundle, document)
+	}
 	if document.Tasks[0].ErrorCategory != "model-unavailable" {
 		t.Fatalf("structured failure category was not preserved: %+v", document.Tasks[0])
 	}
@@ -90,7 +93,7 @@ func TestSupportBundleRetentionIsBounded(t *testing.T) {
 	}
 	server := &daemonServer{cfg: cfg, manager: manager, started: time.Now()}
 	for index := 0; index < retainedSupportBundles+2; index++ {
-		if _, err := server.createSupportBundle(false); err != nil {
+		if _, err := server.createSupportBundle(false, ""); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Millisecond)
@@ -115,5 +118,49 @@ func TestSupportPathChecksDistinguishPrivateStateFromExecutable(t *testing.T) {
 	}
 	if got := pathCheck("private-file", executable, false, true, true, false); got.Status != "fail" {
 		t.Fatalf("private check accepted public permissions: %+v", got)
+	}
+}
+
+func TestSupportFindingsTurnRecentTaskFaultsIntoBoundedRecoveryAdvice(t *testing.T) {
+	now := time.Now().UTC()
+	tasks := []supportTaskSummary{
+		{Ref: "private-a", Status: statusFailed, UpdatedAt: now.Add(-time.Minute), ErrorCategory: "model-unavailable"},
+		{Ref: "private-b", Status: statusFailed, UpdatedAt: now.Add(-time.Minute), ErrorCategory: "authentication"},
+		{Ref: "private-c", Status: statusInterrupted, UpdatedAt: now.Add(-time.Minute), LogTruncated: true},
+		{Ref: "private-old", Status: statusFailed, UpdatedAt: now.Add(-48 * time.Hour), ErrorCategory: "network"},
+	}
+	check := taskLifecycleSupportCheck(tasks, 0, 2, now)
+	if check.Status != "warn" {
+		t.Fatalf("task lifecycle check = %+v", check)
+	}
+	findings := supportFindings([]supportCheck{check}, tasks, now)
+	want := map[string]bool{"recent-task-authentication": false, "recent-task-model": false, "interrupted-tasks": false, "truncated-task-history": false}
+	for _, finding := range findings {
+		if _, ok := want[finding.Code]; ok {
+			want[finding.Code] = true
+		}
+		encoded := string(supportJSON(finding))
+		for _, forbidden := range []string{"private-a", "private-b", "private-c", "private-old"} {
+			if strings.Contains(encoded, forbidden) {
+				t.Fatalf("finding leaked task reference %q: %s", forbidden, encoded)
+			}
+		}
+	}
+	for code, found := range want {
+		if !found {
+			t.Fatalf("missing finding %s: %+v", code, findings)
+		}
+	}
+}
+
+func TestSupportStatusSeparatesInformationalChecksFromWarningsAndFailures(t *testing.T) {
+	if got := supportStatus([]supportCheck{{Status: "pass"}, {Status: "info"}}); got != "healthy" {
+		t.Fatalf("informational check changed status to %q", got)
+	}
+	if got := supportStatus([]supportCheck{{Status: "warn"}}); got != "attention" {
+		t.Fatalf("warning status = %q", got)
+	}
+	if got := supportStatus([]supportCheck{{Status: "warn"}, {Status: "fail"}}); got != "action-required" {
+		t.Fatalf("failure status = %q", got)
 	}
 }

@@ -25,6 +25,7 @@ const PATH_OVERRIDE_NAMES = [
   "HOBOT_CODE_HOOK_AUDIT",
   "HOBOT_CODE_NOTIFICATION_CONFIG",
   "HOBOT_CODE_LSP_CONFIG",
+  "HOBOT_CODE_MANAGED_PROVIDER_CONFIG",
   "HOBOT_CODE_RDK_KNOWLEDGE_DIR",
   "HOBOT_CODE_RDK_EXPERT_PROMPT",
 ];
@@ -39,6 +40,7 @@ const EXTENSION_PATH_FIELDS = [
   "hookAudit",
   "notificationConfig",
   "lspConfig",
+  "managedProviderConfig",
   "rdkKnowledgeDir",
   "rdkExpertPrompt",
 ];
@@ -51,7 +53,7 @@ async function createLauncherFixture(prefix) {
   await mkdir(join(runtime, "bin"), { recursive: true });
   await mkdir(defaults, { recursive: true });
   await mkdir(home, { recursive: true });
-  for (const name of ["settings.json", "models.json", "permissions.json", "memory.json", "goals.json", "hooks.json", "notifications.json", "lsp.json"]) {
+  for (const name of ["settings.json", "models.json", "providers.json", "permissions.json", "memory.json", "goals.json", "hooks.json", "notifications.json", "lsp.json"]) {
     await copyFile(new URL(`../packaging/pi/${name}`, import.meta.url), join(defaults, name));
   }
   await copyFile(new URL("../packaging/pi/hobot.env.example", import.meta.url), join(defaults, "hobot.env.example"));
@@ -91,6 +93,13 @@ case "\$1" in
     printf 'hobot-code-main|1|1|2026-08-10 12:00:00\\nother-work|1|2|2026-08-09 10:00:00\\n'
     ;;
   new-session)
+    if [ "\${FAKE_TMUX_REPORT_RUNTIME:-0}" = 1 ]; then
+      printf 'tmux-runtime=<%s>\n' "\${TMUX_TMPDIR:-}"
+    fi
+    if [ "\${FAKE_TMUX_REPORT_CREDENTIALS:-0}" = 1 ]; then
+      [ -z "\${ANTHROPIC_AUTH_TOKEN+x}" ] && printf 'tmux-anthropic=unset\n' || printf 'tmux-anthropic=set\n'
+      [ -z "\${HOBOT_CODE_PROVIDER_KEY_ACME+x}" ] && printf 'tmux-managed=unset\n' || printf 'tmux-managed=set\n'
+    fi
     if [ "\${FAKE_TMUX_RUN_COMMAND:-0}" = 1 ]; then
       for fake_tmux_arg in "\$@"; do fake_tmux_command=\$fake_tmux_arg; done
       exec /bin/sh -c "\$fake_tmux_command"
@@ -122,6 +131,7 @@ test("Hobot Code defaults config and mutable state to the current user", () => {
   assert.equal(paths.hookAudit, "/home/rdk/.local/state/hobot-code/audit/hooks.jsonl");
   assert.equal(paths.notificationConfig, "/home/rdk/.config/hobot-code/agent/notifications.json");
   assert.equal(paths.lspConfig, "/home/rdk/.config/hobot-code/agent/lsp.json");
+  assert.equal(paths.managedProviderConfig, "/home/rdk/.config/hobot-code/agent/providers.json");
   assert.equal(paths.rdkKnowledgeDir, "/usr/local/lib/hobot-code/knowledge");
   assert.equal(paths.rdkExpertPrompt, "/usr/local/lib/hobot-code/prompts/rdk-expert.md");
 });
@@ -150,6 +160,7 @@ test("XDG and explicit path overrides remain supported", () => {
     HOBOT_CODE_HOOK_AUDIT: "/managed/files/hooks.jsonl",
     HOBOT_CODE_NOTIFICATION_CONFIG: "/managed/files/notifications.json",
     HOBOT_CODE_LSP_CONFIG: "/managed/files/lsp.json",
+    HOBOT_CODE_MANAGED_PROVIDER_CONFIG: "/managed/files/providers.json",
     HOBOT_CODE_RDK_KNOWLEDGE_DIR: "/managed/knowledge",
     HOBOT_CODE_RDK_EXPERT_PROMPT: "/managed/prompts/rdk-expert.md",
   };
@@ -167,6 +178,7 @@ test("XDG and explicit path overrides remain supported", () => {
   assert.equal(paths.hookAudit, overrides.HOBOT_CODE_HOOK_AUDIT);
   assert.equal(paths.notificationConfig, overrides.HOBOT_CODE_NOTIFICATION_CONFIG);
   assert.equal(paths.lspConfig, overrides.HOBOT_CODE_LSP_CONFIG);
+  assert.equal(paths.managedProviderConfig, overrides.HOBOT_CODE_MANAGED_PROVIDER_CONFIG);
   assert.equal(paths.rdkKnowledgeDir, overrides.HOBOT_CODE_RDK_KNOWLEDGE_DIR);
   assert.equal(paths.rdkExpertPrompt, overrides.HOBOT_CODE_RDK_EXPERT_PROMPT);
 });
@@ -182,6 +194,19 @@ test("all relative runtime path overrides are rejected instead of resolved from 
   }
 });
 
+test("launcher refuses broad system and home roots before changing permissions", async () => {
+  const fixture = await createLauncherFixture("hobot-broad-root-");
+  try {
+    for (const [name, value] of [["HOBOT_CODE_CONFIG_DIR", "/"], ["HOBOT_CODE_STATE_DIR", fixture.home], ["HOBOT_CODING_AGENT_DIR", "/etc"]]) {
+      await assert.rejects(() => execFileAsync(fixture.launcher, ["doctor"], {
+        env: {HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin", [name]: value},
+      }), /must identify a scoped private directory/);
+    }
+  } finally {
+    await rm(fixture.root, {recursive: true, force: true});
+  }
+});
+
 test("RDK extension delegates runtime paths to the shared fail-closed resolver", async () => {
   const source = await readFile(new URL("../extensions/rdk/index.ts", import.meta.url), "utf8");
   assert.match(
@@ -189,12 +214,30 @@ test("RDK extension delegates runtime paths to the shared fail-closed resolver",
     /export default function rdkExtension\([^)]*\)\s*\{\s*(?:\/\/[^\n]*\n\s*)?resolveUserPaths\(\);/,
   );
   for (const field of EXTENSION_PATH_FIELDS) {
-    assert.match(source, new RegExp(`resolveUserPaths\\(\\)\\.${field}\\b`), field);
+	if (field !== "managedProviderConfig") assert.match(source, new RegExp(`resolveUserPaths\\(\\)\\.${field}\\b`), field);
   }
+	const managedProviderSource = await readFile(new URL("../extensions/rdk/managed-providers.mjs", import.meta.url), "utf8");
+	assert.match(managedProviderSource, /resolveUserPaths\(env\)\.managedProviderConfig\b/u);
   assert.doesNotMatch(
     source,
     /process\.env\.(?:XDG_CONFIG_HOME|XDG_STATE_HOME|HOBOT_CODE_CONFIG_DIR|HOBOT_CODING_AGENT_DIR|HOBOT_CODE_STATE_DIR|HOBOT_CODING_AGENT_SESSION_DIR|HOBOT_CODE_PERMISSION_POLICY|HOBOT_CODE_MEMORY_CONFIG|HOBOT_CODE_MEMORY_DB|HOBOT_CODE_GOAL_CONFIG|HOBOT_CODE_GOAL_DB|HOBOT_CODE_HOOK_CONFIG|HOBOT_CODE_HOOK_AUDIT|HOBOT_CODE_NOTIFICATION_CONFIG|HOBOT_CODE_LSP_CONFIG|HOBOT_CODE_RDK_KNOWLEDGE_DIR|HOBOT_CODE_RDK_EXPERT_PROMPT)\b/,
   );
+});
+
+test("runtime model probes retain the D-Robotics provider without the full RDK prompt overlay", async () => {
+  const source = await readFile(new URL("../extensions/rdk/index.ts", import.meta.url), "utf8");
+  assert.match(source, /const runtimeProbeMode = process\.env\.HOBOT_CODE_RUNTIME_PROBE === "1"/u);
+  assert.match(source, /if \(sideAgentMode \|\| runtimeProbeMode\) return undefined/u);
+  assert.match(source, /pi\.registerProvider\("drobotics"/u);
+});
+
+test("RDK model probes retain the expert prompt and expose only diagnostic tools", async () => {
+  const source = await readFile(new URL("../extensions/rdk/index.ts", import.meta.url), "utf8");
+  assert.match(source, /const rdkProbeMode = process\.env\.HOBOT_CODE_RDK_PROBE === "1"/u);
+  assert.match(source, /if \(rdkProbeMode\) pi\.setActiveTools\(\["system_snapshot", "rdk_docs_search"\]\)/u);
+  assert.match(source, /if \(!rdkProbeMode\) await captureWorkspaceTurnFingerprint\(ctx\.cwd\)/u);
+  assert.doesNotMatch(source, /if \(sideAgentMode \|\| runtimeProbeMode \|\| rdkProbeMode\) return undefined/u);
+  assert.match(source, /if \(!sideAgentMode && !rdkProbeMode\) \{/u);
 });
 
 test("RDK prompt rendering uses the shared Unicode sanitizer", async () => {
@@ -213,10 +256,13 @@ test("packaged settings and launcher do not default to system config or state", 
   assert.match(launcher, /XDG_STATE_HOME/);
 });
 
-test("launcher initializes an isolated user without system configuration", async () => {
+test("launcher initializes an isolated user but blocks the first conversation without a model", async () => {
   const fixture = await createLauncherFixture("hobot-user-layout-");
   try {
-    const { stdout } = await execFileAsync(fixture.launcher, [], {
+    await assert.rejects(() => execFileAsync(fixture.launcher, [], {
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    }), /needs a model provider before the first conversation/);
+    const { stdout } = await execFileAsync(fixture.launcher, ["tui"], {
       env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });
     const paths = stdout.trim().split("\n");
@@ -231,6 +277,18 @@ test("launcher initializes an isolated user without system configuration", async
   }
 });
 
+test("launcher routes the read-only doctor before model setup", async () => {
+  const fixture = await createLauncherFixture("hobot-doctor-route-");
+  try {
+    const { stdout } = await execFileAsync(fixture.launcher, ["doctor", "--json"], {
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    assert.equal(stdout.trim(), "agentd=<doctor>\nagentd=<--json>");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("launcher routes explicit TUI sandbox selection through agentd", async () => {
   const fixture = await createLauncherFixture("hobot-tui-route-");
   try {
@@ -238,6 +296,22 @@ test("launcher routes explicit TUI sandbox selection through agentd", async () =
       env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });
     assert.match(stdout, /arg=<--sandbox>\narg=<review>\narg=<-->\narg=<--resume>\n?$/);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("launcher routes managed provider commands through agentd", async () => {
+  const fixture = await createLauncherFixture("hobot-provider-route-");
+  try {
+    const { stdout } = await execFileAsync(fixture.launcher, ["provider", "list", "--json"], {
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    assert.equal(stdout.trim(), "agentd=<provider>\nagentd=<list>\nagentd=<--json>");
+    const rotated = await execFileAsync(fixture.launcher, ["provider", "rotate", "acme", "--token-stdin"], {
+      env: { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    assert.equal(rotated.stdout.trim(), "agentd=<provider>\nagentd=<rotate>\nagentd=<acme>\nagentd=<--token-stdin>");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -270,6 +344,35 @@ test("launcher persistent sessions preserve arguments and shell safety", async (
   }
 });
 
+test("persistent tmux server never inherits model credentials", async () => {
+  const fixture = await createLauncherFixture("hobot-persistent-credentials-");
+  try {
+    const fakeBin = await installFakeTmux(fixture.root);
+    const configRoot = join(fixture.home, ".config/hobot-code");
+    await mkdir(configRoot, { recursive: true });
+    await writeFile(join(configRoot, "hobot.env"), [
+      "ANTHROPIC_AUTH_TOKEN=drobotics-secret",
+      "HOBOT_CODE_PROVIDER_KEY_ACME=managed-secret",
+      "",
+    ].join("\n"), { mode: 0o600 });
+    const { stdout } = await execFileAsync(fixture.launcher, ["persistent", "start", "secure"], {
+      cwd: fixture.root,
+      env: {
+        HOME: fixture.home,
+        PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        FAKE_TMUX_REPORT_CREDENTIALS: "1",
+        FAKE_TMUX_REPORT_RUNTIME: "1",
+      },
+    });
+    assert.match(stdout, /^tmux-anthropic=unset$/m);
+    assert.match(stdout, /^tmux-managed=unset$/m);
+    assert.match(stdout, new RegExp(`^tmux-runtime=<${join(fixture.home, ".local/state/hobot-code/tmux")}>$`, "m"));
+    assert.doesNotMatch(stdout, /drobotics-secret|managed-secret/);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("launcher routes daemon, deployment, task, bridge, diagnosis, extensions, and model commands after loading the user environment", async () => {
   const fixture = await createLauncherFixture("hobot-agentd-route-");
   try {
@@ -288,6 +391,8 @@ test("launcher routes daemon, deployment, task, bridge, diagnosis, extensions, a
     assert.equal(extensions.stdout.trim(), "agentd=<extensions>\nagentd=<--json>");
     const model = await execFileAsync(fixture.launcher, ["model", "check", "drobotics/kimi-k3"], { env: environment });
     assert.equal(model.stdout.trim(), "agentd=<model>\nagentd=<check>\nagentd=<drobotics/kimi-k3>");
+    const modelStatus = await execFileAsync(fixture.launcher, ["model", "status", "drobotics/kimi-k3"], { env: environment });
+    assert.equal(modelStatus.stdout.trim(), "agentd=<model>\nagentd=<status>\nagentd=<drobotics/kimi-k3>");
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

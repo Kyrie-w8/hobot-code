@@ -127,6 +127,7 @@ func TestConfiguredExtensionInventoryIsPrivateBoundedAndNonSecret(t *testing.T) 
 	t.Setenv("HOBOT_CODE_LSP_CONFIG", filepath.Join(configRoot, "lsp.json"))
 	paths := configuredExtensionPaths()
 	writePrivateJSON(t, paths.models, `{"providers":{"acme":{"baseUrl":"https://secret.example/token","apiKey":"sk-do-not-return","models":[{"id":"one"}]}}}`)
+	writePrivateJSON(t, paths.managedProviders, `{"schemaVersion":1,"providers":[{"id":"managed-acme","baseUrl":"https://private.example/v1","api":"openai-completions","credentialEnv":"HOBOT_CODE_PROVIDER_KEY_ACME","models":[{"id":"coder"}]}]}`)
 	writePrivateJSON(t, paths.hooks, `{"schemaVersion":1,"enabled":true,"hooks":[{"name":"guard","event":"PreToolUse","tool":"bash","command":["/secret/guard","--token","private"]}]}`)
 	writePrivateJSON(t, paths.lsp, `{"schemaVersion":1,"enabled":true,"servers":[{"id":"missing-lsp","languageId":"demo","extensions":[".demo"],"command":["hobot-code-missing-lsp","--secret"]}]}`)
 
@@ -143,12 +144,12 @@ func TestConfiguredExtensionInventoryIsPrivateBoundedAndNonSecret(t *testing.T) 
 	if !strings.Contains(text, `"requires":[]`) || !strings.Contains(text, `"targets":[]`) {
 		t.Fatalf("dynamic extension fields must remain JSON arrays: %s", text)
 	}
-	for _, secret := range []string{"secret.example", "sk-do-not-return", "/secret/guard", "--token", "private", "--secret"} {
+	for _, secret := range []string{"secret.example", "sk-do-not-return", "private.example", "HOBOT_CODE_PROVIDER_KEY_ACME", "/secret/guard", "--token", "private", "--secret"} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("extension inventory leaked private configuration %q: %s", secret, text)
 		}
 	}
-	wantStatus := map[string]string{"user.provider.acme": "configured", "user.hook.guard": "configured", "user.lsp.missing-lsp": "missing"}
+	wantStatus := map[string]string{"user.provider.acme": "configured", "managed.provider.managed-acme": "configured", "user.hook.guard": "configured", "user.lsp.missing-lsp": "missing"}
 	for _, entry := range catalog.Entries {
 		if expected, ok := wantStatus[entry.ID]; ok {
 			if entry.Status != expected {
@@ -172,6 +173,7 @@ func TestConfiguredExtensionInventoryFailsClosedPerSource(t *testing.T) {
 	t.Setenv("HOBOT_CODE_LSP_CONFIG", filepath.Join(configRoot, "lsp.json"))
 	paths := configuredExtensionPaths()
 	writePrivateJSON(t, paths.models, `{"providers":{}}`)
+	writePrivateJSON(t, paths.managedProviders, `{"schemaVersion":1,"providers":[],"providers":[]}`)
 	if err := os.Chmod(paths.models, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +196,7 @@ func TestConfiguredExtensionInventoryFailsClosedPerSource(t *testing.T) {
 			t.Fatalf("diagnostic leaked config path: %+v", diagnostic)
 		}
 	}
-	if statuses["providers"] != "unsafe" || statuses["hooks"] != "invalid" || statuses["lsp"] != "unsafe" {
+	if statuses["providers"] != "unsafe" || statuses["managed-providers"] != "invalid" || statuses["hooks"] != "invalid" || statuses["lsp"] != "unsafe" {
 		t.Fatalf("unexpected source diagnostics: %+v", statuses)
 	}
 	if len(catalog.Entries) != len(builtIn.Entries) {
@@ -249,6 +251,169 @@ func TestConfiguredExtensionInventoryReportsOneStatusWhenTruncated(t *testing.T)
 	}
 }
 
+func TestPiResourceInventoryDiscoversGlobalResourcesWithoutLeakingPaths(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	home := filepath.Join(root, "home")
+	for _, path := range []string{
+		agentDir,
+		filepath.Join(agentDir, "extensions"),
+		filepath.Join(agentDir, "skills", "camera"),
+		filepath.Join(agentDir, "prompts"),
+		filepath.Join(agentDir, "themes"),
+		filepath.Join(home, ".agents", "skills", "shared"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", agentDir)
+	t.Setenv("HOME", home)
+	writePrivateJSON(t, filepath.Join(agentDir, "settings.json"), `{"extensions":["/usr/local/lib/hobot-code/extensions","/private/custom.ts"],"skills":["/usr/local/lib/hobot-code/skills"],"packages":["@acme/board-tools","https://token@private.example/private-pack.git#main"]}`)
+	for path, content := range map[string]string{
+		filepath.Join(agentDir, "extensions", "guard.ts"):              "export {};",
+		filepath.Join(agentDir, "skills", "camera", "SKILL.md"):        "# Camera",
+		filepath.Join(agentDir, "prompts", "review.md"):                "Review",
+		filepath.Join(agentDir, "themes", "quiet.json"):                `{}`,
+		filepath.Join(home, ".agents", "skills", "shared", "SKILL.md"): "# Shared",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn)
+	encoded, _ := json.Marshal(catalog)
+	text := string(encoded)
+	for _, secret := range []string{"private.example", "token@", "/private/custom.ts", "/usr/local/lib/hobot-code"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("Pi inventory leaked %q: %s", secret, text)
+		}
+	}
+	for _, id := range []string{
+		"pi.user.extension.declared-2",
+		"pi.user.extension.guard-ts",
+		"pi.user.skill.camera-skill-md",
+		"pi.user.prompt.review-md",
+		"pi.user.theme.quiet-json",
+		"pi.user.package.acme-board-tools",
+		"pi.user.package.private-pack",
+	} {
+		if !hasExtensionEntry(catalog, id) {
+			t.Fatalf("expected Pi resource %q: %+v", id, catalog.Entries)
+		}
+	}
+	if diagnosticStatus(catalog, "project-resources") != "contextual" {
+		t.Fatalf("global inventory must declare the project context boundary: %+v", catalog.Diagnostics)
+	}
+}
+
+func TestPiProjectResourcesRequireATrustedTaskContext(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	project := filepath.Join(root, "project")
+	for _, path := range []string{
+		agentDir,
+		filepath.Join(project, ".pi", "extensions"),
+		filepath.Join(project, ".pi", "skills", "board"),
+		filepath.Join(project, ".agents", "skills", "repo"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", agentDir)
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	if err := os.WriteFile(filepath.Join(project, ".pi", "settings.json"), []byte(`{"packages":[{"source":"repo-helper"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".pi", "extensions", "project.ts"), []byte("export {};"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".pi", "skills", "board", "SKILL.md"), []byte("# Board"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".agents", "skills", "repo", "SKILL.md"), []byte("# Repo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrusted := discoverConfiguredExtensions(builtIn, extensionInventoryContext{Cwd: project})
+	if diagnosticStatus(untrusted, "project-resources") != "untrusted" || hasEntryWithScope(untrusted, "project") {
+		t.Fatalf("untrusted project resources were exposed: %+v", untrusted)
+	}
+	trusted := discoverConfiguredExtensions(builtIn, extensionInventoryContext{Cwd: project, ProjectTrusted: true})
+	for _, id := range []string{"pi.project.package.repo-helper", "pi.project.extension.project-ts", "pi.project.skill.board-skill-md", "pi.project.skill.repo-skill-md"} {
+		if !hasExtensionEntry(trusted, id) {
+			t.Fatalf("trusted project resource %q missing: %+v", id, trusted.Entries)
+		}
+	}
+}
+
+func TestPiResourceInventoryDoesNotFollowSymlinks(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	extensions := filepath.Join(agentDir, "extensions")
+	if err := os.MkdirAll(extensions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", agentDir)
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	outside := filepath.Join(root, "secret.ts")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(extensions, "linked.ts")); err != nil {
+		t.Fatal(err)
+	}
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn)
+	if diagnosticStatus(catalog, "user-extensions") != "partial" || hasExtensionEntry(catalog, "pi.user.extension.linked-ts") {
+		t.Fatalf("symlinked extension was not rejected: %+v", catalog)
+	}
+	encoded, _ := json.Marshal(catalog)
+	if strings.Contains(string(encoded), outside) {
+		t.Fatalf("symlink target leaked: %s", encoded)
+	}
+}
+
+func TestPiResourceInventoryRejectsSymlinkedProjectMetadataDirectory(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	project := filepath.Join(root, "project")
+	outside := filepath.Join(root, "outside")
+	for _, path := range []string{agentDir, project, filepath.Join(outside, "extensions")} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "extensions", "hidden.ts"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(project, ".pi")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOBOT_CODING_AGENT_DIR", agentDir)
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn, extensionInventoryContext{Cwd: project, ProjectTrusted: true})
+	if diagnosticStatus(catalog, "project-resources") != "unsafe" || hasEntryWithScope(catalog, "project") {
+		t.Fatalf("symlinked .pi resources were exposed: %+v", catalog)
+	}
+}
+
 func hasExtensionEntry(catalog extensionCatalog, id string) bool {
 	for _, entry := range catalog.Entries {
 		if entry.ID == id {
@@ -256,6 +421,24 @@ func hasExtensionEntry(catalog extensionCatalog, id string) bool {
 		}
 	}
 	return false
+}
+
+func hasEntryWithScope(catalog extensionCatalog, scope string) bool {
+	for _, entry := range catalog.Entries {
+		if entry.Scope == scope {
+			return true
+		}
+	}
+	return false
+}
+
+func diagnosticStatus(catalog extensionCatalog, source string) string {
+	for _, diagnostic := range catalog.Diagnostics {
+		if diagnostic.Source == source {
+			return diagnostic.Status
+		}
+	}
+	return ""
 }
 
 func writePrivateJSON(t *testing.T, path, content string) {

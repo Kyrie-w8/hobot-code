@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -21,28 +22,45 @@ const (
 )
 
 type config struct {
-	ConfigRoot        string
-	AgentDir          string
-	StateRoot         string
-	AgentdRoot        string
-	TasksRoot         string
-	WorktreesRoot     string
-	AttachCursorRoot  string
-	SupportRoot       string
-	SessionDir        string
-	SocketPath        string
-	PIDPath           string
-	LogPath           string
-	AgentBinary       string
-	ExtensionCatalog  string
-	SandboxBinary     string
-	ConfigFingerprint string
-	MaxTasks          int
-	MaxRetainedTasks  int
-	MaxEventSize      int64
+	ConfigRoot            string
+	AgentDir              string
+	StateRoot             string
+	AgentdRoot            string
+	TasksRoot             string
+	WorktreesRoot         string
+	AttachCursorRoot      string
+	SupportRoot           string
+	QualificationPath     string
+	SessionDir            string
+	SocketPath            string
+	ModelEgressRoot       string
+	ModelEgressSocket     string
+	DRoboticsBaseURL      string
+	ModelEgressTimeout    time.Duration
+	PIDPath               string
+	LogPath               string
+	AgentBinary           string
+	ExtensionCatalog      string
+	ManagedProviderConfig string
+	SandboxBinary         string
+	ConfigFingerprint     string
+	MaxTasks              int
+	MaxRetainedTasks      int
+	MaxEventSize          int64
+	gatewayToken          string
+	gatewayCredential     string
+	modelEgressRoutes     map[string]modelEgressRoute
 }
 
 func loadConfig() (config, error) {
+	gatewayCredentials, err := loadGatewayCredentials()
+	if err != nil {
+		return config{}, err
+	}
+	gatewayCredential, err := encodeGatewayCredentialBundle(gatewayCredentials)
+	if err != nil {
+		return config{}, err
+	}
 	home := os.Getenv("HOME")
 	if !filepath.IsAbs(home) {
 		return config{}, fmt.Errorf("HOME must be an absolute path")
@@ -65,6 +83,13 @@ func loadConfig() (config, error) {
 	if !filepath.IsAbs(agentDir) {
 		return config{}, fmt.Errorf("HOBOT_CODING_AGENT_DIR must be an absolute path")
 	}
+	managedProviderConfig := os.Getenv("HOBOT_CODE_MANAGED_PROVIDER_CONFIG")
+	if managedProviderConfig == "" {
+		managedProviderConfig = filepath.Join(agentDir, "providers.json")
+	}
+	if !filepath.IsAbs(managedProviderConfig) {
+		return config{}, fmt.Errorf("HOBOT_CODE_MANAGED_PROVIDER_CONFIG must be an absolute path")
+	}
 	stateRoot := os.Getenv("HOBOT_CODE_STATE_DIR")
 	if stateRoot == "" {
 		stateHome := os.Getenv("XDG_STATE_HOME")
@@ -83,13 +108,23 @@ func loadConfig() (config, error) {
 	if !filepath.IsAbs(sessionDir) {
 		return config{}, fmt.Errorf("HOBOT_CODING_AGENT_SESSION_DIR must be an absolute path")
 	}
+	for _, root := range []struct {
+		name string
+		path string
+	}{{"HOBOT_CODE_CONFIG_DIR", configRoot}, {"HOBOT_CODING_AGENT_DIR", agentDir}, {"HOBOT_CODE_STATE_DIR", stateRoot}, {"HOBOT_CODING_AGENT_SESSION_DIR", sessionDir}} {
+		if !safeManagedPrivateRoot(root.path, home) {
+			return config{}, fmt.Errorf("%s must identify a scoped private directory, not a broad system or home root", root.name)
+		}
+	}
 
 	agentdRoot := filepath.Join(stateRoot, "agentd")
 	socketRoot := os.Getenv("XDG_RUNTIME_DIR")
 	if socketRoot != "" && filepath.IsAbs(socketRoot) {
 		socketRoot = filepath.Join(socketRoot, "hobot-code")
 	} else {
-		socketRoot = filepath.Join(os.TempDir(), fmt.Sprintf("hobot-code-agentd-%d", os.Getuid()))
+		// Some RDK images make /tmp private to root. Keep the per-user daemon
+		// reachable without relying on a login manager to set XDG_RUNTIME_DIR.
+		socketRoot = filepath.Join(agentdRoot, "run")
 	}
 	socketPath := os.Getenv("HOBOT_CODE_AGENTD_SOCKET")
 	if socketPath == "" {
@@ -101,6 +136,16 @@ func loadConfig() (config, error) {
 	if len(socketPath) > 100 {
 		return config{}, fmt.Errorf("agentd socket path is too long: %s", socketPath)
 	}
+	modelEgressRoot := filepath.Join(filepath.Dir(socketPath), "model")
+	modelEgressSocket := filepath.Join(modelEgressRoot, "s")
+	if len(modelEgressSocket) > 100 {
+		return config{}, fmt.Errorf("model egress socket path is too long: %s", modelEgressSocket)
+	}
+	droboticsBaseURL, err := normalizeModelEgressBaseURL(os.Getenv("ANTHROPIC_BASE_URL"))
+	if err != nil {
+		return config{}, err
+	}
+	modelEgressTimeout := time.Duration(boundedInteger(os.Getenv("API_TIMEOUT_MS"), 3_000_000, 1_000, 3_600_000)) * time.Millisecond
 
 	agentBinary := os.Getenv("HOBOT_CODE_AGENT_BINARY")
 	if agentBinary == "" {
@@ -128,27 +173,61 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 
-	return config{
-		ConfigRoot:        filepath.Clean(configRoot),
-		AgentDir:          filepath.Clean(agentDir),
-		StateRoot:         filepath.Clean(stateRoot),
-		AgentdRoot:        filepath.Clean(agentdRoot),
-		TasksRoot:         filepath.Join(agentdRoot, "tasks"),
-		WorktreesRoot:     filepath.Join(agentdRoot, "worktrees"),
-		AttachCursorRoot:  filepath.Join(agentdRoot, "attach-cursors"),
-		SupportRoot:       filepath.Join(agentdRoot, "support"),
-		SessionDir:        filepath.Clean(sessionDir),
-		SocketPath:        filepath.Clean(socketPath),
-		PIDPath:           filepath.Join(agentdRoot, "agentd.pid"),
-		LogPath:           filepath.Join(agentdRoot, "agentd.log"),
-		AgentBinary:       filepath.Clean(agentBinary),
-		ExtensionCatalog:  filepath.Clean(extensionCatalog),
-		SandboxBinary:     sandboxBinary,
-		ConfigFingerprint: configFingerprint,
-		MaxTasks:          maxTasks,
-		MaxRetainedTasks:  maxRetainedTasks,
-		MaxEventSize:      int64(maxEventMiB) * 1024 * 1024,
-	}, nil
+	result := config{
+		ConfigRoot:            filepath.Clean(configRoot),
+		AgentDir:              filepath.Clean(agentDir),
+		StateRoot:             filepath.Clean(stateRoot),
+		AgentdRoot:            filepath.Clean(agentdRoot),
+		TasksRoot:             filepath.Join(agentdRoot, "tasks"),
+		WorktreesRoot:         filepath.Join(agentdRoot, "worktrees"),
+		AttachCursorRoot:      filepath.Join(agentdRoot, "attach-cursors"),
+		SupportRoot:           filepath.Join(agentdRoot, "support"),
+		QualificationPath:     filepath.Join(agentdRoot, "model-qualification.json"),
+		SessionDir:            filepath.Clean(sessionDir),
+		SocketPath:            filepath.Clean(socketPath),
+		ModelEgressRoot:       filepath.Clean(modelEgressRoot),
+		ModelEgressSocket:     filepath.Clean(modelEgressSocket),
+		DRoboticsBaseURL:      droboticsBaseURL,
+		ModelEgressTimeout:    modelEgressTimeout,
+		PIDPath:               filepath.Join(agentdRoot, "agentd.pid"),
+		LogPath:               filepath.Join(agentdRoot, "agentd.log"),
+		AgentBinary:           filepath.Clean(agentBinary),
+		ExtensionCatalog:      filepath.Clean(extensionCatalog),
+		ManagedProviderConfig: filepath.Clean(managedProviderConfig),
+		SandboxBinary:         sandboxBinary,
+		ConfigFingerprint:     configFingerprint,
+		MaxTasks:              maxTasks,
+		MaxRetainedTasks:      maxRetainedTasks,
+		MaxEventSize:          int64(maxEventMiB) * 1024 * 1024,
+		gatewayToken:          gatewayCredentials.DRobotics,
+		gatewayCredential:     gatewayCredential,
+	}
+	result.modelEgressRoutes, err = buildModelEgressRoutes(result)
+	if err != nil {
+		return config{}, fmt.Errorf("load model egress routes: %w", err)
+	}
+	return result, nil
+}
+
+func safeManagedPrivateRoot(path, home string) bool {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) || path == string(filepath.Separator) || path == filepath.Clean(home) {
+		return false
+	}
+	for _, protected := range []string{"/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/mnt", "/opt", "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var"} {
+		if path == protected {
+			return false
+		}
+	}
+	return true
+}
+
+func gatewayCredentialPayload(cfg config) string {
+	if cfg.gatewayCredential != "" {
+		return cfg.gatewayCredential
+	}
+	payload, _ := encodeGatewayCredentialBundle(gatewayCredentialBundle{SchemaVersion: 1, DRobotics: cfg.gatewayToken})
+	return payload
 }
 
 func normalizeConfigFingerprint(value string) (string, error) {
@@ -194,8 +273,24 @@ func ensurePrivateDir(path string) error {
 	return os.Chmod(path, 0o700)
 }
 
+func prepareUserPaths(cfg config) error {
+	for _, path := range []string{cfg.ConfigRoot, cfg.AgentDir, cfg.StateRoot, cfg.SessionDir} {
+		if err := ensurePrivateDir(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func preparePaths(cfg config) error {
-	for _, path := range []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.WorktreesRoot, cfg.AttachCursorRoot, cfg.SupportRoot, cfg.SessionDir, filepath.Dir(cfg.SocketPath)} {
+	if err := prepareUserPaths(cfg); err != nil {
+		return err
+	}
+	paths := []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.WorktreesRoot, cfg.AttachCursorRoot, cfg.SupportRoot, cfg.SessionDir, gatewayCredentialDirectory(cfg), filepath.Dir(cfg.SocketPath)}
+	if cfg.ModelEgressRoot != "" {
+		paths = append(paths, cfg.ModelEgressRoot)
+	}
+	for _, path := range paths {
 		if err := ensurePrivateDir(path); err != nil {
 			return err
 		}

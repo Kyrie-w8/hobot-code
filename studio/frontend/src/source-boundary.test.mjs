@@ -29,3 +29,24 @@ test('production frontend source does not publish private board addresses', asyn
 
   assert.deepEqual(violations, [], 'board addresses must come from user configuration, not the shipped UI');
 });
+
+test('provider API keys remain transient and outside React state or browser storage', async () => {
+  const source = await readFile(new URL('App.tsx', sourceDirectory), 'utf8');
+  const providerDialog = source.slice(source.indexOf('function ProviderDialog('), source.indexOf('function ExtensionCenterDialog('));
+
+  assert.match(providerDialog, /ref=\{apiKeyRef\}\s+type="password"\s+autoComplete="new-password"/);
+  assert.match(providerDialog, /api\.addProvider\(boardId, form, apiKey\)/);
+  assert.match(providerDialog, /api\.rotateProvider\(boardId, rotateTarget\.id, apiKey, confirmSharedRotation\)/);
+  assert.doesNotMatch(providerDialog, /useState<[^>]*>\([^)]*apiKey|setApiKey|localStorage|sessionStorage/);
+  assert.doesNotMatch(providerDialog, /\.addProvider\([^)]*apiKeyRef\.current/);
+  assert.doesNotMatch(providerDialog, /\.rotateProvider\([^)]*apiKeyRef\.current/);
+});
+
+test('readiness dialog distinguishes unavailable diagnostics from active loading', async () => {
+  const source = await readFile(new URL('App.tsx', sourceDirectory), 'utf8');
+  const dialog = source.slice(source.indexOf('function ReadinessDiagnosticsDialog('), source.indexOf('function InspectorSection('));
+
+  assert.match(dialog, /!report && loading/);
+  assert.match(dialog, /Readiness diagnostics are unavailable for this connection/);
+  assert.match(dialog, /loading \? 'Checking' : 'Unavailable'/);
+});

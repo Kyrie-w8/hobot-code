@@ -20,6 +20,14 @@ import (
 type daemonClient struct{ cfg config }
 
 func (client daemonClient) call(method string, params any) (json.RawMessage, error) {
+	if daemonMethodUsesConfigFingerprint(method) {
+		info, err := client.ping()
+		if err != nil {
+			return nil, err
+		}
+		includeFingerprint := client.cfg.ConfigFingerprint != "" && containsCapability(info.Capabilities.Capabilities, "configuration.fingerprint.v1")
+		return client.callInternal(method, params, includeFingerprint)
+	}
 	if daemonMethodNeedsCurrentConfiguration(method) {
 		supported, err := client.checkConfiguration(method)
 		if err != nil {
@@ -28,6 +36,15 @@ func (client daemonClient) call(method string, params any) (json.RawMessage, err
 		return client.callInternal(method, params, supported)
 	}
 	return client.callUnchecked(method, params)
+}
+
+func daemonMethodUsesConfigFingerprint(method string) bool {
+	switch method {
+	case "diagnostics.inspect", "diagnostics.repair", "support.bundle", "models.qualification":
+		return true
+	default:
+		return false
+	}
 }
 
 func (client daemonClient) callUnchecked(method string, params any) (json.RawMessage, error) {
@@ -88,6 +105,12 @@ func daemonCallTimeout(method string) time.Duration {
 	if method == "models.conformance" {
 		return modelConformanceRequestTimeout + 5*time.Second
 	}
+	if method == "models.runtime-probe" {
+		return modelRuntimeProbeTimeout + 5*time.Second
+	}
+	if method == "models.rdk-probe" {
+		return rdkProbeTimeout + 5*time.Second
+	}
 	if method == "task.start" || method == "workspace.cleanup" || method == "workspace.delivery" || method == "workspace.apply" {
 		return workspaceWorktreeTimeout + 10*time.Second
 	}
@@ -99,7 +122,7 @@ func daemonCallTimeout(method string) time.Duration {
 
 func daemonMethodNeedsCurrentConfiguration(method string) bool {
 	switch method {
-	case "models.list", "models.health", "models.conformance", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork":
+	case "models.list", "models.health", "models.conformance", "models.runtime-probe", "models.rdk-probe", "models.rdk-matrix", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork":
 		return true
 	default:
 		return false
@@ -165,7 +188,12 @@ func startDaemon(cfg config) error {
 	}
 	defer logFile.Close()
 	command := exec.Command(executable, "serve")
-	command.Env = os.Environ()
+	command.Env = environmentWithoutGatewayCredential(os.Environ())
+	closeCredential, err := attachGatewayCredential(command, gatewayCredentialPayload(cfg))
+	if err != nil {
+		return err
+	}
+	defer closeCredential()
 	command.Stdin = nil
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -242,6 +270,19 @@ func (client daemonClient) subscribeWithContext(ctx context.Context, taskID stri
 				}
 				return fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
 			}
+			if human {
+				encoded, err := json.Marshal(envelope.Result)
+				if err != nil {
+					return err
+				}
+				var result subscriptionResult
+				if err := json.Unmarshal(encoded, &result); err != nil {
+					return err
+				}
+				if notice := eventRetentionNotice(result.RetainedFrom, result.RetainedThrough, result.LatestSequence, result.HistoryTruncated, result.CursorExpired); notice != "" {
+					fmt.Fprintln(output, notice)
+				}
+			}
 			continue
 		}
 		var event taskEvent
@@ -265,6 +306,19 @@ func (client daemonClient) subscribeWithContext(ctx context.Context, taskID stri
 		return nil
 	}
 	return scanner.Err()
+}
+
+func eventRetentionNotice(retainedFrom, retainedThrough, latest uint64, truncated, expired bool) string {
+	if latest > retainedThrough && truncated {
+		return "Some recent task activity from the previous event log could not be recovered; new activity will continue in a fresh durable tail."
+	}
+	if expired && retainedFrom > 0 {
+		return fmt.Sprintf("Earlier task activity is no longer retained; replay starts at event %d.", retainedFrom)
+	}
+	if truncated && retainedFrom > 0 {
+		return fmt.Sprintf("This long task retains its newest activity; available history starts at event %d.", retainedFrom)
+	}
+	return ""
 }
 
 type humanEventRenderer struct {

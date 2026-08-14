@@ -29,6 +29,8 @@ type modelOption struct {
 	Default          bool              `json:"default,omitempty"`
 	Capabilities     modelCapabilities `json:"capabilities"`
 	CapabilitySource string            `json:"capabilitySource"`
+	Managed          bool              `json:"managed,omitempty"`
+	ModelOnly        bool              `json:"modelOnly,omitempty"`
 }
 
 type modelCapabilities struct {
@@ -80,7 +82,12 @@ func listModels(cfg config) ([]modelOption, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, cfg.AgentBinary, "--offline", "--list-models")
-	command.Env = os.Environ()
+	command.Env = environmentWithoutGatewayCredential(os.Environ())
+	closeCredential, err := attachGatewayCredential(command, gatewayCredentialPayload(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("prepare model discovery credential: %w", err)
+	}
+	defer closeCredential()
 	output, err := command.Output()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -91,6 +98,20 @@ func listModels(cfg config) ([]modelOption, error) {
 	models := parseModelTable(output)
 	if len(models) == 0 {
 		return nil, fmt.Errorf("model discovery returned no models")
+	}
+	managed, err := configuredManagedProviderIDs(managedProviderConfigPath(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("validate managed provider configuration: %w", err)
+	}
+	routes, err := loadModelEgressRoutes(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("validate model egress configuration: %w", err)
+	}
+	for index := range models {
+		models[index].Managed = managed[models[index].Provider]
+		if route, ok := routes[models[index].Provider]; ok {
+			models[index].ModelOnly = len(route.Models) == 0 || route.Models[models[index].ID]
+		}
 	}
 	markDefaultModel(models)
 	return models, nil

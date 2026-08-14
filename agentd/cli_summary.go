@@ -17,6 +17,7 @@ type taskCLISummary struct {
 	Model                 string                  `json:"model,omitempty"`
 	PermissionMode        string                  `json:"permissionMode,omitempty"`
 	SandboxMode           string                  `json:"sandboxMode"`
+	NetworkMode           string                  `json:"networkMode"`
 	Sandbox               taskSandboxStatus       `json:"sandbox"`
 	Approved              bool                    `json:"projectResourcesTrusted"`
 	ParentTaskID          string                  `json:"parentTaskId,omitempty"`
@@ -70,7 +71,7 @@ func summarizeTaskForCLI(metadata taskMetadata) taskCLISummary {
 		ProjectCwd: metadata.ProjectCwd, WorkspaceMode: metadata.WorkspaceMode, WorkspaceID: metadata.WorkspaceID,
 		WorktreeBase: metadata.WorktreeBase, CreatedAt: metadata.CreatedAt, UpdatedAt: metadata.UpdatedAt,
 		LastSequence: metadata.LastSequence, Model: metadata.Model, PermissionMode: metadata.PermissionMode,
-		SandboxMode: metadata.SandboxMode, Sandbox: metadata.Sandbox,
+		SandboxMode: metadata.SandboxMode, NetworkMode: metadata.NetworkMode, Sandbox: metadata.Sandbox,
 		Approved: metadata.Approved, ParentTaskID: metadata.ParentTaskID, BranchKind: metadata.BranchKind,
 		QueuedAt: metadata.QueuedAt, QueueOperation: metadata.QueueOperation, ArchivedAt: metadata.ArchivedAt,
 		Failure: metadata.Failure,

@@ -60,6 +60,10 @@ export function resolveUserPaths(env = process.env, home = homedir()) {
       "HOBOT_CODE_LSP_CONFIG",
       env.HOBOT_CODE_LSP_CONFIG || resolve(agentDir, "lsp.json"),
     ),
+    managedProviderConfig: absolutePath(
+      "HOBOT_CODE_MANAGED_PROVIDER_CONFIG",
+      env.HOBOT_CODE_MANAGED_PROVIDER_CONFIG || resolve(agentDir, "providers.json"),
+    ),
     rdkKnowledgeDir: absolutePath(
       "HOBOT_CODE_RDK_KNOWLEDGE_DIR",
       env.HOBOT_CODE_RDK_KNOWLEDGE_DIR || resolve(RUNTIME_ROOT, "knowledge"),

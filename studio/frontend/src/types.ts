@@ -14,10 +14,10 @@ export type Capabilities = {
   capabilities: string[];
   maximumActiveTasks: number;
   maximumRetainedTasks: number;
-  sandbox?: {available: boolean; backend?: string; profiles?: string[]; filesystemWritesRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
+  sandbox?: {available: boolean; backend?: string; profiles?: string[]; networkModes?: string[]; filesystemWritesRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
 };
 
-export type ExtensionEntry = {id: string; name: string; version: string; kind: 'extension' | 'skill' | 'provider' | 'integration'; description: string; origin: string; scope: string; runtime: string; entrypoint: string; trust: string; defaultEnabled: boolean; required: boolean; provides: string[]; requires: string[]; permissions: string[]; targets: string[]; status?: 'included' | 'configured' | 'available' | 'missing' | 'disabled'; statusDetail?: string};
+export type ExtensionEntry = {id: string; name: string; version: string; kind: 'extension' | 'skill' | 'provider' | 'integration' | 'package' | 'prompt' | 'theme'; resourceType?: 'extension' | 'skill' | 'package' | 'prompt' | 'theme'; description: string; origin: string; scope: string; runtime: string; entrypoint: string; trust: string; defaultEnabled: boolean; required: boolean; provides: string[]; requires: string[]; permissions: string[]; targets: string[]; status?: 'included' | 'configured' | 'available' | 'missing' | 'disabled' | 'declared' | 'discovered'; statusDetail?: string};
 export type ExtensionDiagnostic = {source: string; status: string; message: string};
 export type ExtensionCatalog = {schemaVersion: number; apiVersion: string; productVersion: string; hostVersion: string; capturedAt?: string; entries: ExtensionEntry[]; diagnostics?: ExtensionDiagnostic[]; policy: {inventoryOnly: boolean; executionAuthority: string; permissionAuthority: string; thirdPartyRuntime: string; hotReload: boolean}};
 
@@ -30,7 +30,7 @@ export type DaemonInfo = {
   maximumTasks: number;
   stateRoot: string;
   configurationCurrent?: boolean;
-  build?: {status: 'verified' | 'invalid' | 'unavailable'; reason?: string; commit?: string; dirty?: boolean; builtAt?: string; target?: string; binarySha256?: string; piVersion?: string; piCommit?: string};
+  build?: {status: 'verified' | 'invalid' | 'unavailable'; reason?: string; commit?: string; dirty?: boolean; builtAt?: string; target?: string; binarySha256?: string; piVersion?: string; piCommit?: string; piCompatibilitySha256?: string};
 };
 
 export type CompatibilityIssue = {code: string; severity: 'warning' | 'error'; message: string; action?: string};
@@ -57,7 +57,6 @@ export type Connection = {
   compatibility?: ConnectionCompatibility;
   error?: string;
 };
-
 export type BoardUpdateCheck = {status: 'current' | 'available' | 'source-older'; installedVersion?: string; availableVersion: string; message: string};
 export type BoardUpdateResult = {changed: boolean; previousVersion: string; installedVersion: string; message: string; connection: Connection};
 
@@ -95,7 +94,11 @@ export type SystemSnapshot = {
   uptimeSeconds: number;
 };
 
-export type SupportBundle = {id: string; createdAt: string; path: string; sizeBytes: number; sha256: string; excluded: string[]; checks: {pass: number; warn: number; fail: number}};
+export type SupportFinding = {code: string; severity: 'info' | 'warning' | 'error'; scope: string; title: string; summary: string; action: string; count?: number};
+export type SupportBundle = {schemaVersion?: number; id: string; createdAt: string; path: string; sizeBytes: number; sha256: string; excluded: string[]; status?: 'healthy' | 'attention' | 'action-required'; checks: {pass: number; info?: number; warn: number; fail: number}; findings?: SupportFinding[]};
+export type DiagnosticCheck = {name: string; status: 'pass' | 'info' | 'warn' | 'fail'; summary: string};
+export type DiagnosticRepairAction = {id: 'private-runtime-permissions' | 'restart-daemon'; executor: 'agentd' | 'client'; status: 'available' | 'blocked'; requiresConfirmation: true; summary: string; reason: string};
+export type DiagnosticReport = {schemaVersion: 1; capturedAt: string; status: 'healthy' | 'attention' | 'action-required'; summary: {pass: number; info: number; warn: number; fail: number}; checks: DiagnosticCheck[]; findings: SupportFinding[]; repairs: DiagnosticRepairAction[]};
 
 export type DeploymentArtifact = {path: string; relativePath: string; name: string; kind: string; sizeBytes: number; modifiedAt: string; compatibility: 'candidate' | 'unverified' | 'conversion-required' | 'mismatch'; reason: string};
 export type DeploymentInspection = {capturedAt: string; cwd: string; board: string; boardId: string; rdkOsVersion: string; artifacts: DeploymentArtifact[]; truncated: boolean};
@@ -162,6 +165,7 @@ export type Task = {
   model?: string;
   permissionMode?: 'review' | 'ask' | 'developer';
   sandboxMode?: 'review' | 'workspace' | 'system' | 'off';
+  networkMode?: 'shared' | 'model-only' | 'offline';
   sandbox?: {requested: string; effective: string; backend: string; filesystemRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
   parentTaskId?: string;
   forkSequence?: number;
@@ -193,7 +197,16 @@ export type TaskEvent = {
 };
 
 export type TaskPage = { tasks: Task[]; nextCursor?: string };
-export type EventPage = { events: TaskEvent[]; nextAfter?: number; hasMore: boolean };
+export type EventPage = {
+  events: TaskEvent[];
+  nextAfter?: number;
+  hasMore: boolean;
+  retainedFrom?: number;
+  retainedThrough?: number;
+  latestSequence?: number;
+  historyTruncated?: boolean;
+  cursorExpired?: boolean;
+};
 export type EventEnvelope = { boardId: string; event: TaskEvent };
 export type ModelOption = {
   provider: string;
@@ -202,7 +215,13 @@ export type ModelOption = {
   default?: boolean;
   capabilities?: {reasoning: boolean; imageInput: boolean};
   capabilitySource?: 'runtime-model-table' | 'conservative-default' | string;
+  managed?: boolean;
+  modelOnly?: boolean;
 };
+export type ManagedProviderModel = {id: string; name?: string; contextWindow: number; maxTokens: number; reasoning: boolean; image: boolean};
+export type ManagedProvider = {id: string; name?: string; api: 'anthropic-messages' | 'openai-completions' | 'openai-responses' | 'google-generative-ai'; models: ManagedProviderModel[]; credential: 'ready' | 'missing'; credentialUsers: number};
+export type AddManagedProviderRequest = {id: string; name?: string; baseUrl: string; api: ManagedProvider['api']; model: string; modelName?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; image?: boolean; authHeader?: boolean};
+export type ProviderMutationResult = {saved: boolean; applied: boolean; message: string};
 export type ModelHealth = {
   provider: string;
   model: string;
@@ -220,6 +239,10 @@ export type ModelHealth = {
 
 export type ModelConformanceCheck = {name: string; status: 'passed' | 'degraded' | 'failed' | 'blocked' | 'skipped'; category: string; message: string; latencyMs?: number};
 export type ModelConformance = {
+  schemaVersion?: number;
+  scope?: 'gateway-protocol' | string;
+  agentRuntimeStatus?: 'not-tested' | string;
+  rdkTaskStatus?: 'not-tested' | string;
   provider: string;
   model: string;
   status: 'verified' | 'compatible' | 'failed';
@@ -231,6 +254,99 @@ export type ModelConformance = {
   cached: boolean;
   checks: ModelConformanceCheck[];
 };
+export type ModelRuntimeProbeCheck = {name: string; status: 'passed' | 'failed' | 'skipped' | string; message: string};
+export type ModelRuntimeProbe = {
+  schemaVersion: number;
+  scope: string;
+  provider: string;
+  model: string;
+  status: 'partial' | 'failed' | string;
+  category?: string;
+  message: string;
+  reasoningDeclared: boolean;
+  imageInputDeclared: boolean;
+  checkedAt: string;
+  durationMs?: number;
+  checks: ModelRuntimeProbeCheck[];
+  pending: string[];
+};
+export type ModelRDKProbeCheck = {name: string; status: 'passed' | 'failed' | 'skipped' | string; message: string};
+export type ModelRDKProbeBinding = {
+  productVersion: string;
+  buildStatus: string;
+  commit?: string;
+  dirty?: boolean;
+  buildTarget?: string;
+  agentdBinarySha256?: string;
+  piVersion?: string;
+  piCommit?: string;
+  piCompatibilitySha256?: string;
+  expertPromptSha256: string;
+  rdkExtensionSha256: string;
+  knowledgePackSha256: string;
+  knowledgeVersion: string;
+  knowledgeUpdatedAt: string;
+  board: string;
+  boardId: string;
+  rdkOsVersion: string;
+  architecture: string;
+};
+export type ModelRDKProbe = {
+  schemaVersion: number;
+  scope: string;
+  profile: string;
+  provider: string;
+  model: string;
+  status: 'passed' | 'failed' | string;
+  releaseEligible: boolean;
+  category?: string;
+  message: string;
+  checkedAt: string;
+  durationMs?: number;
+  binding: ModelRDKProbeBinding;
+  sources?: string[];
+  checks: ModelRDKProbeCheck[];
+  notCovered: string[];
+};
+export type ModelRDKProfileStatus = {
+  id: string;
+  name: string;
+  workflow: string;
+  evidenceClass: string;
+  description: string;
+  availability: 'available' | 'planned' | 'unsupported-target';
+  evidenceState: 'untested' | 'current' | 'stale';
+  targets: string[];
+  notCovered: string[];
+  staleReasons: ModelQualification['staleReasons'];
+  result?: ModelRDKProbe;
+};
+export type ModelRDKMatrix = {
+  schemaVersion: 1;
+  provider: string;
+  model: string;
+  boardId: string;
+  rdkOsVersion: string;
+  architecture: string;
+  capturedAt: string;
+  profiles: ModelRDKProfileStatus[];
+};
+export type ModelQualification = {
+  schemaVersion: 1;
+  provider: string;
+  model: string;
+  state: 'untested' | 'current' | 'expired' | 'stale';
+  level: 'untested' | 'route' | 'protocol' | 'runtime' | 'rdk-profile' | 'rdk-profile-release';
+  outcome: 'unknown' | 'passed' | 'partial' | 'failed';
+  updatedAt?: string;
+  staleReasons: Array<'configuration-changed' | 'product-version-changed' | 'build-changed' | 'pi-runtime-changed' | 'board-changed' | 'rdk-resources-changed'>;
+  staleLayers: Array<'route' | 'protocol' | 'runtime' | 'rdk'>;
+  expiredLayers: Array<'route' | 'protocol' | 'runtime' | 'rdk'>;
+  health?: ModelHealth;
+  conformance?: ModelConformance;
+  runtime?: ModelRuntimeProbe;
+  rdk?: ModelRDKProbe;
+};
 export type ImageContent = {type: 'image'; data: string; mimeType: string; name?: string};
 export type AttachmentSummary = {name?: string; mimeType: string};
 export type WorkspaceEntry = {name: string; path: string};
@@ -240,4 +356,4 @@ export type WorkspaceChanges = {capturedAt: string; available: boolean; reposito
 export type WorkspaceIsolation = {capturedAt: string; available: boolean; repository: boolean; eligible: boolean; recommendedMode: 'shared' | 'worktree'; repositoryRoot?: string; scope?: string; head?: string; clean: boolean; reason: string};
 export type WorkspaceDelivery = {taskId: string; ready: boolean; reason: string; patchBytes?: number; digest?: string; alreadyApplied?: boolean};
 export type WorkspaceApplyResult = {taskId: string; applied: boolean; staged: boolean; patchBytes: number; digest: string; appliedAt: string};
-export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string; sandboxMode?: 'review' | 'workspace' | 'system' | 'off'};
+export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string; sandboxMode?: 'review' | 'workspace' | 'system' | 'off'; networkMode?: 'shared' | 'model-only' | 'offline'};
