@@ -100,6 +100,34 @@ func TestWorkspaceChangesRejectsInvalidTaskIDBeforeConnecting(t *testing.T) {
 	}
 }
 
+func TestBoardUpdateRejectsUnknownOrDisconnectedBoard(t *testing.T) {
+	app := NewApp()
+	if _, err := app.CheckBoardUpdate("missing"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unexpected update check error: %v", err)
+	}
+	if _, err := app.InstallBoardUpdate("missing"); err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Fatalf("unexpected update install error: %v", err)
+	}
+	if len(app.updating) != 0 {
+		t.Fatal("failed update left the board update lock held")
+	}
+}
+
+func TestBoardUpdateSerializesPerBoard(t *testing.T) {
+	app := NewApp()
+	if err := app.beginBoardUpdate("board"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.beginBoardUpdate("board"); err == nil {
+		t.Fatal("concurrent update was accepted")
+	}
+	if err := app.beginBoardUpdate("other"); err != nil {
+		t.Fatalf("independent board update was blocked: %v", err)
+	}
+	app.finishBoardUpdate("board")
+	app.finishBoardUpdate("other")
+}
+
 func TestConnectionCompatibilityMatrix(t *testing.T) {
 	allCapabilities := []string{
 		"extensions.catalog.v1", "tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "models.conformance.v1", "system.snapshot",

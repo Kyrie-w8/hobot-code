@@ -28,7 +28,7 @@ import {compatibilityPresentation, compatibilityTargetLabel} from './compatibili
 import {workspaceChangeLabel, workspaceChangeSummary, workspaceDeliverySummary, workspaceDiffLines} from './workspace-changes.js';
 import {extensionCatalogHealth, extensionCatalogSummary, extensionKindLabel, extensionTargetState, filterExtensions} from './extension-center.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {Approval, Board, Connection, DeploymentInspection, DeploymentStatus, ExtensionCatalog, ImageContent, ModelConformance, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, ExtensionCatalog, ImageContent, ModelConformance, ModelHealth, ModelOption, StartDeploymentRequest, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -1020,7 +1020,7 @@ function App() {
       {notice && <div className="success-toast"><Check size={17} /><span>{notice}</span><button title="Dismiss" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {showBoard && <BoardDialog boards={boards} busy={busy} onClose={() => boards.length > 0 && setShowBoard(false)} onConnect={connect} onSave={async (board) => {const saved = await api.saveBoard(board); setBoards(await api.listBoards()); await connect(saved);}} onRemove={async (board) => {await api.removeBoard(board.id); if (activeBoardId.current === board.id) {activeBoardId.current = ''; setConnection(null); setConnectionState('offline'); setTasks([]); setSelectedTask(null);} setBoards(await api.listBoards());}} />}
 	  {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.projectCwd ?? selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
-      {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onClose={() => setShowAbout(false)} />}
+      {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onInstall={async () => {if (!connection) throw new Error('Connect a board before updating.'); const result = await api.installBoardUpdate(connection.board.id); setConnection(result.connection); setConnectionState('online'); setSnapshot(result.connection.snapshot ?? null); setWatchRevision((revision) => revision + 1); void refreshWorkspace(); return result;}} onClose={() => setShowAbout(false)} />}
       {showExtensions && connection && <ExtensionCenterDialog boardId={connection.board.id} boardName={connection.board.name} boardTarget={snapshot?.boardId || connection.compatibility?.boardId || ''} onClose={() => setShowExtensions(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
 	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
@@ -1245,12 +1245,57 @@ function WorkspaceChangesDialog({boardId, task, canDeliver, onClose}: {boardId: 
 	  return <div className="modal-backdrop"><div className="modal changes-modal"><div className="modal-header"><div><span className="modal-eyebrow">{task.workspaceMode === 'worktree' ? 'Isolated workspace' : 'Current workspace'}</span><h2>Review changes</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh changes" onClick={load} disabled={loading || applying}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose} disabled={applying}><X size={18} /></button></div></div>{loading && !changes ? <div className="deployment-loading"><LoaderCircle size={17} className="spin" />Inspecting the board workspace</div> : changes && summary ? <div className="changes-content"><div className="changes-summary"><FileDiff size={17} /><span><strong>{summary.title}</strong><small>{summary.detail}</small></span></div>{deliverySummary && <div className={`delivery-summary delivery-${deliverySummary.tone}`}>{deliverySummary.tone === 'blocked' ? <AlertTriangle size={16} /> : <GitBranch size={16} />}<span><strong>{deliverySummary.title}</strong><small>{deliverySummary.detail}</small></span></div>}{confirmApply && delivery?.ready && <div className="delivery-confirm" role="alert"><ShieldCheck size={16} /><span><strong>Apply to {task.projectCwd || 'the original project'}?</strong><small>Idle Agents using the isolated workspace or original project will stop. The exact reviewed snapshot will be staged for your final Git review.</small></span></div>}{changes.repository && <div className="changes-meta"><span>{changes.scope === '.' ? 'Repository root' : `Scope · ${changes.scope}`}</span>{changes.head && <code>{changes.head}</code>}</div>}{changes.files.length > 0 && <div className="changes-files">{changes.files.map((file) => <div key={`${file.status}:${file.path}`} className={file.conflict ? 'conflict' : ''}><span className="change-kind">{file.status}</span><span className="change-path"><strong>{file.path}</strong>{file.originalPath && <small>from {file.originalPath}</small>}</span><small>{workspaceChangeLabel(file)}</small></div>)}</div>}{changes.filesTruncated && <div className="changes-warning"><AlertTriangle size={13} />More changed files exist on the board.</div>}{diff.lines.length > 0 && <div className="diff-view" role="region" aria-label="Workspace diff">{diff.lines.map((line) => <span key={line.key} className={`diff-${line.kind}`}>{line.text || ' '}</span>)}</div>}{changes.repository && changes.files.length > 0 && !changes.patch && <div className="changes-note">Untracked and binary files are listed without transferring their contents.</div>}{(changes.patchTruncated || diff.truncated) && <div className="changes-warning"><AlertTriangle size={13} />{changes.patchTruncated ? 'The board limited this patch to 512 KiB.' : 'Studio is showing the first 4000 diff lines.'}</div>}</div> : null}{failure && <div className="changes-action-error"><AlertTriangle size={14} />{failure}</div>}<div className="changes-footer"><span>{task.workspaceMode === 'worktree' ? task.projectCwd || task.cwd : task.cwd}</span><div>{confirmApply && <button className="secondary-button" onClick={() => setConfirmApply(false)} disabled={applying}>Cancel</button>}{delivery?.ready && <button className="primary-button" onClick={() => confirmApply ? void apply() : setConfirmApply(true)} disabled={loading || applying}>{applying ? <LoaderCircle size={15} className="spin" /> : <GitBranch size={15} />}{confirmApply ? 'Apply staged changes' : 'Apply to project'}</button>}<button className={delivery?.ready ? 'secondary-button' : 'primary-button'} onClick={onClose} disabled={applying}>Done</button></div></div></div></div>;
 }
 
-function AboutDialog({appVersion, connection, onClose}: {appVersion: string; connection: Connection | null; onClose: () => void}) {
+function AboutDialog({appVersion, connection, onInstall, onClose}: {appVersion: string; connection: Connection | null; onInstall: () => Promise<BoardUpdateResult>; onClose: () => void}) {
   const build = connection?.daemon?.build;
   const buildLabel = build?.status === 'verified'
     ? `${build.commit?.slice(0, 12) ?? build.binarySha256?.slice(0, 12) ?? 'verified'}${build.dirty ? ' (modified)' : ''}`
     : build?.status ?? 'Not reported';
-  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className="update-guidance"><Info size={15} /><span><strong>Updates are installed on the board.</strong><small>Hobot Code prevents downgrades and blocks updates while agents or Studio bridges are active.</small></span></div><div className="command-list"><div><code>hobot update --check</code><CopyButton value="hobot update --check" /></div><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose}>Done</button></div></div></div></div>;
+  const [check, setCheck] = useState<BoardUpdateCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [failure, setFailure] = useState('');
+  const [success, setSuccess] = useState('');
+  const request = useRef(0);
+  const boardID = connection?.board.id ?? '';
+  const activeTasks = connection?.daemon?.activeTasks ?? 0;
+  const checkUpdate = useCallback(async () => {
+    if (!boardID) return;
+    const active = ++request.current;
+    setChecking(true);
+    setFailure('');
+    try {
+      const result = await api.checkBoardUpdate(boardID);
+      if (request.current === active) setCheck(result);
+    } catch (reason) {
+      if (request.current === active) setFailure(friendlyError(String(reason)));
+    } finally {
+      if (request.current === active) setChecking(false);
+    }
+  }, [boardID]);
+  useEffect(() => {
+    request.current += 1;
+    setCheck(null);
+    setSuccess('');
+    if (boardID) void checkUpdate();
+    return () => {request.current += 1;};
+  }, [boardID, connection?.daemon?.version, checkUpdate]);
+  const install = async () => {
+    if (installing || check?.status !== 'available' || activeTasks > 0) return;
+    setInstalling(true);
+    setFailure('');
+    setSuccess('');
+    try {
+      const result = await onInstall();
+      setCheck({status: 'current', installedVersion: result.installedVersion, availableVersion: result.installedVersion, message: 'This board is up to date.'});
+      setSuccess(result.message);
+    } catch (reason) {
+      setFailure(friendlyError(String(reason)));
+    } finally {
+      setInstalling(false);
+    }
+  };
+  const updateTone = failure ? 'failed' : check?.status === 'available' ? 'available' : check ? 'current' : 'checking';
+  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose} disabled={installing}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className={`board-update-state ${updateTone}`}>{checking || installing ? <LoaderCircle size={17} className="spin" /> : failure ? <AlertTriangle size={17} /> : check?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{installing ? `Installing v${check?.availableVersion ?? ''}` : checking ? 'Checking stable releases' : failure ? 'Update unavailable' : check?.status === 'available' ? `Version ${check.availableVersion} is ready` : check?.status === 'source-older' ? 'Installed version is newer' : check ? 'Up to date' : 'Connect a board to check'}</strong><small>{installing ? 'Downloading, verifying, installing, and reconnecting.' : failure || success || check?.message || 'Update status is available after connecting a board.'}</small></span></div>{activeTasks > 0 && <div className="update-blocked"><Info size={14} /><span>{activeTasks} active board task{activeTasks === 1 ? '' : 's'} must finish or stop before updating.</span></div>}<div className="update-actions">{check?.status === 'available' && <button className="primary-button" disabled={installing || checking || activeTasks > 0} onClick={() => void install()}>{installing ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Update to v{check.availableVersion}</button>}<button className="secondary-button" disabled={installing || checking || !connection} onClick={() => void checkUpdate()}><RefreshCw size={14} className={checking ? 'spin' : ''} />Check again</button></div><div className="update-guidance"><ShieldCheck size={15} /><span><strong>Transactional board update</strong><small>Configuration and conversations stay in place. Downgrades are refused, releases are verified, and failed installs restore the previous runtime.</small></span></div><div className="command-list"><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose} disabled={installing}>Done</button></div></div></div></div>;
 }
 
 function ExtensionCenterDialog({boardId, boardName, boardTarget, onClose}: {boardId: string; boardName: string; boardTarget: string; onClose: () => void}) {

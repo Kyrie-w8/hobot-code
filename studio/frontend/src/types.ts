@@ -58,6 +58,9 @@ export type Connection = {
   error?: string;
 };
 
+export type BoardUpdateCheck = {status: 'current' | 'available' | 'source-older'; installedVersion?: string; availableVersion: string; message: string};
+export type BoardUpdateResult = {changed: boolean; previousVersion: string; installedVersion: string; message: string; connection: Connection};
+
 export type ThermalZone = {name: string; celsius: number};
 export type BPUCoreInfo = {index: number; name: string; utilizationPercent: number; currentFrequencyHz?: number; minimumFrequencyHz?: number; maximumFrequencyHz?: number};
 export type BPUTelemetryInfo = {status: 'available' | 'device-not-detected' | 'metrics-not-exposed' | 'read-failed'; source?: string};

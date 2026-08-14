@@ -22,14 +22,17 @@ import (
 )
 
 const (
-	requestTimeout          = 20 * time.Second
-	workspaceTaskTimeout    = 3 * time.Minute
-	modelHealthTimeout      = 18 * time.Second
-	modelVerifyTimeout      = 55 * time.Second
-	deploymentStatusTimeout = 10 * time.Minute
-	deleteTimeout           = 45 * time.Second
-	maximumBoards           = 64
-	maximumBoardFileSize    = 1024 * 1024
+	requestTimeout           = 20 * time.Second
+	workspaceTaskTimeout     = 3 * time.Minute
+	modelHealthTimeout       = 18 * time.Second
+	modelVerifyTimeout       = 55 * time.Second
+	deploymentStatusTimeout  = 10 * time.Minute
+	deleteTimeout            = 45 * time.Second
+	boardUpdateCheckTimeout  = 15 * time.Second
+	boardUpdateTimeout       = 20 * time.Minute
+	boardUpdateReconnectWait = 30 * time.Second
+	maximumBoards            = 64
+	maximumBoardFileSize     = 1024 * 1024
 )
 
 var (
@@ -70,6 +73,14 @@ type TaskWatchStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
+type BoardUpdateResult struct {
+	Changed          bool            `json:"changed"`
+	PreviousVersion  string          `json:"previousVersion"`
+	InstalledVersion string          `json:"installedVersion"`
+	Message          string          `json:"message"`
+	Connection       BoardConnection `json:"connection"`
+}
+
 type taskWatcher struct {
 	id     uint64
 	cancel context.CancelFunc
@@ -83,13 +94,14 @@ type App struct {
 	boards      map[string]Board
 	clients     map[string]*hobot.Client
 	watchers    map[string]taskWatcher
+	updating    map[string]struct{}
 	nextWatcher uint64
 }
 
 func NewApp() *App {
 	return &App{
 		boards: make(map[string]Board), clients: make(map[string]*hobot.Client),
-		watchers: make(map[string]taskWatcher),
+		watchers: make(map[string]taskWatcher), updating: make(map[string]struct{}),
 	}
 }
 
@@ -136,6 +148,143 @@ func (app *App) ListBoards() []Board {
 
 func (app *App) GetAppVersion() string {
 	return currentStudioVersion()
+}
+
+func (app *App) CheckBoardUpdate(boardID string) (hobot.BoardUpdateCheck, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.BoardUpdateCheck{}, err
+	}
+	base := app.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, boardUpdateCheckTimeout)
+	defer cancel()
+	return client.CheckBoardUpdate(ctx)
+}
+
+// InstallBoardUpdate closes Studio's bridge before invoking the board's
+// transactional updater over a separate fixed SSH command. Task/process checks,
+// archive verification and rollback remain enforced on the board.
+func (app *App) InstallBoardUpdate(boardID string) (BoardUpdateResult, error) {
+	if err := app.beginBoardUpdate(boardID); err != nil {
+		return BoardUpdateResult{}, err
+	}
+	defer app.finishBoardUpdate(boardID)
+
+	client, err := app.client(boardID)
+	if err != nil {
+		return BoardUpdateResult{}, err
+	}
+	base := app.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	preflight, cancel := context.WithTimeout(base, boardUpdateCheckTimeout)
+	info, err := client.Ping(preflight)
+	if err == nil && info.ActiveTasks > 0 {
+		err = fmt.Errorf("%d board task(s) are active; finish or stop them before updating", info.ActiveTasks)
+	}
+	var check hobot.BoardUpdateCheck
+	if err == nil {
+		check, err = client.CheckBoardUpdate(preflight)
+	}
+	cancel()
+	if err != nil {
+		return BoardUpdateResult{}, err
+	}
+	if check.InstalledVersion != "" && info.Version != check.InstalledVersion {
+		return BoardUpdateResult{}, fmt.Errorf("board version changed during the update check; check again")
+	}
+	if check.Status != "available" {
+		connection, refreshErr := app.RefreshBoard(boardID)
+		if refreshErr != nil {
+			return BoardUpdateResult{}, refreshErr
+		}
+		return BoardUpdateResult{PreviousVersion: info.Version, InstalledVersion: info.Version, Message: check.Message, Connection: connection}, nil
+	}
+
+	board := app.board(boardID)
+	app.disconnect(boardID)
+	select {
+	case <-base.Done():
+		return BoardUpdateResult{}, base.Err()
+	case <-time.After(500 * time.Millisecond):
+	}
+	updater, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		_, _ = app.reconnectBoardAfterUpdate(boardID, 5*time.Second)
+		return BoardUpdateResult{}, err
+	}
+	updateContext, updateCancel := context.WithTimeout(base, boardUpdateTimeout)
+	err = updater.InstallBoardUpdate(updateContext, check.AvailableVersion)
+	updateCancel()
+	_ = updater.Close()
+	if err != nil {
+		_, _ = app.reconnectBoardAfterUpdate(boardID, 5*time.Second)
+		return BoardUpdateResult{}, err
+	}
+
+	connection, err := app.reconnectBoardAfterUpdate(boardID, boardUpdateReconnectWait)
+	if err != nil {
+		return BoardUpdateResult{}, fmt.Errorf("update installed but Studio could not reconnect: %w", err)
+	}
+	if connection.Daemon == nil || connection.Daemon.Version != check.AvailableVersion {
+		actual := "unknown"
+		if connection.Daemon != nil {
+			actual = connection.Daemon.Version
+		}
+		return BoardUpdateResult{}, fmt.Errorf("updated board reported version %s, expected %s", actual, check.AvailableVersion)
+	}
+	return BoardUpdateResult{
+		Changed: true, PreviousVersion: info.Version, InstalledVersion: connection.Daemon.Version,
+		Message: "The board update was verified and Studio reconnected.", Connection: connection,
+	}, nil
+}
+
+func (app *App) beginBoardUpdate(boardID string) error {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if _, exists := app.updating[boardID]; exists {
+		return fmt.Errorf("a board update is already running")
+	}
+	app.updating[boardID] = struct{}{}
+	return nil
+}
+
+func (app *App) finishBoardUpdate(boardID string) {
+	app.mu.Lock()
+	delete(app.updating, boardID)
+	app.mu.Unlock()
+}
+
+func (app *App) reconnectBoardAfterUpdate(boardID string, maximumWait time.Duration) (BoardConnection, error) {
+	deadline := time.Now().Add(maximumWait)
+	var lastErr error
+	for {
+		connection, err := app.ConnectBoard(boardID)
+		if err == nil {
+			return connection, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return BoardConnection{}, lastErr
+		}
+		base := app.ctx
+		if base == nil {
+			base = context.Background()
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-base.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return BoardConnection{}, base.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // ProbeBoard verifies transport, protocol compatibility, and board identity

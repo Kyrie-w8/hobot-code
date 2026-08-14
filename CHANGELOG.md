@@ -2,6 +2,7 @@
 
 ## 0.26.0
 
+- Add one-click stable board updates in Hobot Studio with active-task preflight, a fixed non-downgrading SSH command boundary, automatic bridge shutdown, reconnect, and post-install version verification.
 - Add the versioned `hobot.extensions/v1` catalog across agentd, CLI, Go SDK, and Studio so built-in extensions and Skills expose their origin, capabilities, declared permissions, and supported RDK targets without loading code or bypassing board-side policy.
 - Add a searchable Studio capability center and live, secret-free discovery of private user Provider, Hook, and LSP configuration. Missing or unsafe sources fail closed, refresh without restarting agentd, and never expose endpoint credentials or command arguments to clients.
 - Add explicit model protocol verification across agentd, CLI, SDK, and Studio. `hobot model verify` distinguishes a reachable endpoint from an Agent-ready model by testing terminal streaming, structured tools, matching tool results, and declared image input without retaining raw provider content.
