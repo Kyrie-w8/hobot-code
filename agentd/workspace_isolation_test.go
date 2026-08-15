@@ -332,16 +332,28 @@ func TestWorkspaceDeliveryStopsIdleAgentsOnlyWhenApplying(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace.Cwd, "main.txt"), []byte("after\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	current := &task{manager: manager, metadata: taskMetadata{
+	newIdleTask := func(metadata taskMetadata) *task {
+		t.Helper()
+		dir := filepath.Join(cfg.TasksRoot, metadata.ID)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		events := filepath.Join(dir, "events.jsonl")
+		if err := os.WriteFile(events, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return &task{manager: manager, dir: dir, events: events, metadata: metadata, subscribers: make(map[uint64]chan taskEvent)}
+	}
+	current := newIdleTask(taskMetadata{
 		ID: taskID, WorkspaceMode: workspaceModeWorktree, WorkspaceID: workspaceID,
 		WorktreePath: workspace.WorktreePath, Status: statusIdle,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
-	}}
+	})
 	sharedTaskID := "77889900aabbccddeeff0011"
-	shared := &task{manager: manager, metadata: taskMetadata{
+	shared := newIdleTask(taskMetadata{
 		ID: sharedTaskID, Cwd: repository, ProjectCwd: repository, WorkspaceMode: workspaceModeShared,
 		Status: statusIdle, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
-	}}
+	})
 	manager.mu.Lock()
 	manager.tasks[taskID] = current
 	manager.tasks[sharedTaskID] = shared
