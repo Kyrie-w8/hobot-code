@@ -26,7 +26,7 @@ test('entry state describes packaging and target support without claiming execut
   assert.deepEqual(extensionTargetState(entries[2], 's600'), {state: 'listed', label: 'Available'});
   assert.deepEqual(extensionTargetState({...entries[2], status: 'configured'}, 's600'), {state: 'included', label: 'Configured'});
   assert.deepEqual(extensionTargetState({...entries[2], status: 'missing'}, 's600'), {state: 'unavailable', label: 'Optional · not installed'});
-  assert.deepEqual(extensionTargetState({...entries[2], status: 'disabled'}, 's600'), {state: 'listed', label: 'Disabled'});
+  assert.deepEqual(extensionTargetState({...entries[2], status: 'disabled'}, 's600'), {state: 'unavailable', label: 'Optional · off'});
   assert.deepEqual(extensionTargetState({...entries[2], status: 'discovered'}, 's600'), {state: 'included', label: 'Discovered'});
   assert.deepEqual(extensionTargetState({...entries[2], status: 'declared'}, 's600'), {state: 'listed', label: 'Declared'});
   assert.equal(extensionKindLabel('skill'), 'Skill');
