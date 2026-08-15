@@ -2,12 +2,14 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +21,10 @@ import (
 const (
 	maximumInventoryConfigBytes = 512 * 1024
 	maximumInventoryEntries     = 64
+	openExplorerRuntimeEnv      = "HOBOT_CODE_OPENEXPLORER_LLM_ROOT"
 )
+
+var openExplorerVersionPattern = regexp.MustCompile(`(?m)^#define[ \t]+OELLM_VERSION_(MAJOR|MINOR|PATCH)[ \t]+([0-9]{1,3})[ \t]*$`)
 
 type extensionInventoryContext struct {
 	Cwd            string
@@ -68,6 +73,14 @@ func discoverConfiguredExtensions(catalog extensionCatalog, contexts ...extensio
 			entries = append(entries, entry)
 		}
 		diagnostics = append(diagnostics, extensionDiagnostic{Source: source.name, Status: sourceStatus, Message: inventoryDiagnosticMessage(source.name, sourceStatus)})
+	}
+	if entry, diagnostic, configured := configuredOpenExplorerRuntime(); configured {
+		diagnostics = append(diagnostics, diagnostic)
+		if entry != nil && len(entries) < maximumCatalogEntries {
+			entry.ID = uniqueInventoryID(entry.ID, seen)
+			seen[entry.ID] = struct{}{}
+			entries = append(entries, *entry)
+		}
 	}
 	var inventoryContext *extensionInventoryContext
 	if len(contexts) > 0 {
@@ -342,6 +355,125 @@ func inventoryExecutableAvailable(command string) bool {
 	}
 	_, err := exec.LookPath(command)
 	return err == nil
+}
+
+func configuredOpenExplorerRuntime() (*extensionEntry, extensionDiagnostic, bool) {
+	root := strings.TrimSpace(os.Getenv(openExplorerRuntimeEnv))
+	if root == "" {
+		return nil, extensionDiagnostic{}, false
+	}
+	diagnostic := extensionDiagnostic{Source: "openexplorer-llm"}
+	if !filepath.IsAbs(root) {
+		diagnostic.Status = "unsafe"
+		diagnostic.Message = "OpenExplorer LLM root must be an absolute, owner-controlled directory"
+		return nil, diagnostic, true
+	}
+	runtimeRoot := filepath.Join(filepath.Clean(root), "oellm_runtime")
+	for _, directory := range []string{root, runtimeRoot, filepath.Join(runtimeRoot, "lib"), filepath.Join(runtimeRoot, "include"), filepath.Join(runtimeRoot, "examples")} {
+		handle, status := openOwnedInventoryDirectory(directory)
+		if status != "ok" {
+			diagnostic.Status = status
+			diagnostic.Message = openExplorerDiagnosticMessage(status)
+			return nil, diagnostic, true
+		}
+		_ = handle.Close()
+	}
+
+	version, status := openExplorerRuntimeVersion(filepath.Join(runtimeRoot, "include", "oellm_runtime_basic", "oellm_runtime_version.h"))
+	if status != "ok" {
+		diagnostic.Status = status
+		diagnostic.Message = openExplorerDiagnosticMessage(status)
+		return nil, diagnostic, true
+	}
+	requiredELF := []string{
+		filepath.Join(runtimeRoot, "lib", "liboellm_runtime.so"),
+		filepath.Join(runtimeRoot, "examples", "simple_demo", "simple_demo_request"),
+		filepath.Join(runtimeRoot, "examples", "serving_demo", "oellm_serving"),
+		filepath.Join(runtimeRoot, "examples", "chat_template_demo", "chat_template_demo"),
+	}
+	for _, path := range requiredELF {
+		if status := aarch64ELFStatus(path); status != "ok" {
+			diagnostic.Status = status
+			diagnostic.Message = openExplorerDiagnosticMessage(status)
+			return nil, diagnostic, true
+		}
+	}
+
+	diagnostic.Status = "ok"
+	diagnostic.Message = "OpenExplorer LLM runtime " + version + " verified for S600"
+	entry := extensionEntry{
+		ID: "external.openexplorer-llm.runtime", Name: "OpenExplorer LLM runtime", Version: version, Kind: "package", ResourceType: "package",
+		Description: "S600 board runtime for LLM, VLM, serving, performance, and VLA samples. Host-side CUDA quantization tools are intentionally excluded.",
+		Origin:      "user", Scope: "user", Runtime: "pi-package", Entrypoint: "openexplorer-llm/oellm_runtime", Trust: "third-party", DefaultEnabled: true,
+		Provides: []string{"runtime.openexplorer-llm", "sample.openexplorer-llm-serving", "sample.openexplorer-llm-vla"}, Requires: []string{"hobot.rdk-core"},
+		Permissions: []string{"current-user", "workspace", "subprocess", "rdk-devices"}, Targets: []string{"s600"}, Status: "available",
+		StatusDetail: "AArch64 runtime library and required sample executables passed bounded board inventory checks",
+	}
+	return &entry, diagnostic, true
+}
+
+func openExplorerRuntimeVersion(path string) (string, string) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", "missing"
+	}
+	if err != nil {
+		return "", "unreadable"
+	}
+	if !ownedRegularInventoryInfo(info) || info.Size() <= 0 || info.Size() > 64*1024 {
+		return "", "unsafe"
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", "unreadable"
+	}
+	parts := map[string]string{}
+	for _, match := range openExplorerVersionPattern.FindAllStringSubmatch(string(raw), -1) {
+		parts[match[1]] = match[2]
+	}
+	if parts["MAJOR"] == "" || parts["MINOR"] == "" || parts["PATCH"] == "" {
+		return "", "invalid"
+	}
+	return parts["MAJOR"] + "." + parts["MINOR"] + "." + parts["PATCH"], "ok"
+}
+
+func aarch64ELFStatus(path string) string {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "missing"
+	}
+	if err != nil {
+		return "unreadable"
+	}
+	if !ownedRegularInventoryInfo(info) || info.Size() < 20 {
+		return "unsafe"
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "unreadable"
+	}
+	defer file.Close()
+	header := make([]byte, 20)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return "unreadable"
+	}
+	if string(header[:4]) != "\x7fELF" || header[4] != 2 || header[5] != 1 || binary.LittleEndian.Uint16(header[18:20]) != 183 {
+		return "invalid"
+	}
+	return "ok"
+}
+
+func openExplorerDiagnosticMessage(status string) string {
+	switch status {
+	case "missing":
+		return "Configured OpenExplorer LLM runtime is incomplete"
+	case "unsafe":
+		return "OpenExplorer LLM runtime failed ownership, type, or write-permission checks"
+	case "unreadable":
+		return "OpenExplorer LLM runtime could not be inspected"
+	default:
+		return "OpenExplorer LLM runtime is not a supported AArch64 package"
+	}
 }
 
 func safeInventoryLabel(value string, maximum int) bool {

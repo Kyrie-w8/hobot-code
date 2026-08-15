@@ -211,6 +211,62 @@ func TestConformanceExchangeFallsBackAfterIncompleteStream(t *testing.T) {
 	}
 }
 
+func TestVisionConformanceUsesBoundedFallbackBudget(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(request.Body, 32*1024))
+		var payload map[string]any
+		if json.Unmarshal(body, &payload) != nil {
+			t.Fatalf("invalid conformance payload: %s", body)
+		}
+		call := calls.Add(1)
+		if call%2 == 1 {
+			if payload["stream"] != true {
+				t.Fatalf("attempt %d did not request streaming: %s", call, body)
+			}
+			writeAnthropicConformanceStream(response, map[string]any{
+				"type": "message_start", "message": map[string]any{"id": fmt.Sprintf("msg-incomplete-%d", call)},
+			})
+			return
+		}
+		if payload["stream"] != false {
+			t.Fatalf("attempt %d did not request buffered fallback: %s", call, body)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		switch call {
+		case 2:
+			_, _ = response.Write([]byte(`{"content":[{"type":"tool_use","id":"tool-1","name":"hobot_conformance","input":{"value":"ping"}}],"stop_reason":"tool_use"}`))
+		case 4:
+			if !strings.Contains(string(body), `"tool_use_id":"tool-1"`) {
+				t.Fatalf("matching tool result is missing: %s", body)
+			}
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"HOBOT_OK"}],"stop_reason":"end_turn"}`))
+		case 6:
+			if !strings.Contains(string(body), `"type":"image"`) {
+				t.Fatalf("image input is missing: %s", body)
+			}
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"VISION_OK"}],"stop_reason":"end_turn"}`))
+		default:
+			t.Fatalf("unexpected conformance call %d", call)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
+
+	result := normalizeModelConformanceResult(probeDroboticsModelConformance(context.Background(), modelOption{
+		Provider: "drobotics", ID: "kimi-k3", Capabilities: modelCapabilities{ImageInput: true},
+	}))
+	if result.Status != "compatible" || result.Attempts != modelConformanceMaximumAttempts || calls.Load() != modelConformanceMaximumAttempts {
+		t.Fatalf("vision fallback result = %+v calls=%d", result, calls.Load())
+	}
+	for _, check := range result.Checks[1:] {
+		if check.Status != "passed" {
+			t.Fatalf("vision fallback check = %+v", check)
+		}
+	}
+}
+
 func TestConformanceExchangeNeverRetriesAfterPartialToolOutput(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

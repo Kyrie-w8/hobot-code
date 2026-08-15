@@ -335,7 +335,8 @@ func (server *daemonServer) supportChecks(snapshot systemSnapshot, tasks []suppo
 		if snapshot.RDKUtilities[name] {
 			status = "pass"
 		}
-		checks = append(checks, supportCheck{Name: "utility-" + name, Status: status, Summary: map[bool]string{true: "available", false: "not found"}[snapshot.RDKUtilities[name]]})
+		checkName := "utility-" + strings.ReplaceAll(name, "_", "-")
+		checks = append(checks, supportCheck{Name: checkName, Status: status, Summary: map[bool]string{true: "available", false: "not found"}[snapshot.RDKUtilities[name]]})
 	}
 	return checks
 }

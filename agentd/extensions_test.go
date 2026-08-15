@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -160,6 +161,94 @@ func TestConfiguredExtensionInventoryIsPrivateBoundedAndNonSecret(t *testing.T) 
 	}
 	if len(wantStatus) != 0 {
 		t.Fatalf("configured entries missing: %+v", wantStatus)
+	}
+}
+
+func TestConfiguredOpenExplorerRuntimeIsVerifiedBeforeAdvertising(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "OpenExplorer_LLM")
+	runtimeRoot := filepath.Join(root, "oellm_runtime")
+	for _, path := range []string{
+		filepath.Join(runtimeRoot, "lib"),
+		filepath.Join(runtimeRoot, "include", "oellm_runtime_basic"),
+		filepath.Join(runtimeRoot, "examples", "simple_demo"),
+		filepath.Join(runtimeRoot, "examples", "serving_demo"),
+		filepath.Join(runtimeRoot, "examples", "chat_template_demo"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versionHeader := "#define OELLM_VERSION_MAJOR 2\n#define OELLM_VERSION_MINOR 0\n#define OELLM_VERSION_PATCH 4\n"
+	if err := os.WriteFile(filepath.Join(runtimeRoot, "include", "oellm_runtime_basic", "oellm_runtime_version.h"), []byte(versionHeader), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(runtimeRoot, "lib", "liboellm_runtime.so"),
+		filepath.Join(runtimeRoot, "examples", "simple_demo", "simple_demo_request"),
+		filepath.Join(runtimeRoot, "examples", "serving_demo", "oellm_serving"),
+		filepath.Join(runtimeRoot, "examples", "chat_template_demo", "chat_template_demo"),
+	} {
+		writeTestELF(t, path, 183)
+	}
+	t.Setenv(openExplorerRuntimeEnv, root)
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn)
+	if diagnosticStatus(catalog, "openexplorer-llm") != "ok" {
+		t.Fatalf("OpenExplorer runtime diagnostic did not pass: %+v", catalog.Diagnostics)
+	}
+	var found *extensionEntry
+	for index := range catalog.Entries {
+		if catalog.Entries[index].ID == "external.openexplorer-llm.runtime" {
+			found = &catalog.Entries[index]
+			break
+		}
+	}
+	if found == nil || found.Version != "2.0.4" || found.Status != "available" || len(found.Targets) != 1 || found.Targets[0] != "s600" {
+		t.Fatalf("verified OpenExplorer runtime was not advertised correctly: %+v", found)
+	}
+	encoded, _ := json.Marshal(catalog)
+	if strings.Contains(string(encoded), root) {
+		t.Fatalf("external runtime inventory leaked its private install path: %s", encoded)
+	}
+}
+
+func TestConfiguredOpenExplorerRuntimeFailsClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "OpenExplorer_LLM")
+	runtimeRoot := filepath.Join(root, "oellm_runtime")
+	for _, path := range []string{
+		filepath.Join(runtimeRoot, "lib"),
+		filepath.Join(runtimeRoot, "include", "oellm_runtime_basic"),
+		filepath.Join(runtimeRoot, "examples", "simple_demo"),
+		filepath.Join(runtimeRoot, "examples", "serving_demo"),
+		filepath.Join(runtimeRoot, "examples", "chat_template_demo"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(runtimeRoot, "include", "oellm_runtime_basic", "oellm_runtime_version.h"), []byte("#define OELLM_VERSION_MAJOR 2\n#define OELLM_VERSION_MINOR 0\n#define OELLM_VERSION_PATCH 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(runtimeRoot, "lib", "liboellm_runtime.so"),
+		filepath.Join(runtimeRoot, "examples", "simple_demo", "simple_demo_request"),
+		filepath.Join(runtimeRoot, "examples", "serving_demo", "oellm_serving"),
+		filepath.Join(runtimeRoot, "examples", "chat_template_demo", "chat_template_demo"),
+	} {
+		writeTestELF(t, path, 183)
+	}
+	writeTestELF(t, filepath.Join(runtimeRoot, "lib", "liboellm_runtime.so"), 62)
+	t.Setenv(openExplorerRuntimeEnv, root)
+	builtIn, err := loadExtensionCatalog(sourceExtensionCatalog(t), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := discoverConfiguredExtensions(builtIn)
+	if diagnosticStatus(catalog, "openexplorer-llm") != "invalid" || hasExtensionEntry(catalog, "external.openexplorer-llm.runtime") {
+		t.Fatalf("non-AArch64 OpenExplorer runtime was advertised: %+v", catalog)
 	}
 }
 
@@ -444,6 +533,18 @@ func diagnosticStatus(catalog extensionCatalog, source string) string {
 func writePrivateJSON(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestELF(t *testing.T, path string, machine uint16) {
+	t.Helper()
+	header := make([]byte, 20)
+	copy(header, []byte("\x7fELF"))
+	header[4] = 2
+	header[5] = 1
+	binary.LittleEndian.PutUint16(header[18:20], machine)
+	if err := os.WriteFile(path, header, 0o700); err != nil {
 		t.Fatal(err)
 	}
 }

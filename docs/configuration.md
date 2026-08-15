@@ -462,3 +462,9 @@ Hook 命令是未经 Shell 解析的 argv 数组。stdin 为 `{schemaVersion,eve
 `~/.config/hobot-code/agent/lsp.json` 使用 `extensions` 匹配文件，`command` 是未经 Shell 解析的 argv 数组。`maxProcesses`、`maxMemoryMiB`、`idleTimeoutMs` 和 `requestTimeoutMs` 分别约束进程数、单进程 RSS、空闲回收与单次请求时间。
 
 语言服务器只在实际请求且命令存在时启动。超过进程数时回收最久未使用实例，超过 RSS 时停止对应服务；未安装命令时 `lsp status` 显示 `installed=false`，不会自动下载。基础发行包不捆绑语言服务器。
+
+新安装默认关闭 LSP。需要时安装对应语言服务器后，将 `enabled` 改为 `true`；Studio 会把未安装的可选服务器折叠显示，不再将其呈现为产品故障。
+
+## OpenExplorer LLM 板端运行时
+
+S600 上可在 `~/.config/hobot-code/hobot.env` 设置 `HOBOT_CODE_OPENEXPLORER_LLM_ROOT`，指向同时包含 `oellm_runtime/lib`、`oellm_runtime/include` 和 `oellm_runtime/examples` 的软件包根目录。Hobot Code 只做有界只读检查：目录所有权、写权限、运行时版本、AArch64 ELF 架构和关键 sample 是否齐全。检查通过后才会在 Capabilities 中显示 `OpenExplorer LLM runtime`；主机侧 x86_64/CUDA 量化编译组件不会被声明为板端能力。

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "enabled": true,
+  "enabled": false,
   "maxProcesses": 1,
   "maxMemoryMiB": 256,
   "idleTimeoutMs": 60000,

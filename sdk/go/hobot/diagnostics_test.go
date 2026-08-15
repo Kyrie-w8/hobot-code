@@ -58,3 +58,17 @@ func TestDiagnosticRepairValidationBindsActionAndReport(t *testing.T) {
 		t.Fatal("accepted a client-side action as a board repair result")
 	}
 }
+
+func TestDiagnosticReportAcceptsCanonicalUtilityNames(t *testing.T) {
+	report := validDiagnosticReport()
+	report.Checks = append(report.Checks, SupportCheck{Name: "utility-hrt-model-exec", Status: "pass", Summary: "available"})
+	report.Summary.Pass++
+	if err := validateDiagnosticReport(report); err != nil {
+		t.Fatalf("canonical utility check was rejected: %v", err)
+	}
+
+	report.Checks[len(report.Checks)-1].Name = "utility-hrt_model_exec"
+	if err := validateDiagnosticReport(report); err == nil {
+		t.Fatal("non-canonical utility check was accepted")
+	}
+}

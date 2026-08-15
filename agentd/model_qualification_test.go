@@ -171,3 +171,28 @@ func TestModelQualificationReplacesCrossBuildEvidenceInsteadOfMixingLayers(t *te
 		t.Fatalf("cross-build evidence was mixed: %+v err=%v", result, err)
 	}
 }
+
+func TestModelQualificationAcceptsCompleteVisionFallbackAttemptBudget(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.QualificationPath = filepath.Join(cfg.AgentdRoot, "qualification.json")
+	store := newModelQualificationStore(cfg)
+	now := time.Date(2026, 8, 15, 3, 4, 5, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	result := normalizeModelConformanceResult(modelConformanceResult{Checks: []modelConformanceCheck{
+		{Name: "streaming", Status: "degraded"},
+		{Name: "tool-call", Status: "passed"},
+		{Name: "tool-result", Status: "passed"},
+		{Name: "image-input", Status: "passed"},
+	}})
+	result.Provider, result.Model = "drobotics", "kimi-k3"
+	result.CheckedAt, result.ExpiresAt = now, now.Add(modelConformanceCacheTTL)
+	result.Attempts = modelConformanceMaximumAttempts
+	if err := store.recordConformance(result, qualificationBuild()); err != nil {
+		t.Fatalf("complete vision fallback evidence was rejected: %v", err)
+	}
+
+	result.Attempts++
+	if err := store.recordConformance(result, qualificationBuild()); err == nil || !strings.Contains(err.Error(), "invalid protocol evidence") {
+		t.Fatalf("excessive conformance attempts were accepted: %v", err)
+	}
+}

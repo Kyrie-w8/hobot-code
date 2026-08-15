@@ -12,15 +12,16 @@ import (
 )
 
 const (
-	modelConformanceCacheTTL       = time.Hour
-	modelConformanceRequestTimeout = 45 * time.Second
-	modelConformanceSchema         = 1
-	modelConformanceScope          = "gateway-protocol"
-	modelConformanceRuntimeStatus  = "not-tested"
-	modelConformanceRDKTaskStatus  = "not-tested"
-	conformanceToolName            = "hobot_conformance"
-	conformanceToolCallValue       = "ping"
-	conformanceToolPrompt          = "Call hobot_conformance exactly once with value ping. Do not answer in text."
+	modelConformanceCacheTTL        = time.Hour
+	modelConformanceRequestTimeout  = 45 * time.Second
+	modelConformanceSchema          = 1
+	modelConformanceScope           = "gateway-protocol"
+	modelConformanceRuntimeStatus   = "not-tested"
+	modelConformanceRDKTaskStatus   = "not-tested"
+	modelConformanceMaximumAttempts = 6
+	conformanceToolName             = "hobot_conformance"
+	conformanceToolCallValue        = "ping"
+	conformanceToolPrompt           = "Call hobot_conformance exactly once with value ping. Do not answer in text."
 )
 
 type modelConformanceParams struct {

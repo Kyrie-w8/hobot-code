@@ -11,7 +11,10 @@ import (
 	"unicode"
 )
 
-const maximumQualificationChecks = 32
+const (
+	maximumQualificationChecks              = 32
+	maximumQualificationConformanceAttempts = 6
+)
 
 var qualificationProviderPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var qualificationModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,255}$`)
@@ -134,7 +137,7 @@ func validQualificationHealth(value ModelHealth, provider, model string) bool {
 
 func validQualificationConformance(value ModelConformance, provider, model string) bool {
 	if value.Provider != provider || value.Model != model || value.SchemaVersion != 1 || value.Scope != "gateway-protocol" || value.RuntimeStatus != "not-tested" || value.RDKTaskStatus != "not-tested" ||
-		!oneOf(value.Status, "verified", "compatible", "failed") || value.CheckedAt.IsZero() || !value.CheckedAt.Before(value.ExpiresAt) || value.DurationMS < 0 || value.DurationMS > 45_000 || value.Attempts < 0 || value.Attempts > 4 || value.Cached ||
+		!oneOf(value.Status, "verified", "compatible", "failed") || value.CheckedAt.IsZero() || !value.CheckedAt.Before(value.ExpiresAt) || value.DurationMS < 0 || value.DurationMS > 45_000 || value.Attempts < 0 || value.Attempts > maximumQualificationConformanceAttempts || value.Cached ||
 		len(value.Checks) != 4 || !safeQualificationLabel(value.Message, 2048) {
 		return false
 	}

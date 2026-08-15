@@ -96,7 +96,7 @@ export const DEFAULT_NOTIFICATION_CONFIG = Object.freeze({
 
 export const DEFAULT_LSP_CONFIG = Object.freeze({
   schemaVersion: 1,
-  enabled: true,
+  enabled: false,
   maxProcesses: 1,
   maxMemoryMiB: 256,
   idleTimeoutMs: 60_000,

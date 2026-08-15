@@ -75,3 +75,33 @@ func TestQualificationRDKRequiresExactChecksOfficialSourcesAndValidDigests(t *te
 		t.Fatal("non-canonical RDK resource digest was accepted")
 	}
 }
+
+func TestQualificationConformanceAcceptsCompleteVisionFallbackAttemptBudget(t *testing.T) {
+	now := time.Date(2026, 8, 15, 3, 4, 5, 0, time.UTC)
+	value := ModelConformance{
+		SchemaVersion: 1,
+		Scope:         "gateway-protocol",
+		RuntimeStatus: "not-tested",
+		RDKTaskStatus: "not-tested",
+		Provider:      "drobotics",
+		Model:         "kimi-k3",
+		Status:        "compatible",
+		Message:       "The bounded buffered fallback completed successfully.",
+		CheckedAt:     now,
+		ExpiresAt:     now.Add(time.Hour),
+		Attempts:      maximumQualificationConformanceAttempts,
+		Checks: []ModelConformanceCheck{
+			{Name: "streaming", Status: "degraded", Category: "buffered-fallback", Message: "fallback"},
+			{Name: "tool-call", Status: "passed", Category: "ok", Message: "passed"},
+			{Name: "tool-result", Status: "passed", Category: "ok", Message: "passed"},
+			{Name: "image-input", Status: "passed", Category: "ok", Message: "passed"},
+		},
+	}
+	if !validQualificationConformance(value, value.Provider, value.Model) {
+		t.Fatal("complete vision fallback attempt budget was rejected")
+	}
+	value.Attempts++
+	if validQualificationConformance(value, value.Provider, value.Model) {
+		t.Fatal("excessive conformance attempts were accepted")
+	}
+}

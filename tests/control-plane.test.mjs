@@ -7,6 +7,7 @@ import test from "node:test";
 import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, resolveShellSafety, sanitizedChildEnv } from "../extensions/rdk/runtime-safety.mjs";
 
 import {
+  DEFAULT_LSP_CONFIG,
   DEFAULT_POLICY,
   applyPermissionPreset,
   describeToolCall,
@@ -560,4 +561,9 @@ test("LSP config limits processes and rejects malformed extensions", () => {
   assert.equal(parseLspConfig(base).maxProcesses, 1);
   assert.throws(() => parseLspConfig({ ...base, maxProcesses: 8 }), /maxProcesses/);
   assert.throws(() => parseLspConfig({ ...base, servers: [{ ...base.servers[0], extensions: ["cpp"] }] }), /extensions/);
+});
+
+test("optional language servers are disabled on a fresh installation", () => {
+  assert.equal(DEFAULT_LSP_CONFIG.enabled, false);
+  assert.ok(DEFAULT_LSP_CONFIG.servers.length > 0);
 });

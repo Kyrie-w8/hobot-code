@@ -9,7 +9,7 @@ export function extensionTargetState(entry, boardId) {
   const targets = Array.isArray(entry?.targets) ? entry.targets.map((value) => String(value).toLowerCase()) : [];
   if (target && targets.length > 0 && !targets.includes(target)) return {state: 'unavailable', label: `Not for ${target.toUpperCase()}`};
   if (entry?.required) return {state: 'required', label: 'Product required'};
-  if (entry?.status === 'missing') return {state: 'unavailable', label: 'Command missing'};
+  if (entry?.status === 'missing') return {state: 'unavailable', label: 'Optional · not installed'};
   if (entry?.status === 'disabled') return {state: 'listed', label: 'Disabled'};
   if (entry?.status === 'available') return {state: 'included', label: 'Available'};
   if (entry?.status === 'configured') return {state: 'included', label: 'Configured'};

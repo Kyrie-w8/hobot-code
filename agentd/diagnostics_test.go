@@ -172,3 +172,32 @@ func TestDiagnosticRepairsRejectBroadSystemAndHomePaths(t *testing.T) {
 		t.Fatal("a scoped private runtime path was rejected")
 	}
 }
+
+func TestDiagnosticsUtilityNamesMatchPublicIdentifierContract(t *testing.T) {
+	cfg := testConfig(t)
+	server := newDiagnosticTestServer(t, cfg)
+	checks := server.supportChecks(systemSnapshot{RDKUtilities: map[string]bool{
+		"hrt_model_exec": true,
+		"hrut_somstatus": true,
+		"rdkos_info":     false,
+	}}, nil, time.Now().UTC())
+
+	want := map[string]string{
+		"utility-hrt-model-exec": "pass",
+		"utility-hrut-somstatus": "pass",
+		"utility-rdkos-info":     "info",
+	}
+	for _, check := range checks {
+		status, ok := want[check.Name]
+		if !ok {
+			continue
+		}
+		if check.Status != status {
+			t.Fatalf("utility check %q status = %q, want %q", check.Name, check.Status, status)
+		}
+		delete(want, check.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("canonical utility checks are missing: %v", want)
+	}
+}

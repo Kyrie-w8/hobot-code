@@ -416,7 +416,7 @@ func validateModelQualificationRecord(record modelQualificationRecord) error {
 	if record.Conformance != nil {
 		if record.Conformance.Provider != record.Provider || record.Conformance.Model != record.Model || record.Conformance.SchemaVersion != modelConformanceSchema ||
 			record.Conformance.CheckedAt.IsZero() || !record.Conformance.ExpiresAt.After(record.Conformance.CheckedAt) || record.Conformance.Duration < 0 ||
-			record.Conformance.Duration > durationMilliseconds(modelConformanceRequestTimeout) || record.Conformance.Attempts < 0 || record.Conformance.Attempts > 4 || len(record.Conformance.Checks) != 4 || !safeQualificationText(record.Conformance.Message, 2048) {
+			record.Conformance.Duration > durationMilliseconds(modelConformanceRequestTimeout) || record.Conformance.Attempts < 0 || record.Conformance.Attempts > modelConformanceMaximumAttempts || len(record.Conformance.Checks) != 4 || !safeQualificationText(record.Conformance.Message, 2048) {
 			return errors.New("invalid protocol evidence")
 		}
 		canonical := *record.Conformance
