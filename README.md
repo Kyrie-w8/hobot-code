@@ -90,6 +90,8 @@ cd "${package%.tar.gz}"
 sudo ./install.sh  # root 直接登录时使用 ./install.sh
 ```
 
+安装后可用 `hobot version`（也支持 `hobot --version`、`hobot -v`）只读查看板端版本；这些命令不会启动 Agent 对话。
+
 ### Mac 桌面应用
 
 新任务会由板端检查工作区。干净且已有提交的 Git 项目在 Studio 中默认使用私有的独立 worktree；普通目录或存在未提交、未跟踪内容时保持共享，避免新 worktree 静默缺少本地内容。Side Agent 和编辑历史分支继承主任务的同一工作区。共享模式的 Changes 不会归因给单个 Agent，隔离模式在标题中明确标记 **Isolated**。

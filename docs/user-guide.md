@@ -134,12 +134,13 @@ root 登录时可直接使用 `./install.sh`。不要安装来源不明或校验
 ```bash
 hobot setup
 hobot doctor
-hobot --version
+hobot version
+# `hobot --version` 与 `hobot -v` 等价
 ```
 
 - `hobot setup` 以隐藏输入方式配置内置 D-Robotics 模型凭据。
 - `hobot doctor` 进行不调用模型、不读取项目内容的只读体检。
-- `hobot --version` 显示当前板端版本。
+- `hobot version`、`hobot --version` 和 `hobot -v` 都只显示当前板端版本，不会启动 Agent 对话或读取模型配置。
 
 如果修改了 Provider、模型或密钥，而 daemon 已经运行，需要执行：
 

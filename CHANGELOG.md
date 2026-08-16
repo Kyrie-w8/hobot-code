@@ -1,8 +1,15 @@
 # Changelog
 
-## 0.27.0
+## 0.27.1
 
 - Replace the ambiguous **Allow this exact call for this task** approval with capability-scoped choices. Ordinary and high-risk calls now offer only one-time approval; recognized network access can be allowed for the current task, and a selected OpenExplorer build host can be trusted for that task only after a successful probe. Existing exact-call records remain readable solely for session compatibility.
+- Add independently controlled Studio and board updates. Studio accepts only the versioned stable ARM64 DMG and matching SHA-256 asset from the fixed official release, while active board tasks block only the transactional board update.
+- Render inline and display mathematics in conversations, while preserving single tildes used in model ranges and command output instead of interpreting them as strikethrough.
+- Accept legacy underscore-based diagnostic utility identifiers after canonicalizing them without hiding duplicates.
+- Route `hobot version`, `hobot --version`, and `hobot -v` directly to the version command before loading user configuration or starting a conversation.
+
+## 0.27.0
+
 - Import the official customer-catalog Skills from a user-supplied OpenExplorer LLM package through bounded, owner-controlled, symlink-safe discovery without redistributing or modifying vendor files. Capabilities preserve the 24-directory versus 23-entry catalog discrepancy and unknown vendor test state; only cataloged Skills enter private task settings. Host-side workflows use a task-scoped, user-selected direct SSH x86_64 builder with architecture/CUDA probes, bounded output, board-side network policy, and per-command approval instead of running conversion or quantization on ARM64 RDK boards.
 - Keep long-running task history durable after its event log reaches the configured size. Agentd now atomically rolls to a continuous newest-event window, migrates logs produced by older stop-persisting versions on the next event, and reports retained boundaries through `events.retention.v1` so CLI and Studio can distinguish expired history from an actual durability gap.
 - Add `readiness-diagnostics` to the mandatory X5/S100/S600 release matrix. The ordinary-user board harness now proves that `hobot doctor --json` and `diagnostics.inspect` are read-only, repairs require explicit confirmation, permission repair is limited to declared private runtime paths, and no support file, model request, credential, or temporary path escapes the isolated test.

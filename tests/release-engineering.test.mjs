@@ -357,6 +357,20 @@ test("launcher routes product lifecycle commands without taking Pi extension upd
   assert.match(extensions.stdout, /^args=update --extensions$/m);
 });
 
+test("launcher routes version aliases before configuration or TUI startup", async (t) => {
+  const fixture = await launcherFixture(t);
+  const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  for (const alias of ["version", "--version", "-v"]) {
+    const result = await execFileAsync(fixture.launcher, [alias], { env: environment });
+    assert.equal(result.stdout.trim(), `agentd=<${alias}>`);
+  }
+  await assert.rejects(
+    () => execFileAsync(fixture.launcher, ["version", "unexpected"], { env: environment }),
+    /Usage: hobot version/,
+  );
+  await assert.rejects(() => access(join(fixture.home, ".config/hobot-code")), { code: "ENOENT" });
+});
+
 test("launcher blocks runtime starts while install or rollback owns the transaction lock", async (t) => {
   const fixture = await launcherFixture(t);
   const lock = join(fixture.root, "hobot-code.install.lock");

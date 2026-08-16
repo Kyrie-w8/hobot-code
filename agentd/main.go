@@ -21,6 +21,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Hobot Code background task service
 
 Usage:
+  hobot version
   hobot tui [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [-- PI_OPTIONS...]
   hobot daemon start|status
   hobot daemon stop|restart [--force]

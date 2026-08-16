@@ -625,6 +625,16 @@ require_scoped_private_root HOBOT_CODE_CONFIG_DIR "$hobot_config_root"
 handle_product_command "$@" || :
 refuse_during_install "$@"
 
+case "${1:-}" in
+  version|--version|-v)
+    if [ "$#" -ne 1 ]; then
+      printf 'Usage: hobot version\n' >&2
+      exit 2
+    fi
+    exec "$hobot_runtime_root/agentd" "$1"
+    ;;
+esac
+
 reject_symlink "$hobot_config_root"
 reject_symlink "$hobot_config_root/agent"
 mkdir -p "$hobot_config_root" "$hobot_config_root/agent"
