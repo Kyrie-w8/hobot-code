@@ -7,9 +7,11 @@ import test from 'node:test';
 import {
   buildHostStatePath,
   isBuildHostVerified,
+  isBuildHostTrusted,
   loadBuildHostState,
   loadSelectedBuildHost,
   markBuildHostVerified,
+  markBuildHostTrusted,
   normalizeBuildHostTarget,
   normalizeRemoteBuildCommand,
   saveSelectedBuildHost,
@@ -45,24 +47,54 @@ test('selected build host is stored as private task state and rejects symlinks',
   assert.equal(await loadSelectedBuildHost(path), 'builder-5090');
   assert.equal(await isBuildHostVerified('builder-5090', path), false);
   const saved = JSON.parse(await readFile(path, 'utf8'));
-  assert.equal(saved.schemaVersion, 2);
+  assert.equal(saved.schemaVersion, 3);
 
   await markBuildHostVerified('builder-5090', path);
   const verified = await loadBuildHostState(path);
   assert.equal(verified.target, 'builder-5090');
   assert.match(verified.verifiedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(await isBuildHostVerified('builder-5090', path), true);
+  assert.equal(await isBuildHostTrusted('builder-5090', path), false);
+
+  await markBuildHostTrusted('builder-5090', path);
+  assert.equal(await isBuildHostTrusted('builder-5090', path), true);
 
   await saveSelectedBuildHost('builder-5090', path);
   assert.equal(await isBuildHostVerified('builder-5090', path), true);
+  assert.equal(await isBuildHostTrusted('builder-5090', path), true);
   await saveSelectedBuildHost('builder-6000', path);
   assert.equal(await isBuildHostVerified('builder-5090', path), false);
   assert.equal(await isBuildHostVerified('builder-6000', path), false);
+  assert.equal(await isBuildHostTrusted('builder-6000', path), false);
   await assert.rejects(() => markBuildHostVerified('builder-5090', path), /changed before verification/);
+  await assert.rejects(() => markBuildHostTrusted('builder-6000', path), /pass verification/);
 
   const target = join(root, 'outside.json');
   const link = join(root, 'linked.json');
   await writeFile(target, '{"schemaVersion":1,"target":"builder"}\n', {mode: 0o600});
   await symlink(target, link);
   await assert.rejects(() => loadSelectedBuildHost(link), /private-file checks/);
+});
+
+test('schema 2 verified hosts retain their legacy implicit trust when upgraded', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'hobot-openexplorer-host-v2-'));
+  const path = buildHostStatePath(root);
+  const timestamp = '2026-08-16T08:00:00.000Z';
+  await writeFile(path, `${JSON.stringify({
+    schemaVersion: 2,
+    target: 'builder-5090',
+    updatedAt: timestamp,
+    verifiedAt: timestamp,
+  })}\n`, {mode: 0o600});
+
+  const state = await loadBuildHostState(path);
+  assert.equal(state.verifiedAt, timestamp);
+  assert.equal(state.trustedAt, timestamp);
+  assert.equal(await isBuildHostTrusted('builder-5090', path), true);
+
+  await saveSelectedBuildHost('builder-5090', path);
+  const upgraded = JSON.parse(await readFile(path, 'utf8'));
+  assert.equal(upgraded.schemaVersion, 3);
+  assert.equal(upgraded.verifiedAt, timestamp);
+  assert.equal(upgraded.trustedAt, timestamp);
 });

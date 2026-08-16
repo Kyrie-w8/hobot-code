@@ -200,7 +200,7 @@ class ModelEgressHarnessTest(unittest.TestCase):
     def test_approval_response_rejects_ambiguous_or_interactive_dialogs(self) -> None:
         with self.assertRaisesRegex(MODULE.VerificationError, "exactly one"):
             MODULE.approval_allow_once_response({
-                "id": "select-1", "method": "select", "options": ["Allow this exact call for this task", "Deny"],
+                "id": "select-1", "method": "select", "options": ["Allow network for this task", "Deny"],
             })
         with self.assertRaisesRegex(MODULE.VerificationError, "cannot be accepted"):
             MODULE.approval_allow_once_response({"id": "input-1", "method": "input"})

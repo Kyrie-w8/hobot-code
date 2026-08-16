@@ -292,7 +292,9 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 `shared` 模式用虚拟 `network` 权限识别 `curl`、`wget`、SSH/SCP、远程 Git、软件包客户端、容器仓库和常见网络诊断命令；默认与 Developer 预设均为 `ask`。可用 `/permissions set network allow|ask|deny` 调整。`allow` 只跳过这层外联提示，下载并执行、系统修改等独立高风险规则仍会审批；该检测是启发式策略，自定义程序可能绕过。对受支持模型，`model-only` 改用内核网络命名空间和固定 Unix Socket 模型代理，工具无法访问通用网络；这比命令识别更强，但不是“模型看不到项目数据”，因为 Agent 上下文本来就会发送给所选模型。`offline` 切断全部网络。不支持注入自定义传输的协议不会被伪装成受保护状态。
 
-root 会话默认使用 `rootMode: "confirm"`，对 `bash`、`write`、`edit` 逐次审批。Developer 预设或 `/permissions root policy` 会改用策略判定，但不会关闭硬安全边界；`/permissions root confirm` 可恢复严格模式。完全相同且非危险的确认调用可以在当前任务内记住，危险 Shell 每次都必须审批。
+root 会话默认使用 `rootMode: "confirm"`，对 `bash`、`write`、`edit` 逐次审批。Developer 预设或 `/permissions root policy` 会改用策略判定，但不会关闭硬安全边界；`/permissions root confirm` 可恢复严格模式。普通审批只提供本次允许；只有能够用清晰安全边界表达的权限才提供任务级选项，例如「当前任务允许网络」和「当前任务信任该构建机」。新审批不再创建难以区分的「记住完全相同调用」规则；旧任务中已有的精确调用规则仍可读取，仅用于兼容 Resume。
+
+任务级「允许网络」只会将虚拟 `network` 规则设为 `allow`，不会连带授予文件写入、root、硬件访问或破坏性命令权限。「信任该构建机」仅在 `openexplorer_build_host` 探测成功后生效，只为当前任务和当前 SSH 目标免除重复的主机网络确认；`openexplorer_remote_run` 的具体远程命令仍会独立审批。
 
 硬安全边界高于用户规则：
 
@@ -489,7 +491,7 @@ Host openexplorer-builder
 
 私钥必须只保存在板端并设置为 `0600`；不要把私钥、密码或 token 放入 Prompt。构建机的 `authorized_keys` 建议为该公钥增加 `restrict`，以关闭转发、Agent、X11 和 PTY 能力，同时保留 OpenExplorer 工作流需要的远程命令执行。
 
-当 Agent 首次进入主机侧 Skill 阶段时，`openexplorer_build_host` 会要求用户输入 SSH 别名或 `user@hostname`，将选择保存为任务私有状态，并验证远端架构；CUDA Skill 还会检查 `nvidia-smi`。首次成功探测后，同一任务对同一构建机的后续探测不再重复请求通用网络确认；更换构建机或首次探测失败时仍会确认。后续命令通过 `openexplorer_remote_run` 执行，每条命令仍由板端权限策略审批。任务必须使用 **Network: Network/shared**；`model-only` 或 `offline` 会阻止构建机连接。
+当 Agent 首次进入主机侧 Skill 阶段时，`openexplorer_build_host` 会要求用户输入 SSH 别名或 `user@hostname`，将选择保存为任务私有状态，并验证远端架构；CUDA Skill 还会检查 `nvidia-smi`。首次审批可选「Trust this build host for this task」：只有探测成功才会记录信任，同一任务对同一构建机的后续探测不再重复请求主机网络确认。选「Allow once」不会记录信任；更换构建机或探测失败也不会保留新信任。后续命令通过 `openexplorer_remote_run` 执行，每条命令仍由板端权限策略审批。任务必须使用 **Network: Network/shared**；`model-only` 或 `offline` 会阻止构建机连接。
 
 选择构建机后，Agent 不得再用通用 `bash` 直接 `ssh` 到该目标，否则会绕过任务级主机验证与远程命令审批。Hobot Code 会拒绝这类调用并要求 Agent 改用上述两个专用工具。
 

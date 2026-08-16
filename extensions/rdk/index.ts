@@ -11,6 +11,8 @@ import {
   DEFAULT_MEMORY_CONFIG,
   MEMORY_KINDS,
   MEMORY_SCOPES,
+  APPROVAL_CHOICES,
+  approvalChoices,
   applyPermissionPreset,
   describeToolCall,
   fingerprintWorkspace,
@@ -33,7 +35,6 @@ import {
   requiresRootToolApproval,
   resolveToolCallAction,
   resolveToolAction,
-  setPolicyCallRule,
   setPolicyRule,
   writeNotificationConfig,
   writePolicy,
@@ -58,9 +59,10 @@ import {
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 import {
-  isBuildHostVerified,
+  isBuildHostTrusted,
   loadSelectedBuildHost,
   markBuildHostVerified,
+  markBuildHostTrusted,
   normalizeBuildHostTarget,
   probeOpenExplorerBuildHost,
   runOpenExplorerRemoteCommand,
@@ -85,10 +87,6 @@ const BUILTIN_DROBOTICS_MODELS = [
 ] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
-const APPROVAL_ALLOW_ONCE = "Allow once";
-const APPROVAL_ALLOW_TASK = "Allow this exact call for this task";
-const APPROVAL_DENY = "Deny";
-
 type JsonRecord = Record<string, unknown>;
 
 interface BoardSnapshot {
@@ -826,6 +824,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let agentHadMutation = false;
   let lastPromptSnapshot: PromptSnapshot | undefined;
   const qualityGateBlockedCalls = new Set<string>();
+  const trustedBuildHostCalls = new Set<string>();
   const hardwareLeases = new Map<string, { release: () => Promise<void> }>();
   let workspaceWriteLease: { release: () => Promise<void> } | undefined;
   let workspaceWriteLeasePending: Promise<{ release: () => Promise<void> }> | undefined;
@@ -1193,7 +1192,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
       description: "Select, inspect, or probe the user-chosen direct SSH x86_64 build host for OpenExplorer LLM Skills. Selection is private to this Agent task.",
       promptSnippet: "Select and verify a direct SSH x86_64 build host before running OpenExplorer host-side conversion or quantization steps",
       parameters: openExplorerBuildHostSchema,
-      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      async execute(toolCallId, params, signal, _onUpdate, ctx) {
         let target = params.target ? normalizeBuildHostTarget(params.target) : await loadSelectedBuildHost();
         if ((params.action === "select" || params.action === "probe") && !target) {
           if (!ctx.hasUI) {
@@ -1217,11 +1216,13 @@ export default function rdkExtension(pi: ExtensionAPI) {
           const result = { configured: true, target, scope: "task", transport: "direct-ssh", probeRequired: true };
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
         }
+        const trustOnSuccess = trustedBuildHostCalls.delete(toolCallId);
         const result = await probeOpenExplorerBuildHost(target, { signal });
         if (!result.ok || !result.compatible) {
           throw new Error(result.stderr || `OpenExplorer build host ${target} is incompatible`);
         }
         await markBuildHostVerified(target);
+        if (trustOnSuccess) await markBuildHostTrusted(target);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       },
     });
@@ -1762,7 +1763,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
     const approvalReasons: string[] = [];
-    const rememberTools: string[] = [];
+    let canAllowTaskNetwork = false;
+    let canTrustBuildHost = false;
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
     const callAlreadyAllowed = hasAllowedToolCall(permissionPolicy, event.toolName, event.input);
     if (requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName) && !callAlreadyAllowed) {
@@ -1792,7 +1794,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           : `network access is denied by ${permissionPolicyPath()}` };
       }
       approvalReasons.push(...shellSafety.approvalReasons);
-      if (shellSafety.rememberNetworkCall) rememberTools.push("network");
+      canAllowTaskNetwork = shellSafety.rememberNetworkCall;
     }
 
     if (event.toolName === "openexplorer_remote_run" || (event.toolName === "openexplorer_build_host" && event.input.action === "probe")) {
@@ -1800,7 +1802,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
       const requestedTarget = event.input.target
         ? normalizeBuildHostTarget(event.input.target)
         : await loadSelectedBuildHost();
-      const verifiedBuildHost = await isBuildHostVerified(requestedTarget);
+      const trustedBuildHost = await isBuildHostTrusted(requestedTarget);
       const networkAction = effectiveNetworkAction(
         resolveToolCallAction(permissionPolicy, "network", event.input),
         offlineNetwork ? "offline" : "shared",
@@ -1810,9 +1812,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ? "network access is disabled by the task's OS network boundary"
           : `network access is denied by ${permissionPolicyPath()}` };
       }
-      if (networkAction === "ask" && !verifiedBuildHost) {
+      if (networkAction === "ask" && !trustedBuildHost) {
         approvalReasons.push("the remote build host requires network access");
-        rememberTools.push("network");
+        canTrustBuildHost = event.toolName === "openexplorer_build_host";
       }
     }
 
@@ -1830,29 +1832,25 @@ export default function rdkExtension(pi: ExtensionAPI) {
         describeToolCall(event.toolName, event.input, qualityGateState.commands),
         `Reason: ${approvalReasons.join("; ")}`,
       ].join("\n");
-      const dangerousShell = event.toolName === "bash"
-        && destructiveShellReasons(String(event.input.command ?? "")).length > 0;
-      if (action === "ask" || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName)) {
-        rememberTools.unshift(event.toolName);
-      }
-      const canRemember = !dangerousShell && (action === "ask"
-        || requiresRootToolApproval(permissionPolicy, runningAsRoot, event.toolName)
-        || rememberTools.length > 0);
+      const approvalScope = canTrustBuildHost
+        ? "build-host"
+        : canAllowTaskNetwork
+          ? "network"
+          : undefined;
       const choice = await ctx.ui.select(
         `Allow ${event.toolName}?\n\n${detail}`,
-        canRemember
-          ? [APPROVAL_ALLOW_ONCE, APPROVAL_ALLOW_TASK, APPROVAL_DENY]
-          : [APPROVAL_ALLOW_ONCE, APPROVAL_DENY],
+        approvalChoices(approvalScope),
         sideAgentMode ? { timeout: SIDE_AGENT_APPROVAL_TIMEOUT_MS } : undefined,
       );
-      if (choice === APPROVAL_ALLOW_TASK) {
-        let next = permissionPolicy;
-        for (const tool of [...new Set(rememberTools)]) {
-          next = setPolicyCallRule(next, tool, event.input, "allow") as PermissionPolicy;
-        }
-        permissionPolicy = await writePolicy(permissionPolicyPath(), next) as PermissionPolicy;
+      if (choice === APPROVAL_CHOICES.allowTaskNetwork) {
+        permissionPolicy = await writePolicy(
+          permissionPolicyPath(),
+          setPolicyRule(permissionPolicy, "network", "allow"),
+        ) as PermissionPolicy;
         permissionPolicyError = undefined;
-      } else if (choice !== APPROVAL_ALLOW_ONCE) {
+      } else if (choice === APPROVAL_CHOICES.trustTaskBuildHost) {
+        trustedBuildHostCalls.add(event.toolCallId);
+      } else if (choice !== APPROVAL_CHOICES.allowOnce) {
         return { block: true, reason: `${event.toolName} was cancelled by the user` };
       }
     }

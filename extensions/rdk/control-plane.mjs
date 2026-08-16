@@ -57,6 +57,24 @@ export const DEVELOPER_POLICY = Object.freeze({
 export const MEMORY_SCOPES = Object.freeze(["user", "project", "board", "session"]);
 export const MEMORY_KINDS = Object.freeze(["preference", "decision", "fact", "fix", "instruction", "note"]);
 
+export const APPROVAL_CHOICES = Object.freeze({
+  allowOnce: "Allow once",
+  allowTaskNetwork: "Allow network for this task",
+  trustTaskBuildHost: "Trust this build host for this task",
+  deny: "Deny",
+});
+
+export function approvalChoices(scope) {
+  const taskChoice = scope === "network"
+    ? APPROVAL_CHOICES.allowTaskNetwork
+    : scope === "build-host"
+      ? APPROVAL_CHOICES.trustTaskBuildHost
+      : undefined;
+  return taskChoice
+    ? [APPROVAL_CHOICES.allowOnce, taskChoice, APPROVAL_CHOICES.deny]
+    : [APPROVAL_CHOICES.allowOnce, APPROVAL_CHOICES.deny];
+}
+
 export const DEFAULT_MEMORY_CONFIG = Object.freeze({
   schemaVersion: 1,
   enabled: true,

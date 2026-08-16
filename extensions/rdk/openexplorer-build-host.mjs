@@ -50,18 +50,30 @@ export async function loadBuildHostState(path = buildHostStatePath()) {
     const value = JSON.parse(await readFile(path, "utf8"));
     const allowedKeys = value?.schemaVersion === 1
       ? ["schemaVersion", "target", "updatedAt"]
-      : ["schemaVersion", "target", "updatedAt", "verifiedAt"];
-    if (![1, 2].includes(value?.schemaVersion) || Object.keys(value).some((key) => !allowedKeys.includes(key))) {
+      : value?.schemaVersion === 2
+        ? ["schemaVersion", "target", "updatedAt", "verifiedAt"]
+        : ["schemaVersion", "target", "updatedAt", "verifiedAt", "trustedAt"];
+    if (![1, 2, 3].includes(value?.schemaVersion) || Object.keys(value).some((key) => !allowedKeys.includes(key))) {
       throw new Error("OpenExplorer build host state has an unsupported format");
     }
     const target = normalizeBuildHostTarget(value.target);
-    const verifiedAt = value.schemaVersion === 2 && value.verifiedAt !== undefined
+    const verifiedAt = value.schemaVersion >= 2 && value.verifiedAt !== undefined
       ? String(value.verifiedAt)
       : undefined;
     if (verifiedAt !== undefined && !Number.isFinite(Date.parse(verifiedAt))) {
       throw new Error("OpenExplorer build host state has an invalid verification timestamp");
     }
-    return { target, verifiedAt };
+    // Schema 2 represented a successful probe as implicit task trust. Preserve
+    // that meaning when upgrading an existing task state.
+    const trustedAt = value.schemaVersion === 2
+      ? verifiedAt
+      : value.schemaVersion === 3 && value.trustedAt !== undefined
+        ? String(value.trustedAt)
+        : undefined;
+    if (trustedAt !== undefined && !Number.isFinite(Date.parse(trustedAt))) {
+      throw new Error("OpenExplorer build host state has an invalid trust timestamp");
+    }
+    return { target, verifiedAt, trustedAt };
   } catch (error) {
     if (error?.code === "ENOENT") return undefined;
     throw error;
@@ -91,10 +103,11 @@ export async function saveSelectedBuildHost(target, path = buildHostStatePath())
   const normalized = normalizeBuildHostTarget(target);
   const current = await loadBuildHostState(path);
   await writeBuildHostState({
-    schemaVersion: 2,
+    schemaVersion: 3,
     target: normalized,
     updatedAt: new Date().toISOString(),
     ...(current?.target === normalized && current.verifiedAt ? { verifiedAt: current.verifiedAt } : {}),
+    ...(current?.target === normalized && current.trustedAt ? { trustedAt: current.trustedAt } : {}),
   }, path);
   return normalized;
 }
@@ -107,10 +120,11 @@ export async function markBuildHostVerified(target, path = buildHostStatePath())
   }
   const verifiedAt = new Date().toISOString();
   await writeBuildHostState({
-    schemaVersion: 2,
+    schemaVersion: 3,
     target: normalized,
     updatedAt: verifiedAt,
     verifiedAt,
+    ...(current.trustedAt ? { trustedAt: current.trustedAt } : {}),
   }, path);
   return verifiedAt;
 }
@@ -120,6 +134,30 @@ export async function isBuildHostVerified(target, path = buildHostStatePath()) {
   const normalized = normalizeBuildHostTarget(target);
   const current = await loadBuildHostState(path);
   return Boolean(current?.target === normalized && current.verifiedAt);
+}
+
+export async function markBuildHostTrusted(target, path = buildHostStatePath()) {
+  const normalized = normalizeBuildHostTarget(target);
+  const current = await loadBuildHostState(path);
+  if (!current || current.target !== normalized || !current.verifiedAt) {
+    throw new Error("OpenExplorer build host must pass verification before it can be trusted");
+  }
+  const trustedAt = new Date().toISOString();
+  await writeBuildHostState({
+    schemaVersion: 3,
+    target: normalized,
+    updatedAt: trustedAt,
+    verifiedAt: current.verifiedAt,
+    trustedAt,
+  }, path);
+  return trustedAt;
+}
+
+export async function isBuildHostTrusted(target, path = buildHostStatePath()) {
+  if (!target) return false;
+  const normalized = normalizeBuildHostTarget(target);
+  const current = await loadBuildHostState(path);
+  return Boolean(current?.target === normalized && current.trustedAt);
 }
 
 function sshArguments(target) {

@@ -7,12 +7,12 @@ test('approval presentation preserves security detail over generic messages', ()
   const view = approvalPresentation({
     title: 'Allow bash?\n\nTool: bash\nRisk: root shell\nTarget:\npwd\nReason: policy',
     message: 'Choose how Hobot Code may run this tool.',
-    options: ['Allow once', 'Allow this exact call for this task', 'Deny'],
+    options: ['Allow once', 'Allow network for this task', 'Deny'],
   });
   assert.equal(view.title, 'Allow bash?');
   assert.match(view.detail, /Tool: bash[\s\S]*Target:[\s\S]*pwd[\s\S]*Reason: policy/);
   assert.doesNotMatch(view.detail, /Choose how/);
-  assert.equal(view.remembersExactCall, true);
+  assert.equal(view.remembersExactCall, false);
 });
 
 test('approval presentation retains non-generic backend guidance', () => {

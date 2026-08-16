@@ -820,7 +820,9 @@ hobot extensions --task <task-id>
 - `Optional · off`：包内存在但未进入客户目录，默认不加载。
 - `OpenExplorer Skills · Partially inspected`：实际目录和客户目录数量不一致；展开条目可查看来源与证据说明。
 
-当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA，再对每条远端命令单独执行板端审批；主机选择只保存在当前任务，不会回写官方 Skill。
+当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA，再对每条远端命令单独执行板端审批；主机选择只保存在当前任务，不会回写官方 Skill。首次探测时选 **Trust this build host for this task** 可信任当前任务的该主机；选 **Allow once** 只允许本次，探测失败不会留下信任。
+
+审批不再提供「Allow this exact call for this task」。对可安全限定范围的请求，界面改为显示语义明确的选项，例如 **Allow network for this task**。它只放开当前任务的通用网络检查，不会放开 root、文件、硬件或破坏性命令权限。
 
 选择构建机不会自动上传外部包、源码或模型。请在对话中提供构建机上的 OpenExplorer 工作目录、模型路径和输出目录；需要使用包内脚本的 Skill 还要求该脚本在构建机上可访问。
 

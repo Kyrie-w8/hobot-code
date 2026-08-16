@@ -9,6 +9,8 @@ import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, n
 import {
   DEFAULT_LSP_CONFIG,
   DEFAULT_POLICY,
+  APPROVAL_CHOICES,
+  approvalChoices,
   applyPermissionPreset,
   describeToolCall,
   fingerprintWorkspace,
@@ -42,6 +44,21 @@ const snapshot = {
   rdkOsVersion: "5.1.0",
   architecture: "arm64",
 };
+
+test("approval choices use explicit capability scopes instead of exact-call memory", () => {
+  assert.deepEqual(approvalChoices(), [APPROVAL_CHOICES.allowOnce, APPROVAL_CHOICES.deny]);
+  assert.deepEqual(approvalChoices("network"), [
+    APPROVAL_CHOICES.allowOnce,
+    APPROVAL_CHOICES.allowTaskNetwork,
+    APPROVAL_CHOICES.deny,
+  ]);
+  assert.deepEqual(approvalChoices("build-host"), [
+    APPROVAL_CHOICES.allowOnce,
+    APPROVAL_CHOICES.trustTaskBuildHost,
+    APPROVAL_CHOICES.deny,
+  ]);
+  assert.equal(Object.values(APPROVAL_CHOICES).some((choice) => /exact call/i.test(choice)), false);
+});
 
 test("permission rules cover built-in, RDK, MCP, and fallback tools", () => {
   assert.equal(resolveToolAction(DEFAULT_POLICY, "read"), "allow");
