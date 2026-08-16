@@ -97,6 +97,93 @@ func addSettledSourceTask(t *testing.T, manager *taskManager, cfg config) *task 
 	return current
 }
 
+func TestResolveForkSourceRecoversCorruptEditedSessionFromParent(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := addSettledSourceTask(t, manager, cfg)
+	parentEvent := taskEvent{
+		Protocol: protocolVersion, Kind: "event", TaskID: parent.metadata.ID, Sequence: 1,
+		Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "source prompt"}},
+	}
+	encoded, _ := json.Marshal(parentEvent)
+	if err := os.WriteFile(parent.events, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	id := "ffeeddccbbaa998877665544"
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	currentEvent := parentEvent
+	currentEvent.TaskID = id
+	currentEvent.Normalized = &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "replacement prompt"}}
+	encoded, _ = json.Marshal(currentEvent)
+	if err := os.WriteFile(eventsPath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worker.stderr.log"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(cfg.SessionDir, id)
+	if err := os.Mkdir(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	corruptSession := filepath.Join(sessionDir, "fork-corrupt.jsonl")
+	if err := os.WriteFile(corruptSession, []byte(`{"type":"message","id":"tail","parentId":"missing","message":{"role":"toolResult","content":[]}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{
+		manager: manager, dir: dir, events: eventsPath, stderr: filepath.Join(dir, "worker.stderr.log"),
+		metadata: taskMetadata{
+			ID: id, Name: "edited", Cwd: cfg.StateRoot, Status: statusStopped,
+			SessionFile: corruptSession, ParentTaskID: parent.metadata.ID, BranchKind: "edit", ForkSequence: 1,
+		},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	manager.mu.Lock()
+	manager.tasks[id] = current
+	manager.mu.Unlock()
+
+	resolved, sessionFile, lines, sequence, err := manager.resolveForkSource(current, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSession, err := validateSessionFile(cfg.SessionDir, parent.metadata.SessionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != parent || sessionFile != expectedSession || sequence != 1 {
+		t.Fatalf("resolved source = %s file=%q sequence=%d", resolved.metadata.ID, sessionFile, sequence)
+	}
+	leaf, err := resolved.sessionLeafBeforePrompt(sequence, lines)
+	if err != nil || leaf != "model" {
+		t.Fatalf("recovered edit context leaf=%q err=%v", leaf, err)
+	}
+	laterEvent := currentEvent
+	laterEvent.Sequence = 2
+	laterEvent.Normalized = &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "later prompt with no recoverable Pi prefix"}}
+	encoded, _ = json.Marshal(laterEvent)
+	file, err := os.OpenFile(eventsPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(append(encoded, '\n')); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := manager.resolveForkSource(current, 2); err == nil || !strings.Contains(err.Error(), "session header is missing") {
+		t.Fatalf("post-anchor corruption must fail closed, got %v", err)
+	}
+}
+
 func TestBlankSideTaskStartsOnlyAfterItsFirstPrompt(t *testing.T) {
 	cfg := testConfig(t)
 	manager, err := newTaskManager(cfg)

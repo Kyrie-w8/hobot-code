@@ -1149,17 +1149,13 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if err != nil {
 		return taskMetadata{}, err
 	}
-	sessionFile, err := validateSessionFile(manager.cfg.SessionDir, parent.SessionFile)
-	if err != nil {
-		return taskMetadata{}, err
-	}
-	_, lines, err := readSessionLines(sessionFile)
+	forkSource, sessionFile, lines, forkSequence, err := manager.resolveForkSource(source, params.Sequence)
 	if err != nil {
 		return taskMetadata{}, fmt.Errorf("read source session: %w", err)
 	}
 	leafID := ""
 	if params.Sequence > 0 {
-		leafID, err = source.sessionLeafBeforePrompt(params.Sequence, lines)
+		leafID, err = forkSource.sessionLeafBeforePrompt(forkSequence, lines)
 		if err != nil {
 			return taskMetadata{}, err
 		}
@@ -1456,6 +1452,110 @@ func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLin
 		return "", fmt.Errorf("selected message has no parent context")
 	}
 	return parentID, nil
+}
+
+type retainedUserPrompt struct {
+	sequence uint64
+	text     string
+}
+
+func (current *task) retainedUserPrompts() ([]retainedUserPrompt, error) {
+	page, err := readEventPageWithRetention(current.events, current.metadata.ID, 0, 0, current.metadata.LogTruncated)
+	if err != nil {
+		return nil, err
+	}
+	prompts := make([]retainedUserPrompt, 0)
+	for _, event := range page.Events {
+		if event.Normalized == nil || event.Normalized.Type != "user.message" {
+			continue
+		}
+		text, _ := event.Normalized.Data["text"].(string)
+		prompts = append(prompts, retainedUserPrompt{sequence: event.Sequence, text: text})
+	}
+	return prompts, nil
+}
+
+// resolveForkSource keeps historical editing usable when a previously edited
+// Pi session was damaged after it was created. Events copied into an edit task
+// retain their order, so a prompt at or before the edit anchor can be mapped
+// back to the healthy parent session without guessing from duplicate text.
+func (manager *taskManager) resolveForkSource(source *task, sequence uint64) (*task, string, []sessionLine, uint64, error) {
+	current := source
+	currentSequence := sequence
+	seen := make(map[string]bool)
+	var sourceErr error
+	for {
+		metadata := current.snapshot()
+		if metadata.ID == "" || seen[metadata.ID] {
+			break
+		}
+		seen[metadata.ID] = true
+		sessionFile, err := validateSessionFile(manager.cfg.SessionDir, metadata.SessionFile)
+		if err == nil {
+			_, lines, readErr := readSessionLines(sessionFile)
+			if readErr == nil {
+				return current, sessionFile, lines, currentSequence, nil
+			}
+			err = readErr
+		}
+		if sourceErr == nil {
+			sourceErr = err
+		}
+		if currentSequence == 0 || metadata.BranchKind != "edit" || metadata.ParentTaskID == "" || metadata.ForkSequence == 0 {
+			break
+		}
+		parent, parentErr := manager.get(metadata.ParentTaskID)
+		if parentErr != nil {
+			break
+		}
+		mapped, mapErr := mapEditPromptToParent(current, parent, currentSequence, metadata.ForkSequence)
+		if mapErr != nil {
+			break
+		}
+		current = parent
+		currentSequence = mapped
+	}
+	if sourceErr == nil {
+		sourceErr = fmt.Errorf("session does not contain a resumable branch")
+	}
+	return nil, "", nil, 0, sourceErr
+}
+
+func mapEditPromptToParent(current, parent *task, sequence, parentForkSequence uint64) (uint64, error) {
+	currentPrompts, err := current.retainedUserPrompts()
+	if err != nil {
+		return 0, err
+	}
+	parentPrompts, err := parent.retainedUserPrompts()
+	if err != nil {
+		return 0, err
+	}
+	selected := -1
+	for index, prompt := range currentPrompts {
+		if prompt.sequence == sequence {
+			selected = index
+			break
+		}
+	}
+	anchor := -1
+	for index, prompt := range parentPrompts {
+		if prompt.sequence == parentForkSequence {
+			anchor = index
+			break
+		}
+	}
+	if selected < 0 || anchor < 0 || selected > anchor || selected >= len(parentPrompts) {
+		return 0, fmt.Errorf("selected message cannot be recovered from the parent edit context")
+	}
+	for index := 0; index < selected; index++ {
+		if index >= len(parentPrompts) || currentPrompts[index].text != parentPrompts[index].text {
+			return 0, fmt.Errorf("edited conversation no longer matches its parent context")
+		}
+	}
+	if selected < anchor && currentPrompts[selected].text != parentPrompts[selected].text {
+		return 0, fmt.Errorf("selected historical message no longer matches its parent context")
+	}
+	return parentPrompts[selected].sequence, nil
 }
 
 func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string, promptRecorded bool) error {

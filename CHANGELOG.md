@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.3
+
+### Fixed
+
+- Editing remains available when a previously edited Pi session has lost its header or branch prefix: agentd now maps the selected user-message occurrence back through the edit ancestry and forks from the nearest healthy parent context.
+- Recovery is limited to messages at or before the recorded edit anchor and validates the unchanged prompt prefix, so a damaged session cannot silently attach an edit to unrelated context.
+
 ## 0.27.2
 
 ### Fixed
