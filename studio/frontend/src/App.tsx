@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, FileDiff, Gauge, Info, KeyRound, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck,
+  Download, FileDiff, Gauge, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
   Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
@@ -34,6 +34,8 @@ import {supportBundlePresentation} from './support-diagnostics.js';
 import {accessModePresentation} from './access-mode.js';
 import {friendlyError} from './friendly-error.js';
 import {includedModelSummary, includedProviderGroups} from './provider-catalog.js';
+import {applyTheme, readThemePreference, resolveTheme, saveThemePreference} from './appearance-theme.js';
+import type {ThemePreference} from './appearance-theme.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
 import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
@@ -102,6 +104,9 @@ function App() {
   const [appVersion, setAppVersion] = useState('');
   const [unreadTasks, setUnreadTasks] = useState<Set<string>>(new Set());
   const [showInspector, setShowInspector] = useState(false);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => readThemePreference(window.localStorage));
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true);
+  const [showAppearance, setShowAppearance] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{kind: 'conversation' | 'project'; label: string; taskIds: string[]; retainsWorktree?: boolean} | null>(null);
@@ -128,8 +133,44 @@ function App() {
   const watchRetryAttempt = useRef(0);
   const watchRetryTimer = useRef<number | null>(null);
   const taskStatusHistory = useRef(new Map<string, string>());
+  const appearanceRef = useRef<HTMLDivElement>(null);
 
   const boardId = connection?.board.id ?? '';
+  const resolvedTheme = resolveTheme(themePreference, systemPrefersDark);
+  const AppearanceIcon = themePreference === 'system' ? Monitor : resolvedTheme === 'dark' ? Moon : Sun;
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return;
+    const update = (event: MediaQueryListEvent | MediaQueryList) => setSystemPrefersDark(event.matches);
+    update(media);
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+
+  useEffect(() => {
+    applyTheme(document.documentElement, themePreference, systemPrefersDark);
+    saveThemePreference(window.localStorage, themePreference);
+    if (themePreference === 'system') window.runtime?.WindowSetSystemDefaultTheme?.();
+    else if (themePreference === 'light') window.runtime?.WindowSetLightTheme?.();
+    else window.runtime?.WindowSetDarkTheme?.();
+  }, [systemPrefersDark, themePreference]);
+
+  useEffect(() => {
+    if (!showAppearance) return;
+    const closeOnPointer = (event: PointerEvent) => {
+      if (!appearanceRef.current?.contains(event.target as Node)) setShowAppearance(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowAppearance(false);
+    };
+    document.addEventListener('pointerdown', closeOnPointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showAppearance]);
 
   useEffect(() => {
     const target = boardId;
@@ -1171,6 +1212,14 @@ function App() {
         </button>
         <div className="titlebar-spacer" />
         {isMock() && <span className="preview-label">Preview</span>}
+        <div className="appearance-control" ref={appearanceRef} data-titlebar-no-drag>
+          <button className={`icon-button ${showAppearance ? 'active' : ''}`} title={`Appearance: ${themePreference === 'system' ? 'System' : themePreference === 'light' ? 'Light' : 'Dark'}`} aria-label="Appearance" aria-haspopup="menu" aria-expanded={showAppearance} onClick={() => setShowAppearance((value) => !value)}><AppearanceIcon size={16} /></button>
+          {showAppearance && <div className="appearance-menu" role="menu" aria-label="Appearance">
+            <button type="button" role="menuitemradio" aria-checked={themePreference === 'system'} className={themePreference === 'system' ? 'selected' : ''} onClick={() => {setThemePreference('system'); setShowAppearance(false);}}><Monitor size={15} /><span>System</span>{themePreference === 'system' && <Check size={14} />}</button>
+            <button type="button" role="menuitemradio" aria-checked={themePreference === 'light'} className={themePreference === 'light' ? 'selected' : ''} onClick={() => {setThemePreference('light'); setShowAppearance(false);}}><Sun size={15} /><span>Light</span>{themePreference === 'light' && <Check size={14} />}</button>
+            <button type="button" role="menuitemradio" aria-checked={themePreference === 'dark'} className={themePreference === 'dark' ? 'selected' : ''} onClick={() => {setThemePreference('dark'); setShowAppearance(false);}}><Moon size={15} /><span>Dark</span>{themePreference === 'dark' && <Check size={14} />}</button>
+          </div>}
+        </div>
         <button className="version-button" title="Version and updates" onClick={() => setShowAbout(true)}>{appVersion ? `v${appVersion}` : <LoaderCircle size={12} className="spin" />}</button>
         {connection?.capabilities?.capabilities.includes('extensions.catalog.v1') && <button className="icon-button" title="Capabilities" disabled={connectionState !== 'online'} onClick={() => setShowExtensions(true)}><Box size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('providers.manage.v1') && <button className="icon-button" title="Model providers" disabled={connectionState !== 'online'} onClick={() => setShowProviders(true)}><KeyRound size={16} /></button>}

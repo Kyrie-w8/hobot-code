@@ -21,6 +21,9 @@ declare global {
     runtime?: {
       EventsOn?: (name: string, callback: (...args: any[]) => void) => () => void;
       WindowToggleMaximise?: () => void;
+      WindowSetSystemDefaultTheme?: () => void;
+      WindowSetLightTheme?: () => void;
+      WindowSetDarkTheme?: () => void;
     };
   }
 }

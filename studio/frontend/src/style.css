@@ -5,11 +5,13 @@ html, body, #root {
   overflow: hidden;
 }
 
-html { background: #1d1d1f; color-scheme: dark; }
+html { background: var(--canvas, #1d1d1f); }
+html[data-theme='dark'] { color-scheme: dark; }
+html[data-theme='light'] { color-scheme: light; }
 
 body {
-  color: #f2f2f4;
-  background: #1d1d1f;
+  color: var(--text, #f2f2f4);
+  background: var(--canvas, #1d1d1f);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -17,5 +19,5 @@ body {
 
 ::selection {
   background: rgba(101, 191, 167, 0.32);
-  color: #ffffff;
+  color: var(--text, #ffffff);
 }

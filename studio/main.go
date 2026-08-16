@@ -26,8 +26,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 29, G: 29, B: 31, A: 1},
 		Mac: &mac.Options{
-			Appearance: mac.NSAppearanceNameDarkAqua,
-			TitleBar:   mac.TitleBarHiddenInset(),
+			TitleBar: mac.TitleBarHiddenInset(),
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

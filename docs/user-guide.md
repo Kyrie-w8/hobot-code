@@ -190,6 +190,7 @@ Studio 使用 macOS 自带的 OpenSSH 和 `known_hosts`。它不保存 SSH 密�
 | 入口 | 作用 |
 |---|---|
 | **Board selector** | 切换、添加或管理板卡 |
+| **Appearance** | 选择跟随 macOS、浅色或深色主题；偏好仅保存在当前 Mac |
 | **Version and updates** | 查看 Studio/板端版本、兼容性和更新方式 |
 | **Capabilities** | 查看模型、Tools、Skills、Extensions、Prompts、Themes、Hooks 与 LSP 库存 |
 | **Model providers** | 添加、轮换或删除板端受管 Provider |
