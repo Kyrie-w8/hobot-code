@@ -170,6 +170,71 @@ func TestHistoricalForkIgnoresPromptsFromOlderTaskSessions(t *testing.T) {
 	}
 }
 
+func TestHistoricalForkDistinguishesRepeatedPromptsBySequence(t *testing.T) {
+	root := t.TempDir()
+	eventsPath := filepath.Join(root, "events.jsonl")
+	events := []taskEvent{
+		{Protocol: protocolVersion, Kind: "event", TaskID: "task", Sequence: 1, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "continue"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "task", Sequence: 2, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "assistant.text.delta", Data: map[string]any{"delta": "first answer"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "task", Sequence: 3, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "continue"}}},
+	}
+	var content bytes.Buffer
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		content.Write(encoded)
+		content.WriteByte('\n')
+	}
+	if err := os.WriteFile(eventsPath, content.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{events: eventsPath, metadata: taskMetadata{ID: "task"}}
+	lines := []sessionLine{
+		{Type: "model_change", ID: "model"},
+		{Type: "message", ID: "user-1", ParentID: "model", Role: "user", Text: "continue"},
+		{Type: "message", ID: "assistant-1", ParentID: "user-1", Role: "assistant", Text: "first answer", Stop: "stop"},
+		{Type: "message", ID: "user-2", ParentID: "assistant-1", Role: "user", Text: "continue"},
+	}
+	firstLeaf, err := current.sessionLeafBeforePrompt(1, lines)
+	if err != nil || firstLeaf != "model" {
+		t.Fatalf("first repeated prompt resolved to leaf=%q err=%v", firstLeaf, err)
+	}
+	secondLeaf, err := current.sessionLeafBeforePrompt(3, lines)
+	if err != nil || secondLeaf != "assistant-1" {
+		t.Fatalf("second repeated prompt resolved to leaf=%q err=%v", secondLeaf, err)
+	}
+}
+
+func TestHistoricalForkMatchesRetainedPromptSuffix(t *testing.T) {
+	root := t.TempDir()
+	eventsPath := filepath.Join(root, "events.jsonl")
+	events := []taskEvent{
+		{Protocol: protocolVersion, Kind: "event", TaskID: "task", Sequence: 1, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "continue"}}},
+		{Protocol: protocolVersion, Kind: "event", TaskID: "task", Sequence: 2, Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "latest"}}},
+	}
+	var content bytes.Buffer
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		content.Write(encoded)
+		content.WriteByte('\n')
+	}
+	if err := os.WriteFile(eventsPath, content.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{events: eventsPath, metadata: taskMetadata{ID: "task"}}
+	lines := []sessionLine{
+		{Type: "model_change", ID: "model"},
+		{Type: "message", ID: "old-user", ParentID: "model", Role: "user", Text: "older removed prompt"},
+		{Type: "message", ID: "old-answer", ParentID: "old-user", Role: "assistant", Stop: "stop"},
+		{Type: "message", ID: "continued", ParentID: "old-answer", Role: "user", Text: "continue"},
+		{Type: "message", ID: "continued-answer", ParentID: "continued", Role: "assistant", Stop: "stop"},
+		{Type: "message", ID: "latest", ParentID: "continued-answer", Role: "user", Text: "latest"},
+	}
+	leaf, err := current.sessionLeafBeforePrompt(1, lines)
+	if err != nil || leaf != "old-answer" {
+		t.Fatalf("retained suffix resolved to leaf=%q err=%v", leaf, err)
+	}
+}
+
 func TestEditEventHistoryKeepsOnlyEventsBeforeReplacedPrompt(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "source-events.jsonl")

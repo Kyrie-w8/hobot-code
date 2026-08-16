@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "apiVersion": "hobot.extensions/v1",
-  "productVersion": "0.27.1",
+  "productVersion": "0.27.2",
   "entries": [
     {
       "id": "hobot.rdk-core",
       "name": "RDK development core",
-      "version": "0.27.1",
+      "version": "0.27.2",
       "kind": "extension",
       "description": "D-Robotics model access, live board evidence, RDK knowledge, permissions, memory, goals, hooks, LSP, Side Agents, and resource coordination.",
       "origin": "built-in",

@@ -115,6 +115,7 @@ export function destructiveShellReasons(command) {
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:apt(?:-get)?|dnf|yum)\s+(?:autoremove|purge|remove)\b/i, "removes installed software"],
   ];
   const highRiskChecks = [
+    [/(?:\brm\b|\brmdir\b|\bmv\b|\bln\b)[^\n]*(?:\/root|\/home\/[^/\s]+)\/\.local\/state\/hobot-code(?:\/|\b)/i, "removes or replaces Hobot Code persistent task and conversation state"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?git\s+(?:clean\b|reset\s+--hard\b|push\b[^\n]*(?:--force(?:-with-lease)?\b|-f\b)|branch\s+(?:-D\b|--delete\s+--force\b))/i, "performs a destructive or forceful Git operation"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:cp|mv|install|ln|mkdir|touch)\b[^;&|\n]*(?:\s|=)['"]?\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "modifies a protected system path"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:sed\s+[^;&|\n]*(?:-i\b|--in-place\b)|perl\s+[^;&|\n]*-[^;&|\n]*i\b)[^;&|\n]*\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "edits a protected system path in place"],

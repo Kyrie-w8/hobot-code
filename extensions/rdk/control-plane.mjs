@@ -39,17 +39,18 @@ export const DEVELOPER_POLICY = Object.freeze({
     Object.freeze({ tool: "write", action: "allow" }),
     Object.freeze({ tool: "edit", action: "allow" }),
     Object.freeze({ tool: "bash", action: "allow" }),
-    Object.freeze({ tool: "network", action: "ask" }),
+    Object.freeze({ tool: "network", action: "allow" }),
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
     Object.freeze({ tool: "openexplorer_build_host", action: "allow" }),
+    Object.freeze({ tool: "openexplorer_remote_run", action: "allow" }),
     Object.freeze({ tool: "memory_search", action: "allow" }),
     Object.freeze({ tool: "goal_status", action: "allow" }),
     Object.freeze({ tool: "goal_progress", action: "allow" }),
     Object.freeze({ tool: "lsp", action: "allow" }),
-    Object.freeze({ tool: "quality_gate", action: "ask" }),
-    Object.freeze({ tool: "memory_save", action: "ask" }),
-    Object.freeze({ tool: "goal_complete", action: "ask" }),
+    Object.freeze({ tool: "quality_gate", action: "allow" }),
+    Object.freeze({ tool: "memory_save", action: "allow" }),
+    Object.freeze({ tool: "goal_complete", action: "allow" }),
     Object.freeze({ tool: "mcp:*", action: "ask" }),
   ]),
 });
@@ -167,12 +168,18 @@ function cloneDefaultPolicy() {
   };
 }
 
+const LEGACY_DEVELOPER_RULES = Object.freeze(DEVELOPER_POLICY.rules
+  .filter((rule) => rule.tool !== "openexplorer_remote_run")
+  .map((rule) => ["network", "quality_gate", "memory_save", "goal_complete"].includes(rule.tool)
+    ? Object.freeze({ ...rule, action: "ask" })
+    : rule));
+
 function isLegacyDeveloperPolicy(policy) {
-  if (policy.rootMode !== "confirm" || policy.default !== DEVELOPER_POLICY.default) return false;
+  if (!new Set(["confirm", "policy"]).has(policy.rootMode) || policy.default !== DEVELOPER_POLICY.default) return false;
   const broadRules = policy.rules.filter((rule) => !rule.targetHash);
   const candidates = [
-    DEVELOPER_POLICY.rules,
-    DEVELOPER_POLICY.rules.filter((rule) => rule.tool !== "network"),
+    LEGACY_DEVELOPER_RULES,
+    LEGACY_DEVELOPER_RULES.filter((rule) => rule.tool !== "network"),
   ];
   return candidates.some((expected) => broadRules.length === expected.length
     && broadRules.every((rule, index) => rule.tool === expected[index].tool
@@ -181,12 +188,10 @@ function isLegacyDeveloperPolicy(policy) {
 
 function migrateLegacyDeveloperPolicy(policy) {
   const exactRules = policy.rules.filter((rule) => rule.targetHash);
-  const broadRules = policy.rules.filter((rule) => !rule.targetHash);
-  if (!broadRules.some((rule) => rule.tool === "network")) {
-    const bashIndex = broadRules.findIndex((rule) => rule.tool === "bash");
-    broadRules.splice(bashIndex + 1, 0, { tool: "network", action: "ask" });
-  }
-  return parsePolicy({ ...policy, rootMode: "policy", rules: [...exactRules, ...broadRules] });
+  return parsePolicy({
+    ...DEVELOPER_POLICY,
+    rules: [...exactRules, ...DEVELOPER_POLICY.rules],
+  });
 }
 
 export function parsePolicy(value) {

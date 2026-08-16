@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.2
+
+### Fixed
+
+- Editing a repeated user message such as `continue` now resolves the exact turn by retained event order and the active Pi session branch instead of rejecting duplicate text as ambiguous.
+- Developer permissions now allow routine network, remote-build, quality-gate, memory, and goal operations while preserving confirmation for destructive shell commands, protected paths, system changes, and unclassified MCP tools.
+- Remote OpenExplorer build commands now receive the same destructive-command inspection as local Bash commands.
+- Commands that remove or replace Hobot Code's persistent state now explain that they can destroy task and conversation data.
+
 ## 0.27.1
 
 - Replace the ambiguous **Allow this exact call for this task** approval with capability-scoped choices. Ordinary and high-risk calls now offer only one-time approval; recognized network access can be allowed for the current task, and a selected OpenExplorer build host can be trusted for that task only after a successful probe. Existing exact-call records remain readable solely for session compatibility.

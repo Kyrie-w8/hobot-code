@@ -360,7 +360,7 @@ Hobot Code 使用板端 OS sandbox 限制默认 Agent 的文件、设备和 capa
 
 - 内置 `write`、`edit` 禁止直接修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
 - 内置工具的工作区外写入、识别出的高风险 Shell 和外联客户端需要交互确认；root 下 Ask 模式逐次审批变更工具，Developer 模式按实际风险审批，但不能绕过受保护路径和破坏性操作边界。
-- `shared` 网络下，`/permissions set network allow|ask|deny` 只控制可识别的外联命令，是降低误操作的启发式策略。内置 D-Robotics 模型和受支持的 Hobot 受管 Anthropic/OpenAI 模型可用 `--network model-only` 保留固定模型出口并强制切断工具通用网络；本地模型可用 `offline` 完全断网。Google、Pi 登录和自管 Provider 当前仍需 `shared`。
+- `shared` 网络下，Ask 模式会确认可识别的外联命令，Developer 模式默认放行普通 SSH、下载和远程构建，但下载执行、系统修改、删除和硬件写入等破坏性操作仍需确认。内置 D-Robotics 模型和受支持的 Hobot 受管 Anthropic/OpenAI 模型可用 `--network model-only` 保留固定模型出口并强制切断工具通用网络；本地模型可用 `offline` 完全断网。Google、Pi 登录和自管 Provider 当前仍需 `shared`。
 - 默认权限允许模型检索记忆，但每次模型写入记忆都要求确认；用户可以修改该策略。
 - 第三方扩展和 Skills 以当前用户权限运行，安装前必须审查来源与代码。
 - `system_snapshot` 只能证明当前设备与工具状态；文件名和 march 也只能用于候选筛选。模型完成状态必须由部署报告、实际产物摘要、正确性与性能证据共同证明。

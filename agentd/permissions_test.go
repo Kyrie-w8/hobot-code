@@ -47,11 +47,12 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 		mode     string
 		rootMode string
 		bash     string
+		network  string
 		quality  string
 	}{
-		{mode: "review", rootMode: "policy", bash: "deny", quality: "deny"},
-		{mode: "ask", rootMode: "confirm", bash: "ask", quality: "ask"},
-		{mode: "developer", rootMode: "policy", bash: "allow", quality: "ask"},
+		{mode: "review", rootMode: "policy", bash: "deny", network: "deny", quality: "deny"},
+		{mode: "ask", rootMode: "confirm", bash: "ask", network: "ask", quality: "ask"},
+		{mode: "developer", rootMode: "policy", bash: "allow", network: "allow", quality: "allow"},
 	}
 	for _, test := range tests {
 		t.Run(test.mode, func(t *testing.T) {
@@ -59,7 +60,7 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if policy.RootMode != test.rootMode || permissionAction(policy, "bash") != test.bash || permissionAction(policy, "quality_gate") != test.quality {
+			if policy.RootMode != test.rootMode || permissionAction(policy, "bash") != test.bash || permissionAction(policy, "network") != test.network || permissionAction(policy, "quality_gate") != test.quality {
 				t.Fatalf("unexpected policy: %+v", policy)
 			}
 		})
@@ -80,9 +81,15 @@ func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy.RootMode = "confirm"
+	for index := range policy.Rules {
+		switch policy.Rules[index].Tool {
+		case "network", "quality_gate", "memory_save", "goal_complete":
+			policy.Rules[index].Action = "ask"
+		}
+	}
 	withoutNetwork := policy.Rules[:0]
 	for _, rule := range policy.Rules {
-		if rule.Tool != "network" {
+		if rule.Tool != "network" && rule.Tool != "openexplorer_build_host" && rule.Tool != "openexplorer_remote_run" {
 			withoutNetwork = append(withoutNetwork, rule)
 		}
 	}
@@ -107,7 +114,8 @@ func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 	}
 	var migrated taskPermissionPolicy
 	if json.Unmarshal(content, &migrated) != nil || migrated.RootMode != "policy" ||
-		permissionAction(migrated, "bash") != "allow" || permissionAction(migrated, "network") != "ask" ||
+		permissionAction(migrated, "bash") != "allow" || permissionAction(migrated, "network") != "allow" ||
+		permissionAction(migrated, "quality_gate") != "allow" || permissionAction(migrated, "openexplorer_remote_run") != "allow" ||
 		migrated.Rules[0].TargetHash != strings.Repeat("a", 64) || !hasPermissionRule(migrated, "network") {
 		t.Fatalf("legacy developer policy was not migrated safely: %s", content)
 	}

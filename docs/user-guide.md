@@ -821,7 +821,7 @@ hobot extensions --task <task-id>
 - `Optional · off`：包内存在但未进入客户目录，默认不加载。
 - `OpenExplorer Skills · Partially inspected`：实际目录和客户目录数量不一致；展开条目可查看来源与证据说明。
 
-当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA，再对每条远端命令单独执行板端审批；主机选择只保存在当前任务，不会回写官方 Skill。首次探测时选 **Trust this build host for this task** 可信任当前任务的该主机；选 **Allow once** 只允许本次，探测失败不会留下信任。
+当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA；Ask 模式对远端访问进行审批，Developer 模式直接执行普通远端命令，但两种模式都会继续拦截删除、系统修改等破坏性操作。主机选择只保存在当前任务，不会回写官方 Skill。
 
 审批不再提供「Allow this exact call for this task」。对可安全限定范围的请求，界面改为显示语义明确的选项，例如 **Allow network for this task**。它只放开当前任务的通用网络检查，不会放开 root、文件、硬件或破坏性命令权限。
 
@@ -1025,7 +1025,7 @@ Hobot Code 的 sandbox 用于减少误操作和限制 Agent 进程树的写入�
 - root mutation 提示：root 仍处于逐次确认模式；
 - destructive/network/hardware：命中硬安全检查。
 
-root 用户可执行 `/permissions root policy` 和 `/permissions preset developer`。这不会关闭破坏性、系统路径、外联和硬件保护。
+root 用户可执行 `/permissions root policy` 和 `/permissions preset developer`。Developer 默认允许普通外联，但不会关闭破坏性、系统路径和硬件保护；未知 MCP 仍保守询问。
 
 ### 20.4 `/permissions set * allow` 后仍然询问
 

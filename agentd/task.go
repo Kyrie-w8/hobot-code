@@ -1404,33 +1404,54 @@ func (current *task) sessionLeafBeforePrompt(sequence uint64, lines []sessionLin
 	if err != nil {
 		return "", err
 	}
-	prompt := ""
+	prompts := make([]string, 0)
+	selected := -1
 	for _, event := range page.Events {
+		if event.Normalized == nil || event.Normalized.Type != "user.message" {
+			continue
+		}
+		text, _ := event.Normalized.Data["text"].(string)
+		prompts = append(prompts, text)
 		if event.Sequence == sequence {
-			if event.Normalized == nil || event.Normalized.Type != "user.message" {
-				break
-			}
-			prompt, _ = event.Normalized.Data["text"].(string)
-			break
+			selected = len(prompts) - 1
 		}
 	}
-	if prompt == "" {
+	if selected < 0 || prompts[selected] == "" {
 		return "", fmt.Errorf("fork sequence is not a user message: %d", sequence)
 	}
-	parentID := ""
-	matches := 0
-	for _, line := range lines {
-		if line.Type == "message" && line.Role == "user" && line.Text == prompt {
-			matches++
-			parentID = line.ParentID
+	if len(lines) == 0 || lines[len(lines)-1].ID == "" {
+		return "", fmt.Errorf("current source session has no active branch")
+	}
+	branch, err := sessionBranch(lines, lines[len(lines)-1].ID)
+	if err != nil {
+		return "", err
+	}
+	sessionPrompts := make([]sessionLine, 0)
+	for _, line := range branch {
+		if line.Type == "message" && line.Role == "user" {
+			sessionPrompts = append(sessionPrompts, line)
 		}
 	}
-	if matches == 0 {
+
+	// Agentd can retain events from an older Pi session, while event retention
+	// can also remove the oldest events from the current session. The current
+	// session prompts and retained task prompts must therefore share a suffix.
+	// Match that suffix from newest to oldest so repeated prompts such as
+	// "continue" keep their identity by position instead of by text alone.
+	eventIndex := len(prompts) - 1
+	sessionIndex := len(sessionPrompts) - 1
+	mappedSessionIndex := -1
+	for eventIndex >= 0 && sessionIndex >= 0 && prompts[eventIndex] == sessionPrompts[sessionIndex].Text {
+		if eventIndex == selected {
+			mappedSessionIndex = sessionIndex
+		}
+		eventIndex--
+		sessionIndex--
+	}
+	if mappedSessionIndex < 0 {
 		return "", fmt.Errorf("selected message was not found in the current source session")
 	}
-	if matches > 1 {
-		return "", fmt.Errorf("selected message is ambiguous in the current source session")
-	}
+	parentID := sessionPrompts[mappedSessionIndex].ParentID
 	if parentID == "" {
 		return "", fmt.Errorf("selected message has no parent context")
 	}

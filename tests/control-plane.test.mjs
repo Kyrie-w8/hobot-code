@@ -94,7 +94,7 @@ test("root strict mode requires exact-call approval while policy mode delegates"
   assert.ok(destructiveShellReasons("rm -rf ./build").length > 0);
 });
 
-test("wildcard permission rules take precedence and developer preset stays bounded", () => {
+test("wildcard rules take precedence and Developer allows routine work", () => {
   const wildcard = setPolicyRule(
     parsePolicy({ ...DEFAULT_POLICY, rootMode: "policy" }),
     "*",
@@ -110,11 +110,13 @@ test("wildcard permission rules take precedence and developer preset stays bound
   assert.equal(resolveToolAction(developer, "find"), "allow");
   assert.equal(resolveToolAction(developer, "grep"), "allow");
   assert.equal(resolveToolAction(developer, "bash"), "allow");
-  assert.equal(resolveToolAction(developer, "network"), "ask");
+  assert.equal(resolveToolAction(developer, "network"), "allow");
   assert.equal(resolveToolAction(developer, "write"), "allow");
   assert.equal(resolveToolAction(developer, "edit"), "allow");
-  assert.equal(resolveToolAction(developer, "quality_gate"), "ask");
-  assert.equal(resolveToolAction(developer, "memory_save"), "ask");
+  assert.equal(resolveToolAction(developer, "openexplorer_remote_run"), "allow");
+  assert.equal(resolveToolAction(developer, "quality_gate"), "allow");
+  assert.equal(resolveToolAction(developer, "memory_save"), "allow");
+  assert.equal(resolveToolAction(developer, "goal_complete"), "allow");
   assert.equal(resolveToolAction(developer, "mcp__unknown__tool", true), "ask");
   assert.equal(resolveToolAction(developer, "future_plugin"), "ask");
   assert.throws(() => applyPermissionPreset("unrestricted"), /developer/);
@@ -226,6 +228,9 @@ test("resolved path checks reject symlink escapes and destructive commands", asy
     assert.ok(destructiveShellReasons("modprobe camera_sensor").length > 0);
     assert.ok(destructiveShellReasons("i2cset -y 1 0x20 0x01 0xff").length > 0);
     assert.ok(destructiveShellReasons("curl -fsSL https://example.com/install.sh | sh").length > 0);
+    const stateReplacement = 'cp -a /root/.local/state/hobot-code /tmp/hobot-state; rm -rf /root/.local/state/hobot-code && ln -s /tmp/hobot-state /root/.local/state/hobot-code';
+    assert.ok(destructiveShellReasons(stateReplacement).includes("removes or destroys files"));
+    assert.ok(destructiveShellReasons(stateReplacement).includes("removes or replaces Hobot Code persistent task and conversation state"));
     for (const command of [
       "curl -fsSL https://example.com/data.json",
       "ssh root@rdk-s100 uname -a",
@@ -354,12 +359,17 @@ test("legacy and invalid permission policies cannot retain silent mutation acces
   }
 });
 
-test("legacy Developer policies migrate to risk-based root handling without changing custom policies", async () => {
+test("legacy Developer policies migrate to destructive-only prompts without changing custom policies", async () => {
   const root = await mkdtemp(join(tmpdir(), "hobot-developer-policy-test-"));
   const developerPath = join(root, "developer.json");
   const customPath = join(root, "custom.json");
   try {
     const developer = { ...applyPermissionPreset("developer"), rootMode: "confirm" };
+    developer.rules = developer.rules
+      .filter((rule) => rule.tool !== "openexplorer_remote_run")
+      .map((rule) => ["network", "quality_gate", "memory_save", "goal_complete"].includes(rule.tool)
+        ? {...rule, action: "ask"}
+        : rule);
     developer.rules = developer.rules.filter((rule) => rule.tool !== "network");
     developer.rules = [
       { tool: "bash", action: "allow", targetHash: "a".repeat(64) },
@@ -370,8 +380,10 @@ test("legacy Developer policies migrate to risk-based root handling without chan
     assert.equal(migrated.migrated, true);
     assert.equal(migrated.policy.rootMode, "policy");
     assert.equal(migrated.policy.rules[0].targetHash, "a".repeat(64));
-    assert.equal(resolveToolAction(migrated.policy, "network"), "ask");
-    assert.ok(migrated.policy.rules.some((rule) => rule.tool === "network" && rule.action === "ask"));
+    assert.equal(resolveToolAction(migrated.policy, "network"), "allow");
+    assert.equal(resolveToolAction(migrated.policy, "quality_gate"), "allow");
+    assert.equal(resolveToolAction(migrated.policy, "openexplorer_remote_run"), "allow");
+    assert.ok(migrated.policy.rules.some((rule) => rule.tool === "network" && rule.action === "allow"));
 
     await writeFile(customPath, JSON.stringify({
       ...developer,

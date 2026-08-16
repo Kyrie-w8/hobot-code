@@ -1812,6 +1812,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ? "network access is disabled by the task's OS network boundary"
           : `network access is denied by ${permissionPolicyPath()}` };
       }
+      if (event.toolName === "openexplorer_remote_run") {
+        const remoteSafety = resolveShellSafety(String(event.input.command ?? ""), networkAction);
+        approvalReasons.push(...remoteSafety.approvalReasons);
+        canAllowTaskNetwork = canAllowTaskNetwork || remoteSafety.rememberNetworkCall;
+      }
       if (networkAction === "ask" && !trustedBuildHost) {
         approvalReasons.push("the remote build host requires network access");
         canTrustBuildHost = event.toolName === "openexplorer_build_host";
