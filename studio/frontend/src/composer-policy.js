@@ -14,3 +14,13 @@ export function composerIsBlocked(status) {
 export function shouldSubmitComposer(key, shiftKey, isComposing) {
   return key === 'Enter' && !shiftKey && !isComposing;
 }
+
+export function turnCancellationMode(status) {
+  if (status === 'queued') return 'stop';
+  if (['starting', 'running', 'waiting'].includes(status)) return 'abort';
+  return undefined;
+}
+
+export function shouldCancelTurnShortcut(key, isComposing, repeat, status) {
+  return key === 'Escape' && !isComposing && !repeat && Boolean(turnCancellationMode(status));
+}

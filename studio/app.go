@@ -1127,6 +1127,16 @@ func (app *App) StopTask(boardID, taskID string) error {
 	return client.StopTask(ctx, taskID)
 }
 
+func (app *App) AbortTask(boardID, taskID string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.Abort(ctx, taskID)
+}
+
 func (app *App) DeleteTasks(boardID string, taskIDs []string) error {
 	if len(taskIDs) == 0 || len(taskIDs) > 200 {
 		return fmt.Errorf("delete between 1 and 200 conversations at a time")

@@ -308,7 +308,7 @@ hobot persistent
 ### 6.2 基本交互
 
 - 直接输入自然语言需求并按 `Enter`。
-- `Escape` 中断当前模型或工具调用。
+- `Escape` 中断当前模型或工具调用，保留对话和 Agent worker；输入框旁的方形按钮与该快捷键行为一致。需要释放 worker 时使用 **Task settings → Stop Agent**。
 - 输入区为空时按 `Ctrl+D` 退出。
 - `Ctrl+T` 显示或隐藏 thinking。
 - `/model` 切换模型，`/settings` 修改 Pi 设置。

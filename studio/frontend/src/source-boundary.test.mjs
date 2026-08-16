@@ -30,6 +30,14 @@ test('production frontend source does not publish private board addresses', asyn
   assert.deepEqual(violations, [], 'board addresses must come from user configuration, not the shipped UI');
 });
 
+test('Studio stops active turns without terminating their Agent workers', async () => {
+  const source = await readFile(new URL('App.tsx', sourceDirectory), 'utf8');
+
+  assert.match(source, /shouldCancelTurnShortcut\(event\.key, event\.isComposing, event\.repeat, selectedTask\.status\)/);
+  assert.match(source, /if \(mode === 'stop'\) await api\.stopTask\(boardId, selectedTask\.id\);\s*else await api\.abortTask\(boardId, selectedTask\.id\);/);
+  assert.match(source, /Stop current turn \(Esc\)/);
+});
+
 test('provider API keys remain transient and outside React state or browser storage', async () => {
   const source = await readFile(new URL('App.tsx', sourceDirectory), 'utf8');
   const providerDialog = source.slice(source.indexOf('function ProviderDialog('), source.indexOf('function ExtensionCenterDialog('));

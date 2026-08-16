@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
-import {composerIsBlocked, composerMode, shouldSubmitComposer, terminalStatuses} from './composer-policy.js';
+import {composerIsBlocked, composerMode, shouldCancelTurnShortcut, shouldSubmitComposer, terminalStatuses, turnCancellationMode} from './composer-policy.js';
 import {buildConversation, elapsedLabel, eventRetentionPresentation, recentEventsAfter} from './conversation-model.js';
 import {approvalPresentation, approvalResponse} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
@@ -602,11 +602,28 @@ function App() {
   const canChangeSandbox = Boolean(connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') && selectedTask && (draftSelected || selectedTask.status === 'queued' || terminalStatuses.has(selectedTask.status)) && !busy && connectionState === 'online');
   const canChangeNetwork = Boolean(connection?.capabilities?.capabilities.includes('tasks.network.v1') && selectedTask && (draftSelected || selectedTask.status === 'queued' || terminalStatuses.has(selectedTask.status)) && !busy && connectionState === 'online');
   const canStopBoundaryWorker = Boolean(selectedTask?.status === 'idle' && connectionState === 'online');
-  const canStopTask = Boolean(selectedTask && ['queued', 'starting', 'running', 'waiting', 'stopping'].includes(selectedTask.status));
+  const cancellationMode = turnCancellationMode(selectedTask?.status);
+  const canCancelCurrentWork = Boolean(cancellationMode);
   const latestConversationItem = conversation[conversation.length - 1];
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
     ? optimisticPrompt.time
     : latestConversationItem?.kind === 'user' ? latestConversationItem.time : selectedTask?.updatedAt;
+
+  useEffect(() => {
+    if (!selectedTask || !cancellationMode || busy || connectionState !== 'online') return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (!shouldCancelTurnShortcut(event.key, event.isComposing, event.repeat, selectedTask.status)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const textControl = target?.closest('input, textarea, select, [contenteditable="true"]');
+      if (textControl && textControl !== composerRef.current) return;
+      if (document.querySelector('.modal-backdrop, .appearance-menu, .row-menu')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void cancelCurrentWork();
+    };
+    document.addEventListener('keydown', cancelOnEscape, true);
+    return () => document.removeEventListener('keydown', cancelOnEscape, true);
+  }, [busy, cancellationMode, connectionState, selectedTask?.id, selectedTask?.status]);
 
   useEffect(() => {
     setDeploymentStatus(null);
@@ -689,6 +706,25 @@ function App() {
     setError('');
     try {
       await api.stopTask(boardId, selectedTask.id);
+      await refreshTasks();
+    } catch (reason) {
+      if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelCurrentWork() {
+    if (!selectedTask || !boardId) return;
+    const mode = turnCancellationMode(selectedTask.status);
+    if (!mode) return;
+    const sourceBoardId = boardId;
+    const sourceTaskId = selectedTask.id;
+    setBusy(true);
+    setError('');
+    try {
+      if (mode === 'stop') await api.stopTask(boardId, selectedTask.id);
+      else await api.abortTask(boardId, selectedTask.id);
       await refreshTasks();
     } catch (reason) {
       if (isCurrentTarget(sourceBoardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(String(reason));
@@ -1328,7 +1364,7 @@ function App() {
                 {connection?.capabilities?.capabilities.some((capability) => ['models.health.v1', 'models.conformance.v1', 'models.runtime-probe.v1', 'models.rdk-probe.v1'].includes(capability)) && <button className={`model-health-button model-readiness-button compact ${modelReadiness.tone}`} type="button" title={`${modelReadiness.label}: ${modelReadiness.title}`} aria-label={`Model readiness: ${modelReadiness.label}`} onClick={() => setShowModelReadiness(true)} disabled={!effectiveModel}>{checkingModel || verifyingModel || modelQualificationStage ? <LoaderCircle size={12} className="spin" /> : modelReadiness.tone === 'failed' ? <AlertTriangle size={12} /> : <ShieldCheck size={12} />}</button>}
 				<button className={`access-mode-button ${accessPresentation.tone}`} type="button" title={`${draftSelected ? `${selectedTask.workspaceMode === 'worktree' ? 'Isolated workspace' : 'Shared workspace'} · ` : ''}${accessPresentation.summary}`} aria-label="Task settings" onClick={() => setShowAccessSettings(true)}><ShieldCheck size={13} /><span>{draftSelected ? 'Task settings' : accessPresentation.label}</span><ChevronDown size={12} /></button>
 				<span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : workspaceInspectionLoading ? 'Checking workspace' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
-                {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canStopTask ? <button className="send-button stop-mode" type="button" title="Stop" onClick={stopTask} disabled={busy || selectedTask.status === 'stopping'}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
+                {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canCancelCurrentWork ? <button className="send-button stop-mode" type="button" title={cancellationMode === 'stop' ? 'Cancel queued task (Esc)' : 'Stop current turn (Esc)'} aria-label={cancellationMode === 'stop' ? 'Cancel queued task' : 'Stop current turn'} onClick={cancelCurrentWork} disabled={busy}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
             </form>
           </div>

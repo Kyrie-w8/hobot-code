@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {composerIsBlocked, composerMode, shouldSubmitComposer} from './composer-policy.js';
+import {composerIsBlocked, composerMode, shouldCancelTurnShortcut, shouldSubmitComposer, turnCancellationMode} from './composer-policy.js';
 
 test('Enter submits while Shift+Enter and IME composition keep editing', () => {
   assert.equal(shouldSubmitComposer('Enter', false, false), true);
@@ -29,4 +29,18 @@ test('composer blocks transient and busy task states', () => {
   for (const status of ['idle', 'stopped', 'failed', 'interrupted']) {
     assert.equal(composerIsBlocked(status), false);
   }
+});
+
+test('Escape aborts only an active turn while queued work is cancelled', () => {
+  assert.equal(turnCancellationMode('queued'), 'stop');
+  for (const status of ['starting', 'running', 'waiting']) assert.equal(turnCancellationMode(status), 'abort');
+  for (const status of ['idle', 'stopping', 'stopped', 'failed', 'interrupted']) assert.equal(turnCancellationMode(status), undefined);
+
+  assert.equal(shouldCancelTurnShortcut('Escape', false, false, 'running'), true);
+  assert.equal(shouldCancelTurnShortcut('Escape', false, false, 'waiting'), true);
+  assert.equal(shouldCancelTurnShortcut('Escape', false, false, 'queued'), true);
+  assert.equal(shouldCancelTurnShortcut('Escape', true, false, 'running'), false);
+  assert.equal(shouldCancelTurnShortcut('Escape', false, true, 'running'), false);
+  assert.equal(shouldCancelTurnShortcut('Enter', false, false, 'running'), false);
+  assert.equal(shouldCancelTurnShortcut('Escape', false, false, 'idle'), false);
 });
