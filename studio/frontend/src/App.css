@@ -418,6 +418,9 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .access-settings-grid label > small { grid-column: 2; }
 .access-settings-note { display: flex; align-items: flex-start; gap: 7px; margin: 14px 20px 0; padding: 9px 10px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text-muted); font-size: 10px; line-height: 1.45; }
 .access-settings-note svg { flex: 0 0 auto; margin-top: 1px; }
+.access-settings-note.boundary-locked { align-items: center; }
+.access-settings-note.boundary-locked > span { flex: 1; }
+.access-settings-note.boundary-locked > button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; font-size: 10px; }
 .access-settings-note.danger { background: rgba(229, 113, 113, 0.08); color: var(--red); }
 .approval-bar { display: flex; max-height: min(360px, 42vh); flex-direction: column; gap: 9px; overflow: auto; margin-bottom: 8px; padding: 12px; border: 1px solid rgba(215, 180, 107, 0.38); border-radius: var(--radius); background: rgba(215, 180, 107, 0.08); }
 .approval-heading { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--text); }
