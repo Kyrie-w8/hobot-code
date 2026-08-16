@@ -127,7 +127,10 @@ export function destructiveShellReasons(command) {
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?cmake\s+--install\b/i, "installs build output into the system"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:pip3?|npm|pnpm|yarn|gem)\b[^;&|\n]*\b(?:install|add)\b[^;&|\n]*(?:--global\b|-g\b)/i, "installs a global language package"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:docker|podman)\s+(?:container\s+)?(?:rm|kill|stop|run\b[^;&|\n]*(?:--privileged\b|--pid\s*=\s*host\b|-v\s*\/(?:\s|:)|--volume\s*=\s*\/(?:\s|:)))/i, "performs a privileged or destructive container operation"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:mount|umount|swapon|swapoff)\b/i, "changes mounted filesystems or swap"],
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:umount|swapon|swapoff)\b/i, "changes mounted filesystems or swap"],
+    // Bare `mount` lists current mounts. Arguments can select or change a
+    // mount, so keep every non-bare invocation behind confirmation.
+    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?mount\b\s+(?![|;&)\n])/i, "changes mounted filesystems or swap"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:insmod|modprobe|rmmod)\b/i, "changes loaded kernel modules"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?sysctl\s+(?:-w|--write)\b/i, "changes kernel runtime settings"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:useradd|userdel|usermod|groupadd|groupdel|groupmod|passwd|chpasswd|visudo)\b/i, "changes users, groups, or authentication"],

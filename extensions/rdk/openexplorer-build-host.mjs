@@ -25,36 +25,58 @@ export function normalizeRemoteBuildCommand(value) {
   return command;
 }
 
+export function shellUsesSSHHost(command, target) {
+  const normalized = normalizeBuildHostTarget(target);
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `(?:^|[;&|()\\n]\\s*|\\s)(?:sudo\\s+)?(?:\\/[^\\s;|]+\\/)?ssh\\b[^;&|\\n]*?(?:^|\\s)["']?${escaped}["']?(?=\\s|[;&|)\\n]|$)`,
+    "i",
+  );
+  return pattern.test(String(command ?? ""));
+}
+
 export function buildHostStatePath(agentDirectory = process.env.HOBOT_CODING_AGENT_DIR) {
   const root = String(agentDirectory ?? "").trim();
   if (!root || !root.startsWith("/")) throw new Error("HOBOT_CODING_AGENT_DIR must be an absolute path");
   return resolve(root, "openexplorer-build-host.json");
 }
 
-export async function loadSelectedBuildHost(path = buildHostStatePath()) {
+export async function loadBuildHostState(path = buildHostStatePath()) {
   try {
     const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 || info.size <= 0 || info.size > 4096) {
       throw new Error("OpenExplorer build host state failed private-file checks");
     }
     const value = JSON.parse(await readFile(path, "utf8"));
-    if (value?.schemaVersion !== 1 || Object.keys(value).some((key) => !["schemaVersion", "target", "updatedAt"].includes(key))) {
+    const allowedKeys = value?.schemaVersion === 1
+      ? ["schemaVersion", "target", "updatedAt"]
+      : ["schemaVersion", "target", "updatedAt", "verifiedAt"];
+    if (![1, 2].includes(value?.schemaVersion) || Object.keys(value).some((key) => !allowedKeys.includes(key))) {
       throw new Error("OpenExplorer build host state has an unsupported format");
     }
-    return normalizeBuildHostTarget(value.target);
+    const target = normalizeBuildHostTarget(value.target);
+    const verifiedAt = value.schemaVersion === 2 && value.verifiedAt !== undefined
+      ? String(value.verifiedAt)
+      : undefined;
+    if (verifiedAt !== undefined && !Number.isFinite(Date.parse(verifiedAt))) {
+      throw new Error("OpenExplorer build host state has an invalid verification timestamp");
+    }
+    return { target, verifiedAt };
   } catch (error) {
     if (error?.code === "ENOENT") return undefined;
     throw error;
   }
 }
 
-export async function saveSelectedBuildHost(target, path = buildHostStatePath()) {
-  const normalized = normalizeBuildHostTarget(target);
+export async function loadSelectedBuildHost(path = buildHostStatePath()) {
+  return (await loadBuildHostState(path))?.target;
+}
+
+async function writeBuildHostState(value, path) {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await access(directory, constants.R_OK | constants.W_OK);
   const temporary = `${path}.new.${process.pid}`;
-  const value = { schemaVersion: 1, target: normalized, updatedAt: new Date().toISOString() };
   try {
     await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
     await chmod(temporary, 0o600);
@@ -63,7 +85,41 @@ export async function saveSelectedBuildHost(target, path = buildHostStatePath())
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+export async function saveSelectedBuildHost(target, path = buildHostStatePath()) {
+  const normalized = normalizeBuildHostTarget(target);
+  const current = await loadBuildHostState(path);
+  await writeBuildHostState({
+    schemaVersion: 2,
+    target: normalized,
+    updatedAt: new Date().toISOString(),
+    ...(current?.target === normalized && current.verifiedAt ? { verifiedAt: current.verifiedAt } : {}),
+  }, path);
   return normalized;
+}
+
+export async function markBuildHostVerified(target, path = buildHostStatePath()) {
+  const normalized = normalizeBuildHostTarget(target);
+  const current = await loadBuildHostState(path);
+  if (!current || current.target !== normalized) {
+    throw new Error("OpenExplorer build host changed before verification completed");
+  }
+  const verifiedAt = new Date().toISOString();
+  await writeBuildHostState({
+    schemaVersion: 2,
+    target: normalized,
+    updatedAt: verifiedAt,
+    verifiedAt,
+  }, path);
+  return verifiedAt;
+}
+
+export async function isBuildHostVerified(target, path = buildHostStatePath()) {
+  if (!target) return false;
+  const normalized = normalizeBuildHostTarget(target);
+  const current = await loadBuildHostState(path);
+  return Boolean(current?.target === normalized && current.verifiedAt);
 }
 
 function sshArguments(target) {

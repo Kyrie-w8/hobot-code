@@ -489,7 +489,9 @@ Host openexplorer-builder
 
 私钥必须只保存在板端并设置为 `0600`；不要把私钥、密码或 token 放入 Prompt。构建机的 `authorized_keys` 建议为该公钥增加 `restrict`，以关闭转发、Agent、X11 和 PTY 能力，同时保留 OpenExplorer 工作流需要的远程命令执行。
 
-当 Agent 首次进入主机侧 Skill 阶段时，`openexplorer_build_host` 会要求用户输入 SSH 别名或 `user@hostname`，将选择保存为任务私有状态，并验证远端架构；CUDA Skill 还会检查 `nvidia-smi`。后续命令通过 `openexplorer_remote_run` 执行，每条命令仍由板端权限策略审批。任务必须使用 **Network: Network/shared**；`model-only` 或 `offline` 会阻止构建机连接。
+当 Agent 首次进入主机侧 Skill 阶段时，`openexplorer_build_host` 会要求用户输入 SSH 别名或 `user@hostname`，将选择保存为任务私有状态，并验证远端架构；CUDA Skill 还会检查 `nvidia-smi`。首次成功探测后，同一任务对同一构建机的后续探测不再重复请求通用网络确认；更换构建机或首次探测失败时仍会确认。后续命令通过 `openexplorer_remote_run` 执行，每条命令仍由板端权限策略审批。任务必须使用 **Network: Network/shared**；`model-only` 或 `offline` 会阻止构建机连接。
+
+选择构建机后，Agent 不得再用通用 `bash` 直接 `ssh` 到该目标，否则会绕过任务级主机验证与远程命令审批。Hobot Code 会拒绝这类调用并要求 Agent 改用上述两个专用工具。
 
 Skill 指令从 S600 的外部包加载，但 Hobot Code 不会自动把 OpenExplorer 源码、Skill 脚本、模型或校准数据复制到构建机。进入远端阶段前，Agent 必须向用户确认构建机上的 OpenExplorer 工作目录、模型路径和输出目录；缺少其中任何一项时应停下来询问，不能根据目录名猜测。
 

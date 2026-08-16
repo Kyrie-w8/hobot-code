@@ -58,11 +58,14 @@ import {
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
 import {
+  isBuildHostVerified,
   loadSelectedBuildHost,
+  markBuildHostVerified,
   normalizeBuildHostTarget,
   probeOpenExplorerBuildHost,
   runOpenExplorerRemoteCommand,
   saveSelectedBuildHost,
+  shellUsesSSHHost,
 } from "./openexplorer-build-host.mjs";
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
@@ -1218,6 +1221,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         if (!result.ok || !result.compatible) {
           throw new Error(result.stderr || `OpenExplorer build host ${target} is incompatible`);
         }
+        await markBuildHostVerified(target);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       },
     });
@@ -1734,6 +1738,15 @@ export default function rdkExtension(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     // Policies are shared across processes; read the authoritative file for every call.
     await refreshPermissionPolicy();
+    if (openExplorerSkillPack && event.toolName === "bash") {
+      const selectedBuildHost = await loadSelectedBuildHost();
+      if (selectedBuildHost && shellUsesSSHHost(String(event.input.command ?? ""), selectedBuildHost)) {
+        return {
+          block: true,
+          reason: "Use openexplorer_build_host to probe the selected build host and openexplorer_remote_run for its commands; direct SSH would bypass task-scoped host verification",
+        };
+      }
+    }
     if (sideAgentMode && ["memory_save", "goal_progress", "goal_complete"].includes(event.toolName)) {
       return { block: true, reason: `${event.toolName} cannot write parent state from an ephemeral side agent` };
     }
@@ -1784,6 +1797,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     if (event.toolName === "openexplorer_remote_run" || (event.toolName === "openexplorer_build_host" && event.input.action === "probe")) {
       const offlineNetwork = sandboxRuntimeStatus().network === "offline";
+      const requestedTarget = event.input.target
+        ? normalizeBuildHostTarget(event.input.target)
+        : await loadSelectedBuildHost();
+      const verifiedBuildHost = await isBuildHostVerified(requestedTarget);
       const networkAction = effectiveNetworkAction(
         resolveToolCallAction(permissionPolicy, "network", event.input),
         offlineNetwork ? "offline" : "shared",
@@ -1793,7 +1810,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           ? "network access is disabled by the task's OS network boundary"
           : `network access is denied by ${permissionPolicyPath()}` };
       }
-      if (networkAction === "ask") {
+      if (networkAction === "ask" && !verifiedBuildHost) {
         approvalReasons.push("the remote build host requires network access");
         rememberTools.push("network");
       }

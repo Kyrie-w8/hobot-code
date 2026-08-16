@@ -256,6 +256,17 @@ test("resolved path checks reject symlink escapes and destructive commands", asy
     assert.equal(remoteExecution.rememberNetworkCall, false);
     const readOnlyStatus = 'cd /root/ssd/yolo_bench && tail -5 progress.log 2>/dev/null; echo ===; wc -l results.csv 2>/dev/null; ps aux | grep -E "run_bench|hrt_model" | grep -v grep | head -3';
     assert.deepEqual(destructiveShellReasons(readOnlyStatus), []);
+    const readOnlyMountProbe = 'touch /root/.local/state/hobot-code/test_write 2>&1 && echo "WRITABLE" || echo "READONLY"; mount | grep -E " / " | head -2';
+    assert.deepEqual(destructiveShellReasons(readOnlyMountProbe), []);
+    for (const command of [
+      "mount /dev/sda1 /mnt",
+      "mount -o remount,rw /",
+      "umount /mnt",
+      "swapon /swapfile",
+      "swapoff -a",
+    ]) {
+      assert.ok(destructiveShellReasons(command).includes("changes mounted filesystems or swap"), `expected mount mutation classification: ${command}`);
+    }
     const toolHelp = "/usr/hobot/bin/hrt_model_exec --help 2>&1 | head -60; echo ===; /usr/hobot/bin/hrt_model_exec perf --help 2>&1 | head -60";
     assert.deepEqual(destructiveShellReasons(toolHelp), []);
     assert.deepEqual(destructiveShellReasons("systemctl status hobot-agentd"), []);
