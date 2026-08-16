@@ -928,7 +928,13 @@ hobot update --version <version> --allow-downgrade
 
 更新时如果存在前台 TUI、persistent、自动化、Studio bridge 或活动后台任务，安装器会拒绝继续。先处理或停止相关工作，避免升级中破坏会话。
 
-Mac 版需要安装对应 Release 的新 DMG。只更新板端不会自动替换 Mac 应用，所以右上角仍可能显示旧 Studio 版本。
+Mac Studio 右上角的版本号会打开 **Version & updates**。该页面独立检查两个发行面：
+
+- **Studio for Mac** 从固定的 Hobot Code GitHub stable Release 检查新版本。只有版本化 ARM64 DMG、同名 SHA-256 文件和官方 Release 地址同时匹配时才显示下载按钮；点击后由默认浏览器直接下载对应 DMG。安装仍由 macOS 和 Gatekeeper 控制，更新 Studio 不会停止板端任务。
+- **Board service** 通过当前 SSH 连接调用板端事务更新。存在活动任务时只阻止板端按钮，不影响 Studio 更新。
+- 两侧都有新版本时显示 **Update board, then Studio**。它先完成板端校验、更新和自动重连，再下载 Studio DMG；活动任务结束前该按钮不可用。
+
+Mac 应用目前不会在运行中自行覆盖 `/Applications/Hobot Code.app`。下载新 DMG 后，将新版拖入 Applications 并重新打开；未签名的本地开发构建不应被当作公开更新来源。只更新板端不会替换 Mac 应用，所以右上角仍可能显示旧 Studio 版本。
 
 ### 18.2 回滚
 
@@ -1077,7 +1083,7 @@ hobot task restart <task-id> -- "继续完成原任务，并先检查当前工�
 
 ### 20.13 Mac 仍显示旧版本
 
-板端 `hobot update` 只升级板端。Mac 右上角显示的是 Studio 自身版本，必须重新下载安装对应版本的 DMG，并确认启动的是 `/Applications/Hobot Code.app`，而不是 Downloads 中的旧副本。
+板端 `hobot update` 只升级板端。点击 Mac 右上角版本号，在 **Studio for Mac** 中选择 **Check Studio**；发现新版后点击下载并用 DMG 替换 Applications 中的旧版。若仍显示旧版本，确认启动的是 `/Applications/Hobot Code.app`，而不是 Downloads 中的旧副本。
 
 ## 21. CLI 命令参考
 

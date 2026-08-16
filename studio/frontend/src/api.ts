@@ -1,4 +1,4 @@
-import type {AddManagedProviderRequest, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventEnvelope, EventPage, ExtensionCatalog, ForkTaskRequest, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, SupportBundle, SystemSnapshot, Task, TaskPage, WorkspaceApplyResult, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventEnvelope, EventPage, ExtensionCatalog, ForkTaskRequest, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskPage, WorkspaceApplyResult, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 
 export type TaskWatchStatus = {
   boardId: string;
@@ -56,6 +56,8 @@ const mockEvents = (taskId: string): EventPage => ({
 
 const mockBackend: Backend = {
   GetAppVersion: async () => '0.27.0',
+  CheckStudioUpdate: async (): Promise<StudioUpdateCheck> => ({status: 'available', installedVersion: '0.27.0', availableVersion: '0.28.0', message: 'A signed macOS update is ready. Downloading it does not interrupt board tasks.', releaseUrl: 'https://github.com/bryant-w/hobot-code/releases/tag/v0.28.0'}),
+  OpenStudioUpdate: async () => undefined,
   ListBoards: async () => [mockBoard],
   ProbeBoard: async (board: Board): Promise<Connection> => ({board, connected: true, daemon: {version: '0.27.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 4, capabilities: ['extensions.catalog.v1', 'events.normalized.v3', 'events.normalized.v4', 'events.items.v1', 'events.retention.v1', 'tasks.queue.v1', 'tasks.failure.v1', 'workspaces.changes.v1', 'workspaces.isolation.v1', 'workspaces.write-leases.v1', 'system.snapshot', 'tasks.lifecycle', 'tasks.page', 'events.page'], maximumActiveTasks: 3, maximumRetainedTasks: 100}, snapshot: {capturedAt: now.toISOString(), board: 'D-Robotics RDK S600', boardId: 's600', hostname: 'drobot', rdkOsVersion: '5.1.0', kernel: '6.1.158-rt58', architecture: 'arm64', cpuCores: 18, loadAverage: [], memory: {totalBytes: 0, availableBytes: 0}, disk: {path: '/root', totalBytes: 0, availableBytes: 0}, thermalZones: [], bpuDevices: [], rdkUtilities: {}, uptimeSeconds: 0}, compatibility: {status: 'supported', summary: 'Board and Studio capabilities are compatible.', appVersion: '0.27.0', agentdVersion: '0.27.0', protocol: 1, eventSchema: 4, boardId: 's600', rdkOsVersion: '5.1.0', validatedTarget: true, issues: []}}),
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
@@ -141,6 +143,8 @@ const backend = (): Backend => window.go?.main?.App ?? mockBackend;
 export const isMock = () => !window.go?.main?.App;
 export const api = {
   appVersion: (): Promise<string> => backend().GetAppVersion(),
+  checkStudioUpdate: (): Promise<StudioUpdateCheck> => backend().CheckStudioUpdate(),
+  openStudioUpdate: () => backend().OpenStudioUpdate(),
   listBoards: (): Promise<Board[]> => backend().ListBoards(),
   probeBoard: (board: Board): Promise<Connection> => backend().ProbeBoard(board),
   saveBoard: (board: Board): Promise<Board> => backend().SaveBoard(board),

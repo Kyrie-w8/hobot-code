@@ -65,6 +65,7 @@ func (client *Client) Diagnostics(ctx context.Context) (DiagnosticReport, error)
 	if err := client.Call(ctx, "diagnostics.inspect", struct{}{}, &report); err != nil {
 		return report, err
 	}
+	normalizeLegacyDiagnosticReport(&report)
 	if err := validateDiagnosticReport(report); err != nil {
 		return DiagnosticReport{}, fmt.Errorf("board returned invalid diagnostics: %w", err)
 	}
@@ -82,6 +83,7 @@ func (client *Client) RepairDiagnostics(ctx context.Context, action string, conf
 	if err := client.Call(ctx, "diagnostics.repair", map[string]any{"action": action, "confirm": true}, &result); err != nil {
 		return result, err
 	}
+	normalizeLegacyDiagnosticReport(&result.Report)
 	if err := validateDiagnosticRepairResult(result); err != nil {
 		return DiagnosticRepairResult{}, fmt.Errorf("board returned invalid diagnostic repair result: %w", err)
 	}

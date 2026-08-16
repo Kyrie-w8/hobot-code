@@ -1,11 +1,22 @@
 package hobot
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	maximumDiagnosticChecks  = 256
 	maximumDiagnosticRepairs = 8
 )
+
+func normalizeLegacyDiagnosticReport(report *DiagnosticReport) {
+	for index := range report.Checks {
+		if strings.HasPrefix(report.Checks[index].Name, "utility-") {
+			report.Checks[index].Name = strings.ReplaceAll(report.Checks[index].Name, "_", "-")
+		}
+	}
+}
 
 func validateDiagnosticReport(report DiagnosticReport) error {
 	if report.SchemaVersion != 1 || report.CapturedAt.IsZero() || len(report.Checks) == 0 || len(report.Checks) > maximumDiagnosticChecks {

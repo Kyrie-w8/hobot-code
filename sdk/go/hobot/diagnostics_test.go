@@ -72,3 +72,24 @@ func TestDiagnosticReportAcceptsCanonicalUtilityNames(t *testing.T) {
 		t.Fatal("non-canonical utility check was accepted")
 	}
 }
+
+func TestLegacyUtilityNamesAreCanonicalizedBeforeValidation(t *testing.T) {
+	report := validDiagnosticReport()
+	report.Checks = append(report.Checks, SupportCheck{Name: "utility-hrt_model_exec", Status: "pass", Summary: "available"})
+	report.Summary.Pass++
+
+	normalizeLegacyDiagnosticReport(&report)
+	if got := report.Checks[len(report.Checks)-1].Name; got != "utility-hrt-model-exec" {
+		t.Fatalf("legacy utility name normalized to %q", got)
+	}
+	if err := validateDiagnosticReport(report); err != nil {
+		t.Fatalf("normalized legacy report was rejected: %v", err)
+	}
+
+	report.Checks = append(report.Checks, SupportCheck{Name: "utility-hrt-model-exec", Status: "pass", Summary: "available"})
+	report.Summary.Pass++
+	normalizeLegacyDiagnosticReport(&report)
+	if err := validateDiagnosticReport(report); err == nil {
+		t.Fatal("normalization hid duplicate utility checks")
+	}
+}

@@ -10,11 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "katex": "0.16.22",
     "lucide-react": "^0.468.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "8.0.7",
-    "remark-gfm": "3.0.1"
+    "rehype-katex": "6.0.3",
+    "remark-gfm": "3.0.1",
+    "remark-math": "5.1.1"
   },
   "devDependencies": {
     "@types/react": "^18.0.17",

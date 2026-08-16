@@ -760,11 +760,7 @@ func (app *App) OpenExternalURL(rawURL string) error {
 	if err != nil {
 		return err
 	}
-	if app.ctx == nil {
-		return fmt.Errorf("application is not ready")
-	}
-	runtime.BrowserOpenURL(app.ctx, target)
-	return nil
+	return app.openExternalURL(target)
 }
 
 func safeExternalURL(rawURL string) (string, error) {

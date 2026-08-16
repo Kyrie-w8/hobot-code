@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
+import 'katex/dist/katex.min.css';
 import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
@@ -15,7 +16,7 @@ import {buildConversation, elapsedLabel, eventRetentionPresentation, recentEvent
 import {approvalPresentation, approvalResponse} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
-import {markdownRemarkPlugins} from './markdown-config.js';
+import {markdownRehypePlugins, markdownRemarkPlugins} from './markdown-config.js';
 import {effectiveModel as resolveEffectiveModel, modelAcceptsImages} from './model-capabilities.js';
 import {currentModelHealth as resolveCurrentModelHealth} from './model-health.js';
 import {currentModelConformance as resolveCurrentModelConformance} from './model-conformance.js';
@@ -37,7 +38,7 @@ import {includedModelSummary, includedProviderGroups} from './provider-catalog.j
 import {applyTheme, readThemePreference, resolveTheme, saveThemePreference} from './appearance-theme.js';
 import type {ThemePreference} from './appearance-theme.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -97,6 +98,7 @@ function App() {
   const [showProviders, setShowProviders] = useState(false);
   const [supportBundle, setSupportBundle] = useState<SupportBundle | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState('');
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
@@ -176,11 +178,21 @@ function App() {
     const target = boardId;
     if (!target || connectionState !== 'online' || !connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1')) {
       setDiagnostics(null);
+      setDiagnosticsError('');
       return;
     }
+    setDiagnosticsError('');
     api.diagnostics(target).then((report) => {
-      if (activeBoardId.current === target) setDiagnostics(report);
-    }).catch(() => undefined);
+      if (activeBoardId.current === target) {
+        setDiagnostics(report);
+        setDiagnosticsError('');
+      }
+    }).catch((reason) => {
+      if (activeBoardId.current === target) {
+        setDiagnostics(null);
+        setDiagnosticsError(friendlyError(String(reason)));
+      }
+    });
   }, [boardId, connection?.capabilities?.capabilities, connectionState]);
 
   const refreshTasks = useCallback(async (targetBoard = boardId) => {
@@ -1173,13 +1185,18 @@ function App() {
 
   async function openDiagnostics() {
     if (!boardId || diagnosticsLoading) return;
+    const target = boardId;
     setShowDiagnostics(true);
     setDiagnosticsLoading(true);
-    setError('');
+    setDiagnosticsError('');
     try {
-      setDiagnostics(await api.diagnostics(boardId));
+      const report = await api.diagnostics(target);
+      if (activeBoardId.current === target) setDiagnostics(report);
     } catch (reason) {
-      setError(String(reason));
+      if (activeBoardId.current === target) {
+        setDiagnostics(null);
+        setDiagnosticsError(friendlyError(String(reason)));
+      }
     } finally {
       setDiagnosticsLoading(false);
     }
@@ -1333,7 +1350,7 @@ function App() {
       {showExtensions && connection && <ExtensionCenterDialog boardId={connection.board.id} boardName={connection.board.name} boardTarget={snapshot?.boardId || connection.compatibility?.boardId || ''} taskId={selectedTask?.id.startsWith('draft:') ? '' : selectedTask?.id ?? ''} taskName={selectedTask?.name ?? ''} onClose={() => setShowExtensions(false)} />}
       {showProviders && connection && <ProviderDialog boardId={connection.board.id} boardName={connection.board.name} models={models} onChanged={async (result) => {setNotice(result.message); if (result.applied) {const nextModels = await api.models(connection.board.id); setModels(nextModels);}}} onClose={() => setShowProviders(false)} />}
       {supportBundle && <SupportDiagnosticsDialog bundle={supportBundle} onClose={() => setSupportBundle(null)} />}
-      {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
+      {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} failure={diagnosticsError} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
       {showModelReadiness && connection && effectiveModel && <ModelReadinessDialog model={effectiveModel} snapshot={snapshot} capabilities={connection.capabilities?.capabilities ?? []} qualification={qualificationForModel} health={currentModelHealth} conformance={currentModelConformance} runtimeProbe={currentModelRuntimeProbe} rdkProbe={currentModelRDKProbe} rdkMatrix={currentModelRDKMatrix} activeStage={checkingModel ? 'health' : verifyingModel ? 'protocol' : modelQualificationStage} activeProfile={modelQualificationProfile} failure={modelReadinessError} onRunHealth={() => void checkModelHealth()} onRunProtocol={() => void verifyModelConformance()} onRunRuntime={() => void probeModelRuntime()} onRunRDK={(profile) => void probeModelRDK(profile)} onClose={() => setShowModelReadiness(false)} />}
       {showAccessSettings && selectedTask && <AccessSettingsDialog permissionMode={selectedPermissionMode} sandboxMode={selectedSandboxMode} networkMode={selectedNetworkMode} workspaceMode={selectedTask.workspaceMode || 'shared'} summary={accessPresentation.summary} hasWorkspace={Boolean(draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'))} workspaceEligible={Boolean(workspaceInspection?.result?.eligible)} workspaceLoading={workspaceInspectionLoading} workspaceReason={workspaceInspection?.result?.reason || ''} hasSandbox={Boolean(selectedTask.sandboxMode || connection?.capabilities?.capabilities.includes('tasks.sandbox.v1'))} hasNetwork={Boolean(selectedTask.networkMode || connection?.capabilities?.capabilities.includes('tasks.network.v1'))} sandboxAvailable={Boolean(connection?.capabilities?.sandbox?.available)} networkModes={connection?.capabilities?.sandbox?.networkModes ?? []} modelOnly={effectiveModel?.modelOnly === true} canChangePermissions={canChangePermissions} canChangeSandbox={canChangeSandbox} canChangeNetwork={canChangeNetwork} canStopWorker={canStopBoundaryWorker} busy={busy} onWorkspace={changeWorkspaceMode} onPermission={(mode) => void changePermissionMode(mode)} onSandbox={(mode) => void changeSandboxMode(mode)} onNetwork={(mode) => void changeNetworkMode(mode)} onStopWorker={() => void stopTask()} onClose={() => setShowAccessSettings(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
@@ -1394,7 +1411,7 @@ function ToolRow({tool}: {tool: ToolActivity}) {
 }
 
 function MarkdownContent({value}: {value: string}) {
-  return <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} components={{
+  return <div className="markdown"><ReactMarkdown skipHtml remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={{
     a: ({node: _node, href, ...props}: any) => <a {...props} href={href} onClick={(event) => {
       event.preventDefault();
       if (href) void api.openExternalURL(href);
@@ -1678,47 +1695,109 @@ function AboutDialog({appVersion, connection, onInstall, onClose}: {appVersion: 
   const buildLabel = build?.status === 'verified'
     ? `${build.commit?.slice(0, 12) ?? build.binarySha256?.slice(0, 12) ?? 'verified'}${build.dirty ? ' (modified)' : ''}`
     : build?.status ?? 'Not reported';
-  const [check, setCheck] = useState<BoardUpdateCheck | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [failure, setFailure] = useState('');
-  const [success, setSuccess] = useState('');
+  const [studioCheck, setStudioCheck] = useState<StudioUpdateCheck | null>(null);
+  const [boardCheck, setBoardCheck] = useState<BoardUpdateCheck | null>(null);
+  const [checkingStudio, setCheckingStudio] = useState(false);
+  const [checkingBoard, setCheckingBoard] = useState(false);
+  const [openingStudio, setOpeningStudio] = useState(false);
+  const [installingBoard, setInstallingBoard] = useState(false);
+  const [studioFailure, setStudioFailure] = useState('');
+  const [boardFailure, setBoardFailure] = useState('');
+  const [studioSuccess, setStudioSuccess] = useState('');
+  const [boardSuccess, setBoardSuccess] = useState('');
   const boardID = connection?.board.id ?? '';
   const activeTasks = connection?.daemon?.activeTasks ?? 0;
-  const checkUpdate = useCallback(async () => {
-    if (!boardID || checking || installing) return;
-    setChecking(true);
-    setFailure('');
+
+  const checkStudio = useCallback(async () => {
+    setCheckingStudio(true);
+    setStudioFailure('');
     try {
-      setCheck(await api.checkBoardUpdate(boardID));
+      setStudioCheck(await api.checkStudioUpdate());
     } catch (reason) {
-      setFailure(friendlyError(String(reason)));
+      setStudioFailure(friendlyError(String(reason)));
     } finally {
-      setChecking(false);
+      setCheckingStudio(false);
     }
-  }, [boardID, checking, installing]);
-  useEffect(() => {
-    setCheck(null);
-    setSuccess('');
-    if (boardID) void checkUpdate();
-  }, [boardID, connection?.daemon?.version]);
-  const install = async () => {
-    if (installing || check?.status !== 'available' || activeTasks > 0) return;
-    setInstalling(true);
-    setFailure('');
-    setSuccess('');
+  }, []);
+
+  const checkBoard = useCallback(async () => {
+    if (!boardID) return;
+    setCheckingBoard(true);
+    setBoardFailure('');
     try {
-      const result = await onInstall();
-      setCheck({status: 'current', installedVersion: result.installedVersion, availableVersion: result.installedVersion, message: 'This board is up to date.'});
-      setSuccess(result.message);
+      setBoardCheck(await api.checkBoardUpdate(boardID));
     } catch (reason) {
-      setFailure(friendlyError(String(reason)));
+      setBoardFailure(friendlyError(String(reason)));
     } finally {
-      setInstalling(false);
+      setCheckingBoard(false);
+    }
+  }, [boardID]);
+
+  useEffect(() => {
+    void checkStudio();
+  }, [appVersion]);
+
+  useEffect(() => {
+    setBoardCheck(null);
+    setBoardSuccess('');
+    if (boardID) void checkBoard();
+  }, [boardID, connection?.daemon?.version]);
+
+  const openStudioUpdate = async () => {
+    if (openingStudio || studioCheck?.status !== 'available') return;
+    setOpeningStudio(true);
+    setStudioFailure('');
+    setStudioSuccess('');
+    try {
+      await api.openStudioUpdate();
+      setStudioSuccess('The signed macOS DMG download started. Board tasks continue running.');
+    } catch (reason) {
+      setStudioFailure(friendlyError(String(reason)));
+    } finally {
+      setOpeningStudio(false);
     }
   };
-  const updateTone = failure ? 'failed' : check?.status === 'available' ? 'available' : check ? 'current' : 'checking';
-  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose} disabled={installing}><X size={18} /></button></div><div className="about-content"><div className="about-mark">H</div><InfoRow label="Studio" value={appVersion ? `v${appVersion}` : 'Unknown'} /><InfoRow label="Board service" value={connection?.daemon?.version ? `v${connection.daemon.version}` : 'Not connected'} /><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Pi contract" value={build?.piCompatibilitySha256 ? build.piCompatibilitySha256.slice(0, 12) : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /><div className={`board-update-state ${updateTone}`}>{checking || installing ? <LoaderCircle size={17} className="spin" /> : failure ? <AlertTriangle size={17} /> : check?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{installing ? `Installing v${check?.availableVersion ?? ''}` : checking ? 'Checking stable releases' : failure ? 'Update unavailable' : check?.status === 'available' ? `Version ${check.availableVersion} is ready` : check?.status === 'source-older' ? 'Installed version is newer' : check ? 'Up to date' : 'Connect a board to check'}</strong><small>{installing ? 'Downloading, verifying, installing, and reconnecting.' : failure || success || check?.message || 'Update status is available after connecting a board.'}</small></span></div>{activeTasks > 0 && <div className="update-blocked"><Info size={14} /><span>{activeTasks} active board task{activeTasks === 1 ? '' : 's'} must finish or stop before updating.</span></div>}<div className="update-actions">{check?.status === 'available' && <button className="primary-button" disabled={installing || checking || activeTasks > 0} onClick={() => void install()}>{installing ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Update to v{check.availableVersion}</button>}<button className="secondary-button" disabled={installing || checking || !connection} onClick={() => void checkUpdate()}><RefreshCw size={14} className={checking ? 'spin' : ''} />Check again</button></div><div className="update-guidance"><ShieldCheck size={15} /><span><strong>Transactional board update</strong><small>Configuration and conversations stay in place. Downgrades are refused, releases are verified, and failed installs restore the previous runtime.</small></span></div><div className="command-list"><div><code>hobot update</code><CopyButton value="hobot update" /></div><div><code>hobot rollback</code><CopyButton value="hobot rollback" /></div></div><div className="modal-actions"><button className="primary-button" onClick={onClose} disabled={installing}>Done</button></div></div></div></div>;
+
+  const installBoard = async (continueWithStudio = false) => {
+    if (installingBoard || boardCheck?.status !== 'available' || activeTasks > 0) return;
+    setInstallingBoard(true);
+    setBoardFailure('');
+    setBoardSuccess('');
+    try {
+      const result = await onInstall();
+      setBoardCheck({status: 'current', installedVersion: result.installedVersion, availableVersion: result.installedVersion, message: 'This board is up to date.'});
+      setBoardSuccess(result.message);
+      if (continueWithStudio && studioCheck?.status === 'available') await openStudioUpdate();
+    } catch (reason) {
+      setBoardFailure(friendlyError(String(reason)));
+    } finally {
+      setInstallingBoard(false);
+    }
+  };
+
+  const studioTone = studioFailure ? 'failed' : studioCheck?.status === 'available' ? 'available' : studioCheck ? 'current' : 'checking';
+  const boardTone = boardFailure ? 'failed' : boardCheck?.status === 'available' ? 'available' : boardCheck ? 'current' : 'checking';
+  const bothAvailable = studioCheck?.status === 'available' && boardCheck?.status === 'available';
+  const busy = checkingStudio || checkingBoard || openingStudio || installingBoard;
+
+  return <div className="modal-backdrop"><div className="modal about-modal"><div className="modal-header"><div><span className="modal-eyebrow">Hobot Code</span><h2>Version & updates</h2></div><button className="icon-button" title="Close" onClick={onClose} disabled={installingBoard}><X size={18} /></button></div><div className="about-content">
+    <div className="about-mark">H</div>
+    <section className="update-section">
+      <div className="update-section-heading"><span><strong>Studio for Mac</strong><small>Installed v{appVersion || 'unknown'}</small></span>{studioCheck?.availableVersion && <code>v{studioCheck.availableVersion}</code>}</div>
+      <div className={`board-update-state ${studioTone}`}>{checkingStudio || openingStudio ? <LoaderCircle size={17} className="spin" /> : studioFailure ? <AlertTriangle size={17} /> : studioCheck?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{openingStudio ? 'Opening signed release' : checkingStudio ? 'Checking Studio updates' : studioFailure ? 'Studio update unavailable' : studioCheck?.status === 'available' ? 'A Studio update is ready' : studioCheck ? 'Studio is up to date' : 'Not checked'}</strong><small>{studioFailure || studioSuccess || studioCheck?.message || 'Checks the official stable release without changing the board.'}</small></span></div>
+      <div className="update-actions">{studioCheck?.status === 'available' && <button className="primary-button" disabled={busy} onClick={() => void openStudioUpdate()}>{openingStudio ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Download v{studioCheck.availableVersion}</button>}<button className="secondary-button" disabled={busy} onClick={() => void checkStudio()}><RefreshCw size={14} className={checkingStudio ? 'spin' : ''} />Check Studio</button></div>
+    </section>
+    <section className="update-section">
+      <div className="update-section-heading"><span><strong>Board service</strong><small>{connection?.board.name ?? 'No board connected'}{connection?.daemon?.version ? ` · v${connection.daemon.version}` : ''}</small></span>{boardCheck?.availableVersion && <code>v{boardCheck.availableVersion}</code>}</div>
+      <div className={`board-update-state ${boardTone}`}>{checkingBoard || installingBoard ? <LoaderCircle size={17} className="spin" /> : boardFailure ? <AlertTriangle size={17} /> : boardCheck?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{installingBoard ? `Installing v${boardCheck?.availableVersion ?? ''}` : checkingBoard ? 'Checking board updates' : boardFailure ? 'Board update unavailable' : boardCheck?.status === 'available' ? 'A board update is ready' : boardCheck?.status === 'source-older' ? 'Installed version is newer' : boardCheck ? 'Board is up to date' : 'Connect a board to check'}</strong><small>{installingBoard ? 'Downloading, verifying, installing, and reconnecting.' : boardFailure || boardSuccess || boardCheck?.message || 'Board updates are checked after a connection is established.'}</small></span></div>
+      {activeTasks > 0 && <div className="update-blocked"><Info size={14} /><span>{activeTasks} active board task{activeTasks === 1 ? '' : 's'} must finish or stop before updating. Studio updates do not stop them.</span></div>}
+      <div className="update-actions">{boardCheck?.status === 'available' && <button className="primary-button" disabled={busy || activeTasks > 0} onClick={() => void installBoard()}>{installingBoard ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Update board to v{boardCheck.availableVersion}</button>}<button className="secondary-button" disabled={busy || !connection} onClick={() => void checkBoard()}><RefreshCw size={14} className={checkingBoard ? 'spin' : ''} />Check board</button></div>
+    </section>
+    {bothAvailable && <button className="primary-button update-all-button" disabled={busy || activeTasks > 0} onClick={() => void installBoard(true)}><RefreshCw size={14} />Update board, then Studio</button>}
+    <div className="update-guidance"><ShieldCheck size={15} /><span><strong>Updates stay under your control</strong><small>Studio opens a signed and notarized macOS release. Board updates are transactional, preserve conversations, and roll back after a failed install.</small></span></div>
+    <details className="update-technical"><summary>Technical details</summary><div><InfoRow label="Board build" value={buildLabel} /><InfoRow label="Pi runtime" value={build?.piVersion ? `v${build.piVersion}` : 'Not reported'} /><InfoRow label="Pi contract" value={build?.piCompatibilitySha256 ? build.piCompatibilitySha256.slice(0, 12) : 'Not reported'} /><InfoRow label="Compatibility" value={connection?.compatibility?.status ?? 'Not checked'} /></div></details>
+    <div className="modal-actions"><button className="primary-button" onClick={onClose} disabled={installingBoard}>Done</button></div>
+  </div></div></div>;
 }
 
 const providerAPIs: Array<{value: ManagedProvider['api']; label: string}> = [
@@ -2025,13 +2104,13 @@ function SupportDiagnosticsDialog({bundle, onClose}: {bundle: SupportBundle; onC
   </section></div>;
 }
 
-function ReadinessDiagnosticsDialog({report, loading, onRefresh, onRepair, onClose}: {report: DiagnosticReport | null; loading: boolean; onRefresh: () => void; onRepair: (action: string) => void; onClose: () => void}) {
+function ReadinessDiagnosticsDialog({report, loading, failure, onRefresh, onRepair, onClose}: {report: DiagnosticReport | null; loading: boolean; failure: string; onRefresh: () => void; onRepair: (action: string) => void; onClose: () => void}) {
   const tone = report?.status === 'action-required' ? 'failed' : report?.status === 'attention' ? 'partial' : 'passed';
   const icon = tone === 'failed' ? <XCircle size={18} /> : tone === 'partial' ? <AlertTriangle size={18} /> : <ShieldCheck size={18} />;
   const label = report?.status === 'action-required' ? 'Action required' : report?.status === 'attention' ? 'Needs attention' : 'Ready';
   return <div className="modal-backdrop"><section className="modal support-modal" role="dialog" aria-modal="true" aria-labelledby="readiness-title">
     <div className="modal-header"><div><span className="modal-eyebrow">Board readiness</span><h2 id="readiness-title">Installation and runtime</h2></div><div className="modal-header-actions"><button className="icon-button" title="Check again" onClick={onRefresh} disabled={loading}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" onClick={onClose} disabled={loading}><X size={18} /></button></div></div>
-    {!report && loading ? <div className="deployment-loading"><LoaderCircle size={17} className="spin" />Checking the board without changing it</div> : !report ? <div className="support-content"><div className="support-empty"><AlertTriangle size={17} /><span>Readiness diagnostics are unavailable for this connection. Update the board-side Hobot Code, reconnect, and check again.</span></div></div> : <div className="support-content">
+    {!report && loading ? <div className="deployment-loading"><LoaderCircle size={17} className="spin" />Checking the board without changing it</div> : !report ? <div className="support-content"><div className="support-empty"><AlertTriangle size={17} /><span>{failure || 'Readiness diagnostics are unavailable for this connection. Update the board-side Hobot Code, reconnect, and check again.'}</span></div></div> : <div className="support-content">
       <div className={`support-summary ${tone}`}>{icon}<span><strong>{label}</strong><small>{report.status === 'healthy' ? 'The current installation is ready for Agent work.' : 'Review the findings and apply only the bounded repairs you approve.'}</small></span></div>
       <div className="support-counts"><span><strong>{report.summary.pass}</strong>Passed</span><span><strong>{report.summary.info}</strong>Information</span><span><strong>{report.summary.warn}</strong>Warnings</span><span><strong>{report.summary.fail}</strong>Failed</span></div>
       <div className="support-findings">{report.findings.length > 0 ? report.findings.map((finding) => <article className={`support-finding ${finding.severity}`} key={finding.code}>{finding.severity === 'error' ? <XCircle size={15} /> : finding.severity === 'warning' ? <AlertTriangle size={15} /> : <Info size={15} />}<div><span>{finding.scope}</span><strong>{finding.title}</strong><p>{finding.summary}</p><small>{finding.action}</small></div></article>) : <div className="support-empty"><ShieldCheck size={17} /><span>No action is required by the current checks.</span></div>}</div>
