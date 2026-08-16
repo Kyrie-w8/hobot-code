@@ -162,6 +162,22 @@ export function networkShellReasons(command) {
     : [];
 }
 
+// A remote find over shared/FUSE storage can wait indefinitely for metadata.
+// Require an explicit timeout before the shell process is started so the Agent
+// remains cancellable and the UI can return to the composer on slow mounts.
+export function unboundedRemoteScanReasons(command) {
+  const value = String(command ?? "");
+  const hasSSH = /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?ssh\b/i.test(value);
+  const hasFind = /(?:^|[\s"';&|()\n])(?:command\s+)?(?:\/[^\s;|]+\/)?find\b/i.test(value);
+  const hasSharedRoot = /\/(?:mnt\/data|cache|home)(?:\/|\b)/i.test(value);
+  const hasTimeout = /(?:^|[;&|()\n]\s*)(?:timeout|gtimeout)\s+(?:-k\s+\S+\s+)?\d+(?:\.\d+)?[smhd]?\b/i.test(value)
+    || /\b(?:timeout|gtimeout)\s*=/i.test(value);
+  if (hasSSH && hasFind && hasSharedRoot && !hasTimeout) {
+    return ["remote recursive scan has no timeout and targets shared storage"];
+  }
+  return [];
+}
+
 export function resolveShellSafety(command, networkAction = "ask") {
   const destructiveReasons = destructiveShellReasons(command);
   const networkReasons = networkShellReasons(command);

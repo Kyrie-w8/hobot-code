@@ -71,7 +71,7 @@ import {
 } from "./openexplorer-build-host.mjs";
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
-import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety } from "./runtime-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety, unboundedRemoteScanReasons } from "./runtime-safety.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 import { acquireWorkspaceWriteLease } from "./workspace-write-lease.mjs";
@@ -1783,6 +1783,13 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     if (event.toolName === "bash") {
       const command = String(event.input.command ?? "");
+      const unboundedScanReasons = unboundedRemoteScanReasons(command);
+      if (unboundedScanReasons.length > 0) {
+        return {
+          block: true,
+          reason: `${unboundedScanReasons.join("; ")}. Add an explicit timeout (for example: timeout 10s find ...), narrow the search root, or use openexplorer_remote_run with its bounded timeout.`,
+        };
+      }
       const offlineNetwork = sandboxRuntimeStatus().network === "offline";
       const shellSafety = resolveShellSafety(
         command,

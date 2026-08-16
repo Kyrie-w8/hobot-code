@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, resolveShellSafety, sanitizedChildEnv } from "../extensions/rdk/runtime-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, resolveShellSafety, sanitizedChildEnv, unboundedRemoteScanReasons } from "../extensions/rdk/runtime-safety.mjs";
 
 import {
   DEFAULT_LSP_CONFIG,
@@ -302,6 +302,15 @@ test("resolved path checks reject symlink escapes and destructive commands", asy
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("remote scans over shared storage require an explicit timeout", () => {
+  const unbounded = 'ssh openexplorer-builder "find /mnt/data/bin.wang /home/bin.wang /cache/bin.wang -maxdepth 5 -name qwen3.yml 2>/dev/null | head -5"';
+  assert.deepEqual(unboundedRemoteScanReasons(unbounded), ["remote recursive scan has no timeout and targets shared storage"]);
+
+  const bounded = 'timeout 10s ssh openexplorer-builder "find /mnt/data/bin.wang -maxdepth 4 -name qwen3.yml 2>/dev/null | head -5"';
+  assert.deepEqual(unboundedRemoteScanReasons(bounded), []);
+  assert.deepEqual(unboundedRemoteScanReasons("ssh openexplorer-builder 'hostname'"), []);
 });
 
 test("resolved path checks fail closed on symbolic link cycles", async () => {
