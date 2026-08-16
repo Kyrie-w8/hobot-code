@@ -15,6 +15,7 @@ export const DEFAULT_POLICY = Object.freeze({
     Object.freeze({ tool: "network", action: "ask" }),
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
+    Object.freeze({ tool: "openexplorer_build_host", action: "allow" }),
     Object.freeze({ tool: "quality_gate", action: "ask" }),
     Object.freeze({ tool: "memory_search", action: "allow" }),
     Object.freeze({ tool: "memory_save", action: "ask" }),
@@ -41,6 +42,7 @@ export const DEVELOPER_POLICY = Object.freeze({
     Object.freeze({ tool: "network", action: "ask" }),
     Object.freeze({ tool: "system_snapshot", action: "allow" }),
     Object.freeze({ tool: "rdk_docs_search", action: "allow" }),
+    Object.freeze({ tool: "openexplorer_build_host", action: "allow" }),
     Object.freeze({ tool: "memory_search", action: "allow" }),
     Object.freeze({ tool: "goal_status", action: "allow" }),
     Object.freeze({ tool: "goal_progress", action: "allow" }),
@@ -395,6 +397,8 @@ export function describeToolCall(toolName, input, qualityCommands = []) {
   if (["read", "write", "edit"].includes(toolName)) target = data.path;
   else if (toolName === "bash") target = data.command;
   else if (toolName === "quality_gate" && data.action === "run") target = qualityCommands.join("\n");
+  else if (toolName === "openexplorer_remote_run") target = `${data.target ?? "(no host)"}\n${data.command ?? "(no command)"}`;
+  else if (toolName === "openexplorer_build_host") target = data.target ?? "Task-scoped SSH build host selection";
   else if (toolName === "memory_save") target = `${data.scope ?? ""}/${data.kind ?? ""}: ${data.content ?? ""}`;
   else if (toolName === "memory_search") target = data.query;
   else if (toolName === "goal_complete") target = data.outcome;
@@ -406,6 +410,10 @@ export function describeToolCall(toolName, input, qualityCommands = []) {
       ? "Modifies files on the board."
       : toolName === "bash"
         ? "Executes a shell command with the current user privileges."
+      : toolName === "openexplorer_remote_run"
+        ? "Executes a command with the SSH user's privileges on the selected x86_64 build host."
+      : toolName === "openexplorer_build_host"
+        ? "Selects or probes a direct SSH build host without transferring private keys."
       : toolName === "quality_gate"
           ? "Executes the configured verification commands."
           : toolName === "memory_save"

@@ -32,6 +32,8 @@ Hobot Code 的安全控制用于降低误操作和模型生成危险调用的概
 
 Capabilities 清单是库存视图，不是隔离边界。它只扫描 Pi 的固定用户目录，以及由已信任任务绑定的项目 `.pi`/`.agents` 目录；扫描有所有权、符号链接、写权限、深度和数量限制，且不会返回配置中的端点、命令、绝对路径或 package URL。`declared`/`discovered` 不表示代码已审查或已加载。第三方 extension、package、Skill、Prompt 和 theme 一旦由 Pi 加载，仍可影响模型上下文或以当前用户权限执行；root 用户必须特别谨慎。
 
+OpenExplorer LLM Skill Pack 是用户提供的外部第三方内容。Hobot Code 对其执行有界只读结构检查，并只自动加载客户目录登记项，但不会由此证明 Skill 指令、脚本、依赖、许可证或模型结果可信。主机侧步骤使用 S600 自己的 OpenSSH 配置直连用户选择的构建机；私钥不会传给模型或 Studio。`openexplorer_remote_run` 在每次执行前验证目标为 x86_64，CUDA 工作流还检查 `nvidia-smi`，但远端命令仍拥有该 SSH 用户的权限并可能修改构建机数据，因此保持逐次审批。建议使用专用账号、专用密钥、`authorized_keys restrict`、独立工作目录和最小文件权限。
+
 内置 D-Robotics token 和 `HOBOT_CODE_PROVIDER_KEY_*` 受管 Provider 密钥启动后都会从长期进程环境移除：`shared` 下非沙箱进程之间使用版本化匿名 FD，bubblewrap 内使用读取后删除的 tmpfs 一次性文件；`model-only` 下所有受支持 Provider 密钥只留在 agentd，worker 不获得任何模型密钥。后台 worker 使用任务私有的 Pi 配置快照处理设置锁，全局配置保持只读；`auth.json` 只允许进入 `shared` 快照，并会从 `model-only` 与 `offline` 快照中删除。模型代理在 daemon 启动时冻结 Provider、模型和协议路由白名单，固定 origin、路径、方法与认证头，禁止重定向，限制并流式转发数据，日志不记录请求正文、回复正文、模型名或凭据。Provider 或密钥配置变化后必须重启 daemon，配置指纹不一致时模型相关操作会失败关闭。`hobot provider add` 和 `rotate` 从控制终端隐藏读取密钥，Studio 只通过固定短时 SSH 标准输入传递。该边界不能防御同用户宿主进程、管理员或调试器；任何能访问私有 Socket 的同用户进程都能消耗已配置 Provider 的额度。Pi 登录、自管 `models.json` 和 Google Generative AI 尚未接入模型代理，凭据与网络必须单独审计。`hobot.env` 不要提交到版本控制。
 
 脱敏和敏感数据检测是纵深防御，不保证识别所有密钥格式。不要在 Prompt、会话、持久记忆、Hook 输出或 issue 中放入不必要的凭据。怀疑凭据泄漏时，应立即在对应模型服务撤销并轮换，而不是只删除本地记录。

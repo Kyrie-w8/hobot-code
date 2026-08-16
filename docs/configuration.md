@@ -468,3 +468,29 @@ Hook 命令是未经 Shell 解析的 argv 数组。stdin 为 `{schemaVersion,eve
 ## OpenExplorer LLM 板端运行时
 
 S600 上可在 `~/.config/hobot-code/hobot.env` 设置 `HOBOT_CODE_OPENEXPLORER_LLM_ROOT`，指向同时包含 `oellm_runtime/lib`、`oellm_runtime/include` 和 `oellm_runtime/examples` 的软件包根目录。Hobot Code 只做有界只读检查：目录所有权、写权限、运行时版本、AArch64 ELF 架构和关键 sample 是否齐全。检查通过后才会在 Capabilities 中显示 `OpenExplorer LLM runtime`；主机侧 x86_64/CUDA 量化编译组件不会被声明为板端能力。
+
+如果同一外部包还包含 `.skillshare/skills/` 和 `docs/03_SKILLS_CATALOG.md`，Hobot Code 会额外执行所有权、符号链接、数量、大小、frontmatter、目录名和客户目录一致性检查。只有客户目录登记的 Skill 会写入每个后台任务的私有 Pi settings；包内存在但目录未登记的 Skill 只显示在 Capabilities，默认不加载。Skill 文件始终从外部包只读使用，不会复制进 Hobot Code 安装包。
+
+当前 OpenExplorer LLM 2.0.4 交付包的实测库存是 24 个目录，而客户目录声明 23 个；`drobotics-convert-bc-hbm-compare` 因未进入目录而默认禁用。客户目录的“是否测过”为空，因此界面会显示来源和发现状态，但不会将其表述为 Hobot Code 或发版方已验证。
+
+### OpenExplorer x86/CUDA 构建机
+
+量化、校准、模型适配、BC 和 HBM 编译等主机侧步骤不能在 ARM64 S600 上运行。S600 必须能够使用自己的 OpenSSH 配置直连构建机。建议为 Hobot Code 创建专用密钥和别名：
+
+```sshconfig
+Host openexplorer-builder
+    HostName 192.0.2.10
+    User builder
+    Port 22
+    IdentityFile /root/.config/hobot-code/ssh/openexplorer-builder
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+```
+
+私钥必须只保存在板端并设置为 `0600`；不要把私钥、密码或 token 放入 Prompt。构建机的 `authorized_keys` 建议为该公钥增加 `restrict`，以关闭转发、Agent、X11 和 PTY 能力，同时保留 OpenExplorer 工作流需要的远程命令执行。
+
+当 Agent 首次进入主机侧 Skill 阶段时，`openexplorer_build_host` 会要求用户输入 SSH 别名或 `user@hostname`，将选择保存为任务私有状态，并验证远端架构；CUDA Skill 还会检查 `nvidia-smi`。后续命令通过 `openexplorer_remote_run` 执行，每条命令仍由板端权限策略审批。任务必须使用 **Network: Network/shared**；`model-only` 或 `offline` 会阻止构建机连接。
+
+Skill 指令从 S600 的外部包加载，但 Hobot Code 不会自动把 OpenExplorer 源码、Skill 脚本、模型或校准数据复制到构建机。进入远端阶段前，Agent 必须向用户确认构建机上的 OpenExplorer 工作目录、模型路径和输出目录；缺少其中任何一项时应停下来询问，不能根据目录名猜测。
+
+来源：用户提供的 OpenExplorer LLM 正式交付包中的 `.skillshare/skills/`、`docs/02_SkillShare初始化与使用.md` 和 `docs/03_SKILLS_CATALOG.md`。外部包的许可和交付约束由其自身文件及发版方负责。

@@ -57,6 +57,13 @@ import {
   type MemoryScope,
 } from "./memory-store.ts";
 import { emitTerminalNotification, type NotificationConfig } from "./notifications.ts";
+import {
+  loadSelectedBuildHost,
+  normalizeBuildHostTarget,
+  probeOpenExplorerBuildHost,
+  runOpenExplorerRemoteCommand,
+  saveSelectedBuildHost,
+} from "./openexplorer-build-host.mjs";
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
 import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety } from "./runtime-safety.mjs";
@@ -599,8 +606,20 @@ const lspToolSchema = Type.Object({
   column: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
 });
 
-const mutatingToolNames = new Set(["bash", "edit", "write"]);
-const workspaceChangingToolNames = new Set([...mutatingToolNames, "quality_gate"]);
+const openExplorerBuildHostSchema = Type.Object({
+  action: Type.Union([Type.Literal("status"), Type.Literal("select"), Type.Literal("probe")]),
+  target: Type.Optional(Type.String({ minLength: 1, maxLength: 253, description: "SSH alias, hostname, or user@hostname" })),
+});
+
+const openExplorerRemoteRunSchema = Type.Object({
+  target: Type.String({ minLength: 1, maxLength: 253, description: "Previously selected OpenExplorer build host" }),
+  command: Type.String({ minLength: 1, maxLength: 65_536, description: "Command to execute on the selected x86_64 build host" }),
+  requiresCuda: Type.Optional(Type.Boolean({ description: "Require nvidia-smi before starting this command" })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 1800 })),
+});
+
+const mutatingToolNames = new Set(["bash", "edit", "write", "openexplorer_remote_run"]);
+const workspaceChangingToolNames = new Set(["bash", "edit", "write", "quality_gate"]);
 const completionAssertionPattern = /(?:已|已经|全部|现已)(?:完成|实现|修复|通过|部署)|(?:implementation|task|work|changes?)\s+(?:is|are)\s+(?:complete|done)|all\s+(?:checks|tests|gates)\s+pass/i;
 const qualityGateEntryType = "hobot-quality-gates";
 
@@ -739,6 +758,16 @@ export default function rdkExtension(pi: ExtensionAPI) {
   const sideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
   const runtimeProbeMode = process.env.HOBOT_CODE_RUNTIME_PROBE === "1";
   const rdkProbeMode = process.env.HOBOT_CODE_RDK_PROBE === "1";
+  const openExplorerSkillPack = String(process.env.HOBOT_CODE_OPENEXPLORER_SKILLS_ROOT ?? "").trim();
+  const openExplorerPromptContext = openExplorerSkillPack
+    ? [
+        "## OpenExplorer LLM external Skill Pack",
+        "The official customer-catalog Skills are available from a user-supplied OpenExplorer LLM package.",
+        "This Agent runs on ARM64. Before any x86_64, CUDA, model adaptation, compression, quantization, calibration, BC, or HBM build step, call openexplorer_build_host with action=probe. If no host is selected, let that tool ask the user.",
+        "Run every host-side command only through openexplorer_remote_run with the selected target. Never copy SSH private keys into chat, never run host-side commands locally on the RDK board, and ask for missing remote repository, model, or output paths.",
+        "Board runtime and sample commands may run locally only when the selected Skill explicitly reaches its S600 runtime phase.",
+      ].join("\n")
+    : undefined;
   let disposeSideAgent = async (): Promise<void> => undefined;
   let currentSnapshot: BoardSnapshot | undefined;
   let currentExpertPrompt: string | undefined;
@@ -1154,6 +1183,68 @@ export default function rdkExtension(pi: ExtensionAPI) {
     },
   });
 
+  if (openExplorerSkillPack) {
+    pi.registerTool({
+      name: "openexplorer_build_host",
+      label: "OpenExplorer build host",
+      description: "Select, inspect, or probe the user-chosen direct SSH x86_64 build host for OpenExplorer LLM Skills. Selection is private to this Agent task.",
+      promptSnippet: "Select and verify a direct SSH x86_64 build host before running OpenExplorer host-side conversion or quantization steps",
+      parameters: openExplorerBuildHostSchema,
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        let target = params.target ? normalizeBuildHostTarget(params.target) : await loadSelectedBuildHost();
+        if ((params.action === "select" || params.action === "probe") && !target) {
+          if (!ctx.hasUI) {
+            throw new Error("OpenExplorer build host selection requires a target argument when no interactive UI is attached");
+          }
+          const selected = await ctx.ui.input(
+            "OpenExplorer x86 build host",
+            "SSH alias, hostname, or user@hostname configured on this RDK board",
+          );
+          if (!selected) throw new Error("OpenExplorer build host selection was cancelled");
+          target = normalizeBuildHostTarget(selected);
+        }
+        if (params.action === "status") {
+          const result = target
+            ? { configured: true, target, scope: "task", transport: "direct-ssh" }
+            : { configured: false, selectionRequired: true, scope: "task", transport: "direct-ssh" };
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+        }
+        target = await saveSelectedBuildHost(target);
+        if (params.action === "select") {
+          const result = { configured: true, target, scope: "task", transport: "direct-ssh", probeRequired: true };
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+        }
+        const result = await probeOpenExplorerBuildHost(target, { signal });
+        if (!result.ok || !result.compatible) {
+          throw new Error(result.stderr || `OpenExplorer build host ${target} is incompatible`);
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+      },
+    });
+
+    pi.registerTool({
+      name: "openexplorer_remote_run",
+      label: "Run on OpenExplorer build host",
+      description: "Execute one explicitly approved command on the selected direct SSH x86_64 build host. The host is probed before every command and output is bounded.",
+      promptSnippet: "Run OpenExplorer conversion and quantization commands on the selected x86_64 SSH build host, never on the ARM64 RDK board",
+      parameters: openExplorerRemoteRunSchema,
+      async execute(_toolCallId, params, signal) {
+        const target = normalizeBuildHostTarget(params.target);
+        const selected = await loadSelectedBuildHost();
+        if (!selected || selected !== target) {
+          throw new Error("Select this OpenExplorer build host with openexplorer_build_host before executing remote commands");
+        }
+        const result = await runOpenExplorerRemoteCommand(target, params.command, {
+          signal,
+          timeoutMs: (params.timeoutSeconds ?? 300) * 1000,
+          requiresCUDA: params.requiresCuda ?? true,
+        });
+        if (!result.ok) throw new Error(result.stderr || `OpenExplorer remote command failed on ${target}`);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+      },
+    });
+  }
+
   pi.registerTool({
     name: "rdk_docs_search",
     label: "Search RDK board knowledge",
@@ -1500,7 +1591,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
             : "Stay within budget and call goal_complete only after the full objective and verification requirements are satisfied.",
         ].join("\n")
       : undefined;
-    const dynamicContext = [qualityContext, memoryContext, goalContext].filter(Boolean).join("\n\n");
+    const dynamicContext = [qualityContext, memoryContext, goalContext, openExplorerPromptContext].filter(Boolean).join("\n\n");
     const systemPrompt = [event.systemPrompt, expertPrompt, dynamicContext].filter(Boolean).join("\n\n");
     lastPromptSnapshot = {
       text: systemPrompt,
@@ -1689,6 +1780,23 @@ export default function rdkExtension(pi: ExtensionAPI) {
       }
       approvalReasons.push(...shellSafety.approvalReasons);
       if (shellSafety.rememberNetworkCall) rememberTools.push("network");
+    }
+
+    if (event.toolName === "openexplorer_remote_run" || (event.toolName === "openexplorer_build_host" && event.input.action === "probe")) {
+      const offlineNetwork = sandboxRuntimeStatus().network === "offline";
+      const networkAction = effectiveNetworkAction(
+        resolveToolCallAction(permissionPolicy, "network", event.input),
+        offlineNetwork ? "offline" : "shared",
+      );
+      if (networkAction === "deny") {
+        return { block: true, reason: offlineNetwork
+          ? "network access is disabled by the task's OS network boundary"
+          : `network access is denied by ${permissionPolicyPath()}` };
+      }
+      if (networkAction === "ask") {
+        approvalReasons.push("the remote build host requires network access");
+        rememberTools.push("network");
+      }
     }
 
     if (approvalReasons.length > 0) {

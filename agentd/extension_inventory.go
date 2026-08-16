@@ -82,6 +82,17 @@ func discoverConfiguredExtensions(catalog extensionCatalog, contexts ...extensio
 			entries = append(entries, *entry)
 		}
 	}
+	if pack, configured := inspectConfiguredOpenExplorerSkillPack(); configured {
+		diagnostics = append(diagnostics, extensionDiagnostic{Source: "openexplorer-llm-skills", Status: pack.Status, Message: pack.Message})
+		for _, entry := range openExplorerSkillEntries(pack) {
+			if len(entries) >= maximumCatalogEntries {
+				break
+			}
+			entry.ID = uniqueInventoryID(entry.ID, seen)
+			seen[entry.ID] = struct{}{}
+			entries = append(entries, entry)
+		}
+	}
 	var inventoryContext *extensionInventoryContext
 	if len(contexts) > 0 {
 		inventoryContext = &contexts[0]

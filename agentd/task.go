@@ -1474,7 +1474,7 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	}
 	command := exec.Command(commandName, commandArgs...)
 	command.Dir = metadata.Cwd
-	command.Env = append(environmentWithoutGatewayCredential(os.Environ()),
+	commandEnvironment := append(environmentWithoutGatewayCredential(os.Environ()),
 		"HOBOT_CODE_BACKGROUND_TASK=1",
 		"HOBOT_CODE_BACKGROUND_TASK_ID="+metadata.ID,
 		"HOBOT_CODING_AGENT_DIR="+taskAgentDir,
@@ -1483,6 +1483,12 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		"HOBOT_CODE_SANDBOX_BACKEND="+sandbox.Backend,
 		"HOBOT_CODE_NETWORK_MODE="+metadata.NetworkMode,
 	)
+	if _, skillsRoot, skillsErr := configuredOpenExplorerSkillPaths(); skillsErr != nil {
+		return fmt.Errorf("prepare OpenExplorer LLM Skill runtime: %w", skillsErr)
+	} else if skillsRoot != "" {
+		commandEnvironment = append(commandEnvironment, "HOBOT_CODE_OPENEXPLORER_SKILLS_ROOT="+skillsRoot)
+	}
+	command.Env = commandEnvironment
 	credentialPayload := ""
 	if metadata.NetworkMode == networkModeShared {
 		credentialPayload = gatewayCredentialPayload(current.manager.cfg)
@@ -1613,12 +1619,25 @@ func (current *task) prepareTaskAgentConfiguration(networkMode string) (string, 
 		source := filepath.Join(current.manager.cfg.AgentDir, name)
 		content, err := readPrivateRegularFile(source, maxRequestBytes)
 		if errors.Is(err, os.ErrNotExist) {
-			continue
+			if name != "settings.json" {
+				continue
+			}
+			content = nil
+			err = nil
 		}
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", name, err)
 		}
-		if len(content) == 0 || !json.Valid(content) {
+		if name == "settings.json" {
+			content, err = mergeOpenExplorerSkillsIntoSettings(content)
+			if err != nil {
+				return "", err
+			}
+		}
+		if len(content) == 0 {
+			continue
+		}
+		if !json.Valid(content) {
 			return "", fmt.Errorf("%s is not valid JSON", name)
 		}
 		if err := writePrivateFile(destination, content); err != nil {

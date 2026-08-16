@@ -812,6 +812,20 @@ hobot extensions --task <task-id>
 
 第三方 Extension、Skill、Hook 和 LSP 可以影响模型上下文或以当前用户权限运行。Capabilities 清单不是安全审查，root 用户尤其需要先审查来源。
 
+### 15.4 OpenExplorer LLM Skills
+
+在 S600 配置完整的 OpenExplorer LLM 外部包后，Capabilities 会分别展示板端 Runtime、Skill Pack 和各个 Skill。Hobot Code 从包内 `.skillshare/skills/<name>/SKILL.md` 读取 Skill，以 `docs/03_SKILLS_CATALOG.md` 作为默认启用清单，不修改也不重新发布官方文件。
+
+- `Available`：已进入客户目录并加载到任务；不表示厂商或 Hobot Code 已完成真实模型验证。
+- `Optional · off`：包内存在但未进入客户目录，默认不加载。
+- `OpenExplorer Skills · Partially inspected`：实际目录和客户目录数量不一致；展开条目可查看来源与证据说明。
+
+当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA，再对每条远端命令单独执行板端审批；主机选择只保存在当前任务，不会回写官方 Skill。
+
+选择构建机不会自动上传外部包、源码或模型。请在对话中提供构建机上的 OpenExplorer 工作目录、模型路径和输出目录；需要使用包内脚本的 Skill 还要求该脚本在构建机上可访问。
+
+如果提示无法解析主机或认证失败，应先在 S600 终端验证 `ssh -T <别名>`，检查板端 DNS、端口、`known_hosts`、专用私钥和构建机 `authorized_keys`。Mac 能连接并不能证明 S600 能连接。
+
 ## 16. 图片、文档与链接
 
 ### 16.1 图片
