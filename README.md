@@ -4,7 +4,7 @@
 
 面向地瓜机器人 RDK 的开发 Agent。Hobot Code 在板端提供原生 TUI 和常驻任务服务，在 Mac 上提供同名桌面应用；两个入口共享模型、工具、审批、Skills、会话和 RDK 专业知识。权限判定、工具执行和模型凭据始终留在 RDK 上。
 
-第一次使用请从[用户手册](docs/user-guide.md)开始；安装、Studio 操作、任务设置、断线续跑和常见问题都集中在该文档中。
+第一次使用请从[完整用户手册](docs/user-guide.md)开始；该文档系统覆盖安装配置、Studio 与 TUI、项目任务、模型接入、权限安全、Side Agent、RDK 能力、诊断更新和故障恢复。
 
 ## 核心能力
 
@@ -410,7 +410,7 @@ make release
 
 | 文档 | 内容 |
 |---|---|
-| [用户手册](docs/user-guide.md) | 安装、Studio、任务设置、Side Agent、断线续跑与常见问题 |
+| [完整用户手册](docs/user-guide.md) | 从安装配置到 Studio/TUI、项目任务、模型、权限、RDK 能力、运维和命令参考 |
 | [配置说明](docs/configuration.md) | 模型、权限、记忆、目标、Hook、通知和 LSP |
 | [系统架构](docs/architecture.md) | 运行路径、适配层、数据边界与部署模型 |
 | [agentd 协议](docs/agentd-protocol.md) | 后台任务协议、状态机、重连与安全边界 |

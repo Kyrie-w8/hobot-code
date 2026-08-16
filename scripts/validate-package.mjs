@@ -51,6 +51,7 @@ export const REQUIRED_PACKAGE_PATHS = [
   "docs/model-capabilities.md",
   "docs/pi-compatibility.md",
   "docs/releasing.md",
+  "docs/user-guide.md",
   "docs/user-directory-layout.md",
   "runtime/README.md",
   "runtime/CHANGELOG.md",
