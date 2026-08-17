@@ -798,7 +798,10 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .changes-footer > span { overflow: hidden; color: var(--text-dim); font: var(--font-size-caption)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .changes-footer > div { display: flex; flex: none; gap: 7px; }
 .saved-boards { padding: 9px; }
+.saved-board-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.saved-board-group .connection-failure { margin: 4px 4px 8px; }
 .saved-board-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; align-items: center; gap: 2px; border-radius: var(--radius); }
+
 .saved-board-row:hover { background: var(--surface-hover); }
 .saved-board { display: grid; grid-template-columns: 30px minmax(0, 1fr) 20px; width: 100%; min-height: 58px; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-muted); text-align: left; cursor: pointer; }
 .saved-board:hover { background: var(--surface-hover); color: var(--text); }
@@ -826,6 +829,9 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .connection-failure > span, .update-guidance > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .connection-failure strong, .connection-failure small, .update-guidance strong, .update-guidance small { color: inherit; font-size: inherit; font-weight: 550; }
 .connection-failure small, .update-guidance small { color: var(--text-dim); font-weight: 450; }
+.install-prompt-row { display: flex; flex-direction: column; gap: 6px; margin-top: 5px; padding-top: 6px; border-top: 1px solid rgba(220, 125, 120, 0.2); }
+.install-service-button { align-self: flex-start; margin-top: 2px; }
+
 .inline-confirm { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; margin: 0 9px 9px; padding: 10px; border: 1px solid rgba(220, 125, 120, 0.28); border-radius: var(--radius-sm); background: rgba(220, 125, 120, 0.07); color: var(--red); }
 .inline-confirm > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .inline-confirm strong { color: var(--text-soft); font-size: var(--font-size-meta); }

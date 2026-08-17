@@ -156,10 +156,19 @@ func (client *Client) RestartDaemon(ctx context.Context) error {
 }
 
 func (client *Client) runBoardCommand(ctx context.Context, remoteCommand string, input []byte) ([]byte, error) {
-	command := exec.CommandContext(ctx, client.config.SSHBinary, append(client.sshTransportArgs(), client.sshTarget(), remoteCommand)...)
+	var reader io.Reader
 	if input != nil {
-		command.Stdin = bytes.NewReader(input)
+		reader = bytes.NewReader(input)
 	}
+	return client.runBoardCommandWithReader(ctx, remoteCommand, reader)
+}
+
+func (client *Client) runBoardCommandWithReader(ctx context.Context, remoteCommand string, reader io.Reader) ([]byte, error) {
+	command := exec.CommandContext(ctx, client.config.SSHBinary, append(client.sshTransportArgs(), client.sshTarget(), remoteCommand)...)
+	if reader != nil {
+		command.Stdin = reader
+	}
+
 	stdout := &boundedBuffer{maximum: maximumProviderCommandOutput}
 	stderr := &boundedBuffer{maximum: maximumErrorBytes}
 	command.Stdout = stdout

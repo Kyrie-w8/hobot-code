@@ -3,6 +3,7 @@ package hobot
 import (
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -72,5 +73,30 @@ func (client *Client) InstallBoardUpdate(ctx context.Context, version string) er
 		return fmt.Errorf("board update version is invalid")
 	}
 	_, err := client.runBoardCommand(ctx, "hobot update --version "+version, nil)
+	return err
+}
+
+// InstallBoardService executes the remote installation script on a target board.
+// If version is empty or "latest", it downloads and installs the latest verified stable release.
+func (client *Client) InstallBoardService(ctx context.Context, version string) error {
+	version = strings.TrimSpace(version)
+	var command string
+	if version != "" && version != "latest" {
+		if !boardUpdateVersionOnlyPattern.MatchString(version) {
+			return fmt.Errorf("board install version is invalid")
+		}
+		command = fmt.Sprintf("curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh | sh -s -- --version %s", version)
+	} else {
+		command = "curl -fsSL https://github.com/bryant-w/hobot-code/releases/latest/download/hobot-install.sh | sh"
+	}
+	_, err := client.runBoardCommand(ctx, command, nil)
+	return err
+}
+
+// InstallBoardServiceFromArchive streams a local Linux ARM64 release tarball to the board
+// and executes its self-contained install script. This works in air-gapped/offline networks.
+func (client *Client) InstallBoardServiceFromArchive(ctx context.Context, archive io.Reader) error {
+	installCmd := `tmp_dir="/tmp/hobot-install-$$" && mkdir -p "$tmp_dir" && (tar --warning=no-unknown-keyword -xzf - -C "$tmp_dir" 2>/dev/null || tar -xzf - -C "$tmp_dir" 2>/dev/null) && (if [ -f "$tmp_dir/install.sh" ]; then cd "$tmp_dir"; else cd "$tmp_dir"/*; fi && HOBOT_CODE_FORCE_INSTALL=1 ./install.sh) && rm -rf "$tmp_dir"`
+	_, err := client.runBoardCommandWithReader(ctx, installCmd, archive)
 	return err
 }

@@ -22,7 +22,14 @@ test "$(plutil -extract CFBundleName raw -o - "$plist")" = "Hobot Code"
 test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = "cc.d-robotics.hobot-code"
 test "$(plutil -extract CFBundleShortVersionString raw -o - "$plist")" = "$version"
 file "$executable" | grep -q 'Mach-O 64-bit executable arm64'
+
+if [ -f "$dist/hobot-code-$version-linux-arm64.tar.gz" ]; then
+  mkdir -p "$app/Contents/Resources"
+  cp "$dist/hobot-code-$version-linux-arm64.tar.gz" "$app/Contents/Resources/hobot-code-$version-linux-arm64.tar.gz"
+fi
+
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/hobot-code-macos.XXXXXX")
+
 staging="$work_dir/dmg"
 app_archive="$work_dir/Hobot Code.zip"
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
@@ -32,7 +39,10 @@ if [ -n "$signing_identity" ]; then
 elif [ "$require_signed_release" = 1 ]; then
   printf 'HOBOT_CODE_MACOS_SIGNING_IDENTITY is required for a public release.\n' >&2
   exit 1
+else
+  codesign --force --deep --sign - "$app"
 fi
+
 codesign --verify --deep --strict --verbose=2 "$app"
 
 if [ "$require_signed_release" = 1 ]; then

@@ -1646,12 +1646,52 @@ function BoardDialog({boards, busy, onClose, onConnect, onSave, onRemove}: {boar
   const [editing, setEditing] = useState(boards.length === 0);
   const [form, setForm] = useState<Board>({id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''});
   const [working, setWorking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [connectingId, setConnectingId] = useState<string>('');
   const [probe, setProbe] = useState<Connection | null>(null);
   const [failure, setFailure] = useState('');
   const [removing, setRemoving] = useState<Board | null>(null);
-  const beginEdit = (board?: Board) => {setForm(board ?? {id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''}); setProbe(null); setFailure(''); setEditing(true);};
+  const [activeBoardTarget, setActiveBoardTarget] = useState<Board | null>(null);
+
+  const beginEdit = (board?: Board) => {
+    setForm(board ?? {id: '', name: 'RDK S100', host: '', user: 'root', port: 22, identityFile: ''});
+    setProbe(null);
+    setFailure('');
+    setActiveBoardTarget(null);
+    setEditing(true);
+  };
+
+  const handleSavedBoardClick = async (board: Board) => {
+    setConnectingId(board.id);
+    setActiveBoardTarget(board);
+    setFailure('');
+    setProbe(null);
+    try {
+      const result = await api.probeBoard(board);
+      setProbe(result);
+      if (!result.connected) {
+        setFailure(result.error || result.compatibility?.summary || 'Could not connect to this board.');
+        return;
+      }
+      onConnect(board);
+    } catch (reason) {
+      const err = String(reason);
+      setFailure(friendlyError(err));
+      if (/not installed|command not found|hobot: not found|without a response/i.test(err)) {
+        setProbe({
+          board,
+          connected: false,
+          notInstalled: true,
+          error: `Hobot Code is not installed on ${board.name}. You can install it automatically.`,
+        });
+      }
+    } finally {
+      setConnectingId('');
+    }
+  };
+
   const submit = async () => {
-    setWorking(true); setFailure(''); setProbe(null);
+    setWorking(true); setFailure(''); setProbe(null); setActiveBoardTarget(form);
     try {
       const result = await api.probeBoard(form);
       setProbe(result);
@@ -1662,14 +1702,152 @@ function BoardDialog({boards, busy, onClose, onConnect, onSave, onRemove}: {boar
     } catch (reason) { setFailure(friendlyError(String(reason))); }
     finally { setWorking(false); }
   };
+
+  const installService = async (boardTarget?: Board) => {
+    const target = boardTarget || (editing ? form : activeBoardTarget);
+    if (!target) return;
+    setInstalling(true); setFailure('');
+    try {
+      const result = await api.installBoardService(target);
+      if (result.success && result.connection.connected) {
+        setProbe(result.connection);
+        const detected = result.connection.snapshot?.boardId?.toUpperCase();
+        const candidate = detected && /^(RDK (S100|S600|X5))$/i.test(target.name) ? {...target, name: `RDK ${detected}`} : target;
+        await onSave(candidate);
+      } else {
+        setFailure(result.message || 'Installation completed, but could not connect to board.');
+      }
+    } catch (reason) {
+      setFailure(friendlyError(String(reason)));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
   const remove = async () => {if (!removing) return; setWorking(true); setFailure(''); try {await onRemove(removing); setRemoving(null); if (boards.length <= 1) beginEdit();} catch (reason) {setFailure(friendlyError(String(reason)));} finally {setWorking(false);}};
-  const disabled = busy || working;
-  return <div className="modal-backdrop"><div className="modal board-modal"><div className="modal-header"><div><span className="modal-eyebrow">Boards</span><h2>{editing ? (form.id ? 'Edit board' : 'Add board') : 'Connect'}</h2></div>{boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}</div>{!editing ? <><div className="saved-boards">{boards.map((board) => <div className="saved-board-row" key={board.id}><button className="saved-board" onClick={() => onConnect(board)} disabled={disabled}><Server size={19} /><span><strong>{board.name}</strong><small>{board.user}@{board.host}:{board.port}</small></span><ChevronRight size={15} /></button><button className="icon-button compact" title={`Edit ${board.name}`} onClick={() => beginEdit(board)}><FilePenLine size={14} /></button><button className="icon-button compact danger-icon" title={`Remove ${board.name}`} onClick={() => setRemoving(board)}><Trash2 size={14} /></button></div>)}</div><button className="add-board-row" onClick={() => beginEdit()}><Plus size={16} />Add board</button></> : <form onSubmit={(event) => {event.preventDefault(); void submit();}} className="form-grid"><div className="board-presets">{boardPresets.map((preset) => <button type="button" key={preset.name} className={form.name === preset.name ? 'selected' : ''} onClick={() => setForm({...form, ...preset})}><Server size={14} /><span>{preset.name}</span></button>)}</div><label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label><label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} placeholder="Board IP or hostname" autoFocus required /></label><div className="form-row"><label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label><label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label></div><label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label>{failure && <ConnectionFailure result={probe} message={failure} />} {probe?.connected && probe.snapshot && <div className="probe-success"><Check size={14} /><span>Detected {probe.snapshot.board} · RDK OS {probe.snapshot.rdkOsVersion}</span></div>}<div className="modal-actions">{boards.length > 0 && <button type="button" className="secondary-button" onClick={() => setEditing(false)}>Back</button>}<button className="primary-button" type="submit" disabled={disabled}>{disabled ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}Verify, save & connect</button></div></form>}{removing && <div className="inline-confirm"><AlertTriangle size={16} /><span><strong>Remove {removing.name}?</strong><small>Board tasks keep running; only this saved connection is removed.</small></span><button className="secondary-button" onClick={() => setRemoving(null)} disabled={disabled}>Cancel</button><button className="danger-button" onClick={() => void remove()} disabled={disabled}>Remove</button></div>}</div></div>;
+  const disabled = busy || working || installing || Boolean(connectingId);
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal board-modal">
+        <div className="modal-header">
+          <div>
+            <span className="modal-eyebrow">Boards</span>
+            <h2>{editing ? (form.id ? 'Edit board' : 'Add board') : 'Connect'}</h2>
+          </div>
+          {boards.length > 0 && <button className="icon-button" title="Close" onClick={onClose}><X size={18} /></button>}
+        </div>
+
+        {!editing ? (
+          <>
+            <div className="saved-boards">
+              {boards.map((board) => {
+                const isConnectingThis = connectingId === board.id;
+                const isTarget = activeBoardTarget?.id === board.id;
+                return (
+                  <div key={board.id} className="saved-board-group">
+                    <div className="saved-board-row">
+                      <button className="saved-board" onClick={() => void handleSavedBoardClick(board)} disabled={disabled}>
+                        {isConnectingThis ? <LoaderCircle size={19} className="spin" /> : <Server size={19} />}
+                        <span>
+                          <strong>{board.name}</strong>
+                          <small>{board.user}@{board.host}:{board.port}</small>
+                        </span>
+                        <ChevronRight size={15} />
+                      </button>
+                      <button className="icon-button compact" title={`Edit ${board.name}`} onClick={() => beginEdit(board)} disabled={disabled}>
+                        <FilePenLine size={14} />
+                      </button>
+                      <button className="icon-button compact danger-icon" title={`Remove ${board.name}`} onClick={() => setRemoving(board)} disabled={disabled}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    {isTarget && failure && (
+                      <ConnectionFailure
+                        result={probe}
+                        message={failure}
+                        onInstall={() => void installService(board)}
+                        installing={installing}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <button className="add-board-row" onClick={() => beginEdit()} disabled={disabled}>
+              <Plus size={16} />Add board
+            </button>
+          </>
+        ) : (
+          <form onSubmit={(event) => {event.preventDefault(); void submit();}} className="form-grid">
+            <div className="board-presets">
+              {boardPresets.map((preset) => (
+                <button type="button" key={preset.name} className={form.name === preset.name ? 'selected' : ''} onClick={() => setForm({...form, ...preset})}>
+                  <Server size={14} /><span>{preset.name}</span>
+                </button>
+              ))}
+            </div>
+            <label><span>Name</span><input value={form.name} onChange={(event) => setForm({...form, name: event.target.value})} required /></label>
+            <label><span>Host</span><input value={form.host} onChange={(event) => setForm({...form, host: event.target.value})} placeholder="Board IP or hostname" autoFocus required /></label>
+            <div className="form-row">
+              <label><span>User</span><input value={form.user} onChange={(event) => setForm({...form, user: event.target.value})} required /></label>
+              <label><span>Port</span><input type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({...form, port: Number(event.target.value)})} required /></label>
+            </div>
+            <label><span>Identity file</span><input value={form.identityFile} onChange={(event) => setForm({...form, identityFile: event.target.value})} placeholder="Use SSH agent or config" /></label>
+            {failure && <ConnectionFailure result={probe} message={failure} onInstall={() => void installService(form)} installing={installing} />}
+            {probe?.connected && probe.snapshot && <div className="probe-success"><Check size={14} /><span>Detected {probe.snapshot.board} · RDK OS {probe.snapshot.rdkOsVersion}</span></div>}
+            <div className="modal-actions">
+              {boards.length > 0 && <button type="button" className="secondary-button" onClick={() => {setEditing(false); setFailure(''); setProbe(null); setActiveBoardTarget(null);}}>Back</button>}
+              <button className="primary-button" type="submit" disabled={disabled}>
+                {disabled ? <LoaderCircle size={15} className="spin" /> : <Server size={15} />}
+                Verify, save & connect
+              </button>
+            </div>
+          </form>
+        )}
+
+        {removing && (
+          <div className="inline-confirm">
+            <AlertTriangle size={16} />
+            <span><strong>Remove {removing.name}?</strong><small>Board tasks keep running; only this saved connection is removed.</small></span>
+            <button className="secondary-button" onClick={() => setRemoving(null)} disabled={disabled}>Cancel</button>
+            <button className="danger-button" onClick={() => void remove()} disabled={disabled}>Remove</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function ConnectionFailure({result, message}: {result: Connection | null; message: string}) {
-  return <div className="connection-failure" role="alert"><AlertTriangle size={15} /><span><strong>{message}</strong>{result?.compatibility?.issues.map((issue) => <small key={issue.code}>{issue.action || issue.message}</small>)}<small>Check the VPN, SSH access, and that `hobot daemon start` is running.</small></span></div>;
+
+function ConnectionFailure({result, message, onInstall, installing}: {result: Connection | null; message: string; onInstall?: () => void; installing?: boolean}) {
+  const isNotInstalled = Boolean(result?.notInstalled || /not installed|command not found|hobot: not found/i.test(message));
+  return (
+    <div className="connection-failure" role="alert">
+      <AlertTriangle size={15} />
+      <span>
+        <strong>{message}</strong>
+        {result?.compatibility?.issues.map((issue) => <small key={issue.code}>{issue.action || issue.message}</small>)}
+        {!isNotInstalled && <small>Check the VPN, SSH access, and that `hobot daemon start` is running.</small>}
+        {isNotInstalled && onInstall && (
+          <div className="install-prompt-row">
+            <small>You can automatically install Hobot Code on this board over SSH.</small>
+            <button
+              type="button"
+              className="primary-button compact install-service-button"
+              onClick={onInstall}
+              disabled={installing}
+            >
+              {installing ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
+              <span>{installing ? 'Installing on board...' : 'Install on board'}</span>
+            </button>
+          </div>
+        )}
+      </span>
+    </div>
+  );
 }
+
 
 function WorkspaceDialog({boardId, initialPath, onClose, onChoose}: {boardId: string; initialPath: string; onClose: () => void; onChoose: (path: string) => void}) {
   const [listing, setListing] = useState<WorkspaceListing | null>(null);
