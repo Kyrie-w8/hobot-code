@@ -402,6 +402,65 @@ test("Developer permits common read-only board and build-host diagnostics", () =
   }
 });
 
+test("Developer recognizes safe Python here-doc configuration updates", () => {
+  const command = String.raw`bash -c 'export PATH="$HOME/miniconda3/envs/dr-oellm2/bin:$PATH" && env -i PATH="$PATH" HOME="$HOME" python3 << "PYEOF"
+import yaml
+p = "/home/bin.wang/OpenExplorer_LLM_2.0.4/llm_compression/configs/qwen3_4b.yml"
+with open(p) as f:
+    cfg = yaml.safe_load(f)
+cfg["compile"]["jobs"] = 8
+cfg["compile"]["cache_path"] = "/home/bin.wang/llm_cache_local/qwen3_4b"
+with open(p, "w") as f:
+    yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+PYEOF
+mkdir -p /home/bin.wang/llm_cache_local/qwen3_4b && echo "local cache dir created"'`;
+  const analysis = analyzeShellCommand(command);
+  assert.deepEqual(analysis.destructiveReasons, []);
+  assert.deepEqual(analysis.networkReasons, []);
+  assert.deepEqual(analysis.ambiguousReasons, []);
+  assert.deepEqual(resolveShellSafety(command, "allow").approvalReasons, []);
+});
+
+test("Python here-docs retain protected-path and dynamic-execution safeguards", () => {
+  const cases = [
+    [String.raw`python3 <<'PY'
+open("/etc/hobot.conf", "w").write("unsafe")
+PY`, "embedded Python writes to a protected system path"],
+    [String.raw`python3 <<'PY'
+open("~/.ssh/authorized_keys", "a").write("unsafe")
+PY`, "embedded Python writes user credentials, startup, or persistent configuration"],
+    [String.raw`python3 <<'PY'
+import shutil
+shutil.rmtree("/tmp/work")
+PY`, "embedded Python removes or destroys files"],
+  ];
+  for (const [command, reason] of cases) {
+    assert.ok(resolveShellSafety(command, "allow").approvalReasons.includes(reason), command);
+  }
+  for (const command of [
+    String.raw`python3 <<'PY'
+open(target, "w").write("unsafe")
+PY`,
+    String.raw`python3 <<'PY'
+import shutil
+shutil.copy("model.bin", "/etc/hobot/model.bin")
+PY`,
+    String.raw`python3 <<'PY'
+from pathlib import Path
+Path("/etc/hobot.conf").open(mode="w")
+PY`,
+    String.raw`python3 <<'PY'
+import os
+os.system("touch /tmp/unsafe")
+PY`,
+    String.raw`python3 <<'PY'
+exec(payload)
+PY`,
+  ]) {
+    assert.ok(resolveShellSafety(command, "allow").approvalReasons.some((reason) => /embedded Python/.test(reason)), command);
+  }
+});
+
 test("Developer still asks for system, runtime, container, and cluster mutation", () => {
   const cases = [
     ["echo x >/opt/hobot/config", "writes to a protected system path"],

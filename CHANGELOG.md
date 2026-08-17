@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Parse literal Python heredocs structurally in Developer mode so safe OpenExplorer configuration updates and cache-directory creation no longer prompt merely because the embedded script contains Python syntax. Keep protected paths, startup and credential files, deletion, dynamic file modes, process launch, dynamic code, and unknown Python calls approval-gated.
 - Keep a navigated conversation as one continuous event range and page forward as the reader scrolls down, instead of joining an old page directly to the latest scheduled output and silently skipping the messages between them.
 - Show a persistent **Latest** action while reading historical pages, while continuing to use **New output** for live messages that arrive when the reader is away from the current tail.
 - Let Developer mode run common read-only board and OpenExplorer diagnostics without approval, including process, GPU, storage, compiler, package, environment, container, and cluster inspection commands.

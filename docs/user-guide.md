@@ -547,7 +547,7 @@ Developer 会先解析 Shell 的执行结构，再按实际会执行的命令判
 
 常用的只读开发诊断会直接执行，包括 `top`、`ps`、`pidstat`、`iostat`、`mpstat`、`nvidia-smi` 查询、`lsblk`、`lscpu`、`readelf`、`objdump`、包状态查询、Conda 环境查询，以及 `docker`/`kubectl` 的只读检查。`openexplorer_remote_run` 使用同一套分类，因此受信构建机上的线程、GPU、编译器和进程状态检查也不会因为工具名遗漏而反复询问。`if`、`while`、`for` 等普通 Shell 控制结构不改变其中命令的风险结果。
 
-解析器会继续检查当前命令实际执行的子命令，包括未转义的 `$(...)`、反引号、`sh`/`bash -c` 的常量脚本、SSH 的远端命令，以及 `sudo`、`env`、`timeout`、`nohup` 等 wrapper。真正执行的 `chmod`/`chown`、删除、关键路径或用户启动配置写入、服务/软件包/Conda 环境/内核/网络配置、日志清理、GPU 参数修改、危险信号、容器删除或 exec、Kubernetes 写操作和硬件写入仍会要求确认。
+解析器会继续检查当前命令实际执行的子命令，包括未转义的 `$(...)`、反引号、`sh`/`bash -c` 的常量脚本、SSH 的远端命令，以及 `sudo`、`env`、`timeout`、`nohup` 等 wrapper。Python heredoc 也会单独分析：静态的项目配置写入、普通缓存目录创建和受支持的 YAML/JSON 配置读写可直接运行；动态文件名或模式、未知 Python 调用、进程启动、动态代码、删除、关键路径或用户启动配置写入仍会询问。真正执行的 `chmod`/`chown`、服务/软件包/Conda 环境/内核/网络配置、日志清理、GPU 参数修改、危险信号、容器删除或 exec、Kubernetes 写操作和硬件写入同样会要求确认。
 
 动态命令名、`eval`/`source`、未闭合引号或重定向始终会保守询问，而不是把文本猜成安全命令。动态写入目标（例如 `>"$TARGET"`）在无 sandbox 的远端构建机上也会询问，因为无法预先证明最终路径安全；在受管 OS sandbox 内则由文件系统边界约束，不额外打断。运行在受管 sandbox 内时，普通未知项目可执行文件（例如 `./configure`、`./project-tool --status`）也可直接运行。关闭 sandbox 后，这类未知外部程序会要求确认。若 `shared` 网络又被策略拒绝，未知程序仍会 fail-closed，避免把潜在外联误当成本地命令。
 

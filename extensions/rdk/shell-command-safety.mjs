@@ -130,11 +130,200 @@ function readBacktickFragment(source, start) {
   return { text: source.slice(start), end: source.length, closed: false };
 }
 
+function blankShellLine(line) {
+  return line.replace(/[^\r\n]/g, " ");
+}
+
+function shellQuoteState(line, initial = "") {
+  let quote = initial;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\\" && quote !== "'") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "'" || char === '"') quote = char;
+  }
+  return quote;
+}
+
+function hereDocumentHeader(line, initialQuote = "") {
+  // This deliberately recognizes only literal delimiters. A dynamic delimiter
+  // changes how the body is expanded, so it remains in the normal parser and
+  // consequently fails closed as ambiguous.
+  let quote = initialQuote;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\\" && quote !== "'") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char !== "<" || line[index + 1] !== "<" || (index > 0 && !/[\s;|&]/.test(line[index - 1]))) continue;
+    const match = /^(?:\d*)<<(\-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/.exec(line.slice(index));
+    if (!match) continue;
+    const delimiter = match[2] ?? match[3] ?? match[4];
+    if (delimiter) return { delimiter, stripTabs: Boolean(match[1]), header: line };
+  }
+  return undefined;
+}
+
+// Here-document bodies are program input, not shell source. Keeping them in
+// the shell lexer made Python parentheses and strings look like shell control
+// syntax, which caused harmless configuration updates to require approval.
+// Retain the body separately so the receiving interpreter can still be
+// checked for destructive behavior.
+function isolateHereDocuments(source) {
+  const lines = String(source ?? "").match(/.*(?:\r?\n|$)/g) ?? [];
+  const text = [];
+  const hereDocs = [];
+  let quote = "";
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const header = hereDocumentHeader(line, quote);
+    text.push(line);
+    quote = shellQuoteState(line, quote);
+    if (!header) continue;
+    const body = [];
+    let closed = false;
+    while (index + 1 < lines.length) {
+      index += 1;
+      const candidate = lines[index];
+      const comparison = candidate.replace(/\r?\n$/, "");
+      const delimiter = header.stripTabs ? comparison.replace(/^\t+/, "") : comparison;
+      if (delimiter === header.delimiter) {
+        closed = true;
+        text.push(blankShellLine(candidate));
+        break;
+      }
+      body.push(candidate);
+      text.push(blankShellLine(candidate));
+    }
+    hereDocs.push({ ...header, body: body.join(""), closed });
+  }
+  return { text: text.join(""), hereDocs };
+}
+
+function pythonStringAssignments(source) {
+  const values = new Map();
+  for (const line of String(source ?? "").split(/\r?\n/)) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['"])([^'"\\]*(?:\\.[^'"\\]*)*)\2\s*(?:#.*)?$/.exec(line);
+    if (match) values.set(match[1], match[3].replace(/\\(['"\\])/g, "$1"));
+  }
+  return values;
+}
+
+function pythonPathExpression(value, assignments) {
+  const expression = String(value ?? "").trim();
+  const quoted = /^(['"])(.*)\1$/.exec(expression);
+  if (quoted) return { value: quoted[2].replace(/\\(['"\\])/g, "$1"), dynamic: false };
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expression) && assignments.has(expression)) {
+    return { value: assignments.get(expression), dynamic: false };
+  }
+  return { value: "", dynamic: true };
+}
+
+function addEmbeddedPathReasons(reasons, ambiguities, path, dynamic, protectedReason) {
+  if (dynamic) {
+    pushUnique(ambiguities, ["embedded Python writes to a dynamic path that cannot be classified safely"]);
+    return;
+  }
+  if (isCriticalPath(path) && path !== "/dev/null") pushUnique(reasons, [protectedReason]);
+  if (isCredentialPath(path)) pushUnique(reasons, ["embedded Python writes user credentials, startup, or persistent configuration"]);
+  if (isHobotStatePath(path)) pushUnique(reasons, ["embedded Python modifies Hobot Code persistent task and conversation state"]);
+}
+
+function inspectPythonHereDocument(hereDoc, result) {
+  const source = hereDoc.body;
+  const assignments = pythonStringAssignments(source);
+  if (/\b(?:eval|exec|compile|__import__)\s*\(/.test(source)) {
+    pushUnique(result.ambiguousReasons, ["embedded Python evaluates dynamic code that cannot be classified safely"]);
+  }
+  if (/\b(?:subprocess\.(?:run|call|check_call|check_output|Popen)|os\.(?:system|popen|spawn[a-z]*|execl?p?e?|execv?p?e?)|pty\.spawn)\s*\(/.test(source)) {
+    pushUnique(result.ambiguousReasons, ["embedded Python runs a process that cannot be classified safely"]);
+  }
+  if (/\b(?:os\.(?:remove|unlink|rmdir)|shutil\.(?:rmtree|move)|pathlib\.[A-Za-z_][A-Za-z0-9_]*\.unlink|\.unlink|\.rmdir)\s*\(/.test(source)) {
+    pushUnique(result.destructiveReasons, ["embedded Python removes or destroys files"]);
+  }
+  if (/\b(?:os\.(?:chmod|chown|lchown)|Path\([^\n]*\)\.chmod)\s*\(/.test(source)) {
+    pushUnique(result.destructiveReasons, ["embedded Python changes file ownership or access permissions"]);
+  }
+  if (/\b(?:requests\.|urllib\.|httpx\.|socket\.)/.test(source)) {
+    pushUnique(result.networkReasons, ["embedded Python uses network access while the OS sandbox shares host networking"]);
+  }
+
+  const writes = [
+    ...source.matchAll(/\bopen\(\s*([^,\n]+)\s*,\s*(['"])[^'"]*[wax+][^'"]*\2/g),
+    ...source.matchAll(/\bopen\(\s*([^,\n]+)\s*,\s*mode\s*=\s*(['"])[^'"]*[wax+][^'"]*\2/g),
+    ...source.matchAll(/\bPath\(\s*([^\)\n]+)\s*\)\.(?:write_text|write_bytes|mkdir|touch)\s*\(/g),
+    ...source.matchAll(/\bPath\(\s*([^\)\n]+)\s*\)\.open\(\s*mode\s*=\s*(['"])[^'"]*[wax+][^'"]*\2/g),
+    ...source.matchAll(/\bos\.makedirs\(\s*([^,\)\n]+)/g),
+  ];
+  for (const match of writes) {
+    const path = pythonPathExpression(match[1], assignments);
+    addEmbeddedPathReasons(
+      result.destructiveReasons,
+      result.ambiguousReasons,
+      path.value,
+      path.dynamic,
+      "embedded Python writes to a protected system path",
+    );
+  }
+
+  // `open(path, mode)` is safe to inspect only when the mode is literal. A
+  // variable can become "w" or "a" at runtime, so defer it to review.
+  for (const match of source.matchAll(/\bopen\(\s*([^,\n]+)\s*,\s*([^,\n\)]+)/g)) {
+    const mode = match[2].trim();
+    if (!/^(?:mode\s*=\s*)?(['"])[^'"]*\1$/.test(mode)) {
+      pushUnique(result.ambiguousReasons, ["embedded Python uses a dynamic file mode that cannot be classified safely"]);
+    }
+  }
+  for (const match of source.matchAll(/\bPath\(\s*[^\)\n]+\s*\)\.open\(\s*mode\s*=\s*([^,\n\)]+)/g)) {
+    if (!/^(['"])[^'"]*\1$/.test(match[1].trim())) {
+      pushUnique(result.ambiguousReasons, ["embedded Python uses a dynamic file mode that cannot be classified safely"]);
+    }
+  }
+
+  // A here-document runs real code. Keep automatic approval intentionally
+  // narrow: known, local configuration operations may proceed, while any
+  // unfamiliar callable is reviewed instead of being silently trusted.
+  const calls = source
+    .replace(/\bPath\([^\n\)]*\)\.(?:write_text|write_bytes|mkdir|touch)\s*\(/g, "path_write(")
+    .matchAll(/\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\s*\(/g);
+  const safeCalls = new Set([
+    "open", "print", "Path", "path_write", "os.makedirs",
+    "yaml.safe_load", "yaml.safe_dump", "yaml.dump",
+    "json.load", "json.loads", "json.dump", "json.dumps",
+  ]);
+  for (const match of calls) {
+    if (!safeCalls.has(match[1])) {
+      pushUnique(result.ambiguousReasons, ["embedded Python calls an unclassified function"]);
+      break;
+    }
+  }
+}
+
+function hereDocReceivesPython(header) {
+  return /(?:^|[\s;|&])(?:python|python3)(?:\s|$)/.test(header);
+}
+
 // Parse execution-relevant shell structure only. Normal argument text is kept
 // as data: a `chmod` grep pattern or a Hobot schedule prompt is not executable.
 function parseShellProgram(source, depth = 0) {
-  const text = String(source ?? "");
-  const program = { segments: [], ambiguousReasons: [] };
+  const isolated = isolateHereDocuments(source);
+  const text = isolated.text;
+  const program = { segments: [], ambiguousReasons: [], hereDocs: isolated.hereDocs };
   if (depth > 12) {
     program.ambiguousReasons.push("shell nesting is too deep to classify safely");
     return program;
@@ -620,6 +809,13 @@ export function analyzeShellCommand(command) {
     if (visited.has(program)) return;
     visited.add(program);
     pushUnique(result.ambiguousReasons, program.ambiguousReasons ?? []);
+    for (const hereDoc of program.hereDocs ?? []) {
+      if (!hereDoc.closed) {
+        pushUnique(result.ambiguousReasons, ["shell here-document terminator is missing"]);
+        continue;
+      }
+      if (hereDocReceivesPython(hereDoc.header)) inspectPythonHereDocument(hereDoc, result);
+    }
     for (const segment of program.segments) {
       const executable = executableForSegment(segment);
       if (executable.ambiguous) pushUnique(result.ambiguousReasons, [executable.ambiguous]);
