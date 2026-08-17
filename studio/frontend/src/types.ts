@@ -65,6 +65,58 @@ export type BoardUpdateResult = {changed: boolean; previousVersion: string; inst
 export type BoardInstallResult = {success: boolean; message: string; connection: Connection};
 export type StudioUpdateCheck = {status: 'current' | 'ahead' | 'available' | 'unsupported'; installedVersion: string; availableVersion?: string; message: string; releaseUrl?: string};
 
+export type BPUTensorDesc = {
+  index: number;
+  name: string;
+  inputSource?: string;
+  validShape: string;
+  alignedShape: string;
+  alignedBytes: number;
+  tensorType: string;
+  tensorLayout: string;
+  quantiType: string;
+  stride?: string;
+  quantizeAxis?: number;
+};
+
+export type BPUModelInfo = {
+  modelName: string;
+  modelFile: string;
+  targetSoc?: string;
+  bpuPlatformVersion?: string;
+  hbrtVersion?: string;
+  dnnVersion?: string;
+  modelBuilderVersion?: string;
+  loadDdrCostMs: number;
+  inputs: BPUTensorDesc[];
+  outputs: BPUTensorDesc[];
+  rawOutput?: string;
+};
+
+export type BPUBenchmarkRequest = {
+  modelPath: string;
+  coreId: number;
+  frameCount: number;
+  threadCount: number;
+  inputFile?: string;
+};
+
+export type BPUBenchmarkResult = {
+  modelPath: string;
+  modelName: string;
+  coreId: number;
+  threadCount: number;
+  frameCount: number;
+  fps: number;
+  averageLatencyMs: number;
+  minLatencyMs: number;
+  maxLatencyMs: number;
+  programRunTimeMs: number;
+  totalLatencyMs: number;
+  capturedAt: string;
+  rawOutput?: string;
+};
+
 
 export type ThermalZone = {name: string; celsius: number};
 export type BPUCoreInfo = {index: number; name: string; utilizationPercent: number; currentFrequencyHz?: number; minimumFrequencyHz?: number; maximumFrequencyHz?: number};

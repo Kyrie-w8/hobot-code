@@ -7,7 +7,7 @@ import {
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
   Download, FileDiff, Gauge, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
-  Play, Square, SquareTerminal, Trash2, Wrench, X, XCircle,
+  Play, Square, SquareTerminal, Trash2, Wrench, X, XCircle, Zap,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
@@ -38,7 +38,8 @@ import {includedModelSummary, includedProviderGroups} from './provider-catalog.j
 import {applyTheme, readThemePreference, resolveTheme, saveThemePreference} from './appearance-theme.js';
 import type {ThemePreference} from './appearance-theme.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, BPUBenchmarkRequest, BPUBenchmarkResult, BPUModelInfo, BPUTensorDesc, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -101,8 +102,10 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState('');
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showBPUBenchmark, setShowBPUBenchmark] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
+
 	const [workspaceInspection, setWorkspaceInspection] = useState<{taskId: string; loading: boolean; result?: WorkspaceIsolation} | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [unreadTasks, setUnreadTasks] = useState<Set<string>>(new Set());
@@ -1279,10 +1282,12 @@ function App() {
 		{connection?.capabilities?.capabilities.includes('schedules.v1') && <button className="icon-button" title="Schedules" disabled={connectionState !== 'online'} onClick={() => setShowSchedules(true)}><CalendarClock size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('providers.manage.v1') && <button className="icon-button" title="Model providers" disabled={connectionState !== 'online'} onClick={() => setShowProviders(true)}><KeyRound size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1') && <button className={`icon-button diagnostic-status ${diagnostics?.status ?? ''}`} title="Board readiness" disabled={connectionState !== 'online'} onClick={() => void openDiagnostics()}>{diagnosticsLoading ? <LoaderCircle size={16} className="spin" /> : <Activity size={16} />}</button>}
+        {connectionState === 'online' && <button className="icon-button" title="BPU Benchmark & Model Inspector" onClick={() => setShowBPUBenchmark(true)}><Zap size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
       </header>
+
 
       <aside className="task-sidebar">
         <div className="sidebar-heading">
@@ -1390,7 +1395,9 @@ function App() {
       {showProviders && connection && <ProviderDialog boardId={connection.board.id} boardName={connection.board.name} models={models} onChanged={async (result) => {setNotice(result.message); if (result.applied) {const nextModels = await api.models(connection.board.id); setModels(nextModels);}}} onClose={() => setShowProviders(false)} />}
       {supportBundle && <SupportDiagnosticsDialog bundle={supportBundle} onClose={() => setSupportBundle(null)} />}
       {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} failure={diagnosticsError} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
+      {showBPUBenchmark && connection && <BPUBenchmarkDialog boardId={connection.board.id} boardName={connection.board.name} snapshot={snapshot} cwd={selectedTask?.cwd ?? '/root'} onClose={() => setShowBPUBenchmark(false)} />}
       {showModelReadiness && connection && effectiveModel && <ModelReadinessDialog model={effectiveModel} snapshot={snapshot} capabilities={connection.capabilities?.capabilities ?? []} qualification={qualificationForModel} health={currentModelHealth} conformance={currentModelConformance} runtimeProbe={currentModelRuntimeProbe} rdkProbe={currentModelRDKProbe} rdkMatrix={currentModelRDKMatrix} activeStage={checkingModel ? 'health' : verifyingModel ? 'protocol' : modelQualificationStage} activeProfile={modelQualificationProfile} failure={modelReadinessError} onRunHealth={() => void checkModelHealth()} onRunProtocol={() => void verifyModelConformance()} onRunRuntime={() => void probeModelRuntime()} onRunRDK={(profile) => void probeModelRDK(profile)} onClose={() => setShowModelReadiness(false)} />}
+
       {showAccessSettings && selectedTask && <AccessSettingsDialog permissionMode={selectedPermissionMode} sandboxMode={selectedSandboxMode} networkMode={selectedNetworkMode} workspaceMode={selectedTask.workspaceMode || 'shared'} summary={accessPresentation.summary} hasWorkspace={Boolean(draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'))} workspaceEligible={Boolean(workspaceInspection?.result?.eligible)} workspaceLoading={workspaceInspectionLoading} workspaceReason={workspaceInspection?.result?.reason || ''} hasSandbox={Boolean(selectedTask.sandboxMode || connection?.capabilities?.capabilities.includes('tasks.sandbox.v1'))} hasNetwork={Boolean(selectedTask.networkMode || connection?.capabilities?.capabilities.includes('tasks.network.v1'))} sandboxAvailable={Boolean(connection?.capabilities?.sandbox?.available)} networkModes={connection?.capabilities?.sandbox?.networkModes ?? []} modelOnly={effectiveModel?.modelOnly === true} canChangePermissions={canChangePermissions} canChangeSandbox={canChangeSandbox} canChangeNetwork={canChangeNetwork} canStopWorker={canStopBoundaryWorker} busy={busy} onWorkspace={changeWorkspaceMode} onPermission={(mode) => void changePermissionMode(mode)} onSandbox={(mode) => void changeSandboxMode(mode)} onNetwork={(mode) => void changeNetworkMode(mode)} onStopWorker={() => void stopTask()} onClose={() => setShowAccessSettings(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
 	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
@@ -2371,7 +2378,370 @@ function ReadinessDiagnosticsDialog({report, loading, failure, onRefresh, onRepa
   </section></div>;
 }
 
+function BPUBenchmarkDialog({
+  boardId,
+  boardName,
+  snapshot,
+  cwd,
+  onClose,
+}: {
+  boardId: string;
+  boardName: string;
+  snapshot: SystemSnapshot | null;
+  cwd: string;
+  onClose: () => void;
+}) {
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [customModelPath, setCustomModelPath] = useState('');
+  const [coreId, setCoreId] = useState(0);
+  const [threadCount, setThreadCount] = useState(1);
+  const [frameCount, setFrameCount] = useState(200);
+  const [modelInfo, setModelInfo] = useState<BPUModelInfo | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectError, setInspectError] = useState('');
+  const [benchmarking, setBenchmarking] = useState(false);
+  const [benchmarkError, setBenchmarkError] = useState('');
+  const [currentResult, setCurrentResult] = useState<BPUBenchmarkResult | null>(null);
+  const [history, setHistory] = useState<BPUBenchmarkResult[]>([]);
+
+  const effectivePath = (selectedModel === 'custom' ? customModelPath : selectedModel).trim();
+
+  // Load models on mount
+  useEffect(() => {
+    let cancelled = false;
+    api.listWorkspaceBPUModels(boardId, cwd).then((models) => {
+      if (cancelled) return;
+      setDiscoveredModels(models);
+      if (models.length > 0) {
+        setSelectedModel(models[0]);
+      } else {
+        setSelectedModel('/root/yolov8_640x640_nv12.bin');
+      }
+    }).catch(() => {
+      if (!cancelled) setSelectedModel('/root/yolov8_640x640_nv12.bin');
+    });
+    return () => { cancelled = true; };
+  }, [boardId, cwd]);
+
+  // Inspect model when path changes
+  const inspectModel = useCallback(async (path: string) => {
+    if (!path || inspecting || benchmarking) return;
+    setInspecting(true);
+    setInspectError('');
+    try {
+      const info = await api.inspectBPUModel(boardId, path);
+      setModelInfo(info);
+    } catch (err) {
+      setInspectError(friendlyError(String(err)));
+      setModelInfo(null);
+    } finally {
+      setInspecting(false);
+    }
+  }, [boardId, inspecting, benchmarking]);
+
+  useEffect(() => {
+    if (effectivePath && effectivePath !== 'custom') {
+      void inspectModel(effectivePath);
+    }
+  }, [effectivePath, inspectModel]);
+
+  // Run benchmark
+  const runBenchmark = async () => {
+    if (!effectivePath || benchmarking || inspecting) return;
+    setBenchmarking(true);
+    setBenchmarkError('');
+    try {
+      const res = await api.runBPUBenchmark(boardId, {
+        modelPath: effectivePath,
+        coreId,
+        threadCount,
+        frameCount,
+      });
+      setCurrentResult(res);
+      setHistory((prev) => [res, ...prev.slice(0, 9)]);
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setBenchmarking(false);
+    }
+  };
+
+  const copyReport = () => {
+    if (!currentResult) return;
+    const md = `### BPU Benchmark Report: ${currentResult.modelName || currentResult.modelPath}
+- **Board**: ${boardName} (${snapshot?.board || 'RDK'})
+- **FPS**: ${currentResult.fps.toFixed(2)}
+- **Average Latency**: ${currentResult.averageLatencyMs.toFixed(2)} ms
+- **Min / Max Latency**: ${currentResult.minLatencyMs.toFixed(2)} ms / ${currentResult.maxLatencyMs.toFixed(2)} ms
+- **Threads / Cores**: ${currentResult.threadCount} threads / Core ${currentResult.coreId === 0 ? 'Auto' : currentResult.coreId - 1}
+- **Test Frames**: ${currentResult.frameCount} frames
+- **Captured At**: ${currentResult.capturedAt}`;
+    void navigator.clipboard.writeText(md);
+  };
+
+  const bpuCoreCount = snapshot?.bpuCores?.length ?? (snapshot?.bpuDevices?.length ?? 1);
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal bpu-modal" role="dialog" aria-modal="true" aria-labelledby="bpu-title">
+        <div className="modal-header">
+          <div>
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+              <span className="modal-eyebrow">D-Robotics Hardware Acceleration</span>
+              <span className="bpu-badge"><Cpu size={13} />{snapshot?.board || 'RDK'} · {bpuCoreCount}x BPU</span>
+            </div>
+            <h2 id="bpu-title">BPU Benchmark & Model Inspector</h2>
+          </div>
+          <button className="icon-button" title="Close" disabled={benchmarking} onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="bpu-layout">
+          {/* Left Sidebar: Configurations */}
+          <div className="bpu-sidebar">
+            <div className="bpu-sidebar-group">
+              <label>Select Model File</label>
+              <div className="bpu-model-list">
+                {discoveredModels.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
+                    onClick={() => setSelectedModel(m)}
+                  >
+                    <Package size={14} />
+                    <span title={m}>{m.split('/').pop() || m}</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={`bpu-model-item ${selectedModel === 'custom' ? 'selected' : ''}`}
+                  onClick={() => setSelectedModel('custom')}
+                >
+                  <Folder size={14} />
+                  <span>Custom Path...</span>
+                </button>
+              </div>
+              {selectedModel === 'custom' && (
+                <div style={{marginTop: '6px'}}>
+                  <input
+                    type="text"
+                    value={customModelPath}
+                    onChange={(e) => setCustomModelPath(e.target.value)}
+                    placeholder="/path/to/model.bin"
+                    style={{width: '100%', fontSize: '12px'}}
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{marginTop: '6px', width: '100%'}}
+                    disabled={!customModelPath.trim() || inspecting}
+                    onClick={() => void inspectModel(customModelPath.trim())}
+                  >
+                    {inspecting ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />}
+                    Inspect Model
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="bpu-sidebar-group">
+              <label>Benchmark Settings</label>
+              <div className="bpu-form-row">
+                <label style={{fontSize: '11px'}}>
+                  BPU Core
+                  <select value={coreId} disabled={benchmarking} onChange={(e) => setCoreId(Number(e.target.value))}>
+                    <option value={0}>Auto / Any</option>
+                    {Array.from({length: bpuCoreCount}, (_, i) => (
+                      <option key={i} value={i + 1}>Core {i}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{fontSize: '11px'}}>
+                  Threads
+                  <select value={threadCount} disabled={benchmarking} onChange={(e) => setThreadCount(Number(e.target.value))}>
+                    <option value={1}>1 thread (latency)</option>
+                    <option value={2}>2 threads</option>
+                    <option value={4}>4 threads (throughput)</option>
+                    <option value={8}>8 threads (stress)</option>
+                  </select>
+                </label>
+              </div>
+              <label style={{fontSize: '11px', marginTop: '4px'}}>
+                Iterations (Frames)
+                <select value={frameCount} disabled={benchmarking} onChange={(e) => setFrameCount(Number(e.target.value))}>
+                  <option value={100}>100 frames (~1.2s)</option>
+                  <option value={200}>200 frames (~2.5s)</option>
+                  <option value={500}>500 frames (~6.0s)</option>
+                  <option value={1000}>1000 frames (~12.0s)</option>
+                </select>
+              </label>
+            </div>
+
+            <div style={{marginTop: 'auto', paddingTop: '10px'}}>
+              <button
+                type="button"
+                className="primary-button"
+                style={{width: '100%', height: '38px', gap: '8px', fontSize: '13px', fontWeight: 600}}
+                disabled={!effectivePath || benchmarking || inspecting}
+                onClick={() => void runBenchmark()}
+              >
+                {benchmarking ? <LoaderCircle size={16} className="spin" /> : <Zap size={16} />}
+                {benchmarking ? 'Benchmarking...' : 'Run BPU Benchmark'}
+              </button>
+            </div>
+          </div>
+
+          {/* Right Main Dashboard */}
+          <div className="bpu-main">
+            {benchmarkError && (
+              <div className="schedule-error" style={{margin: 0}}>
+                <AlertTriangle size={16} />
+                <span>{benchmarkError}</span>
+              </div>
+            )}
+            {inspectError && (
+              <div className="schedule-error">
+                <AlertTriangle size={15} />
+                <span>{inspectError}</span>
+              </div>
+            )}
+
+            {/* Top Metric Cards */}
+            {currentResult && (
+              <div className="bpu-hero-grid">
+                <div className="bpu-metric-card accent">
+                  <span className="bpu-metric-label">Inference Throughput</span>
+                  <span className="bpu-metric-value">{currentResult.fps.toFixed(1)} <small style={{fontSize: '14px', fontWeight: 500}}>FPS</small></span>
+                  <span className="bpu-metric-sub">{currentResult.threadCount} thread(s) · {currentResult.frameCount} frames</span>
+                </div>
+                <div className="bpu-metric-card">
+                  <span className="bpu-metric-label">Avg Latency</span>
+                  <span className="bpu-metric-value">{currentResult.averageLatencyMs.toFixed(2)} <small style={{fontSize: '14px', fontWeight: 500}}>ms</small></span>
+                  <span className="bpu-metric-sub">Min {currentResult.minLatencyMs.toFixed(1)}ms · Max {currentResult.maxLatencyMs.toFixed(1)}ms</span>
+                </div>
+                <div className="bpu-metric-card">
+                  <span className="bpu-metric-label">BPU Target Core</span>
+                  <span className="bpu-metric-value" style={{fontSize: '18px', paddingTop: '4px'}}>
+                    {currentResult.coreId === 0 ? 'All / Auto' : `Core ${currentResult.coreId - 1}`}
+                  </span>
+                  <span className="bpu-metric-sub">{snapshot?.board || 'RDK SoC'} Accelerator</span>
+                </div>
+                <div className="bpu-metric-card">
+                  <span className="bpu-metric-label">DDR Load Time</span>
+                  <span className="bpu-metric-value" style={{fontSize: '18px', paddingTop: '4px'}}>
+                    {modelInfo?.loadDdrCostMs ? `${modelInfo.loadDdrCostMs.toFixed(1)} ms` : 'Cached'}
+                  </span>
+                  <span className="bpu-metric-sub">Runtime: {modelInfo?.hbrtVersion || 'HBRT 3.15'}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Model & Tensor Inspection */}
+            {modelInfo && (
+              <div className="bpu-card-section">
+                <div className="bpu-section-title">
+                  <span>Model Specification ({modelInfo.modelName || modelInfo.modelFile.split('/').pop()})</span>
+                  {modelInfo.targetSoc && <span className="bpu-badge">SoC: {modelInfo.targetSoc.toUpperCase()}</span>}
+                </div>
+
+                {/* Input Tensors */}
+                <div className="tensor-grid">
+                  {modelInfo.inputs.map((t) => (
+                    <div key={`in-${t.index}`} className="tensor-card">
+                      <div className="tensor-card-header">
+                        <strong style={{fontSize: '12px'}}>{t.name || `Input #${t.index}`}</strong>
+                        <span className="tensor-tag">INPUT {t.index}</span>
+                      </div>
+                      <dl className="tensor-props">
+                        <dt>Shape:</dt><dd>{t.validShape}</dd>
+                        <dt>Format:</dt><dd>{t.tensorType}</dd>
+                        <dt>Layout:</dt><dd>{t.tensorLayout}</dd>
+                        {t.inputSource && <><dt>Source:</dt><dd>{t.inputSource}</dd></>}
+                        {t.alignedBytes > 0 && <><dt>Buffer:</dt><dd>{(t.alignedBytes / 1024).toFixed(1)} KB</dd></>}
+                      </dl>
+                    </div>
+                  ))}
+
+                  {/* Output Tensors */}
+                  {modelInfo.outputs.map((t) => (
+                    <div key={`out-${t.index}`} className="tensor-card">
+                      <div className="tensor-card-header">
+                        <strong style={{fontSize: '12px'}}>{t.name || `Output #${t.index}`}</strong>
+                        <span className="tensor-tag output">OUTPUT {t.index}</span>
+                      </div>
+                      <dl className="tensor-props">
+                        <dt>Shape:</dt><dd>{t.validShape}</dd>
+                        <dt>Type:</dt><dd>{t.tensorType}</dd>
+                        <dt>Quant:</dt><dd>{t.quantiType}</dd>
+                        {t.alignedBytes > 0 && <><dt>Size:</dt><dd>{(t.alignedBytes / 1024).toFixed(1)} KB</dd></>}
+                      </dl>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Empty State when no model inspected and no benchmark run */}
+            {!currentResult && !modelInfo && !inspecting && (
+              <div className="bpu-empty-hint">
+                <Gauge size={42} />
+                <div>
+                  <strong>No Model Selected</strong>
+                  <p style={{margin: '4px 0 0', fontSize: '13px'}}>Select a model from the left sidebar to inspect tensor architecture and benchmark BPU inference speed.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Benchmark History */}
+            {history.length > 0 && (
+              <div className="bpu-card-section" style={{marginTop: 'auto'}}>
+                <div className="bpu-section-title">
+                  <span>Session Benchmark History</span>
+                  <button type="button" className="secondary-button" style={{padding: '3px 8px', fontSize: '12px'}} onClick={copyReport}>
+                    <Clipboard size={12} /> Copy Markdown Report
+                  </button>
+                </div>
+                <table className="bpu-history-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Model</th>
+                      <th>Threads</th>
+                      <th>Core</th>
+                      <th>FPS</th>
+                      <th>Avg Latency</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((h, idx) => (
+                      <tr key={idx}>
+                        <td>{formatTime(h.capturedAt)}</td>
+                        <td title={h.modelPath}>{h.modelName || h.modelPath.split('/').pop()}</td>
+                        <td>{h.threadCount}T</td>
+                        <td>{h.coreId === 0 ? 'Auto' : `Core ${h.coreId - 1}`}</td>
+                        <td><strong>{h.fps.toFixed(1)} FPS</strong></td>
+                        <td>{h.averageLatencyMs.toFixed(2)} ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="support-footer">
+          <span>{modelInfo ? `Inspected model: ${modelInfo.modelName || modelInfo.modelFile}` : 'BPU Engine Ready'}</span>
+          <button className="primary-button" onClick={onClose} disabled={benchmarking}>Done</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
+
 
 function TaskSandboxInspector({task}: {task: Task}) {
   const sandbox = task.sandbox;
