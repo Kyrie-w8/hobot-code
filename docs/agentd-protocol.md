@@ -38,7 +38,7 @@
 {"protocol":1,"kind":"event","taskId":"...","sequence":13,"time":"2026-08-11T12:00:01Z","event":{"type":"message_update"},"normalized":{"schema":4,"type":"assistant.text.delta","data":{"delta":"done"},"item":{"type":"agentMessage","status":"inProgress"}}}
 ```
 
-`event` 保留经过板端安全处理的 Pi RPC 内容，或以 `hobot_` 开头的 agentd 内部生命周期事件，用于同版诊断和向后兼容；新客户端应优先消费 `normalized`。标准事件覆盖用户消息、Agent 状态、思考与正文增量、消息完成、工具生命周期、审批生命周期、排队、终态、重试、压缩和扩展错误。schema 4 保留 schema 3 的 `type`/`data`，并增加稳定的 `item` 类型和生命周期；Shell 映射为 `commandExecution`，其他工具映射为 `toolCall`。工具输入、输出预览最多各 12 KiB，客户端不得把它们视为完整日志；agentd 自行生成的用户事件和 Pi 回传的原始事件都会在订阅与落盘前移除结构化图片载荷，只保留名称、MIME 和省略标记。
+`event` 保留经过板端安全处理的 Pi RPC 内容，或以 `hobot_` 开头的 agentd 内部生命周期事件，用于同版诊断和向后兼容；新客户端应优先消费 `normalized`。标准事件覆盖用户消息、Agent 状态、思考与正文增量、消息完成、工具生命周期、审批生命周期、排队、终态、重试、压缩和扩展错误。Pi 的 `auto_retry_start/end` 映射为 `retry_start/end`，只保留最多五次的 `attempt`、`maxAttempts`、退避时间和成功状态，不保留网关错误载荷。schema 4 保留 schema 3 的 `type`/`data`，并增加稳定的 `item` 类型和生命周期；Shell 映射为 `commandExecution`，其他工具映射为 `toolCall`。工具输入、输出预览最多各 12 KiB，客户端不得把它们视为完整日志；agentd 自行生成的用户事件和 Pi 回传的原始事件都会在订阅与落盘前移除结构化图片载荷，只保留名称、MIME 和省略标记。
 
 支持 `tasks.failure.v1` 的服务会在 `task.failed` 和 `task.interrupted` 中返回稳定的 `code`、脱敏 `message` 与单一 `recovery`。恢复值只用于呈现 `resume`、`restart`、`check-model`、`diagnose` 或无动作，不授权客户端自动重放 Prompt、工具调用或审批。底层错误仅追加到任务私有且有界的 `worker.stderr.log`；任务元数据、Studio 与终端 attach 只展示稳定提示。
 

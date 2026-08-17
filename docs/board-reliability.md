@@ -76,7 +76,7 @@ make board-acceptance-check \
 
 ```bash
 node scripts/board-reliability.mjs \
-  --expected-version 0.27.3 \
+  --expected-version 0.27.4 \
   --board x5=root@192.0.2.10 \
   --board s100=root@192.0.2.11 \
   --board s600=root@192.0.2.12 \
@@ -92,7 +92,7 @@ node scripts/board-reliability.mjs \
 
 ```bash
 node scripts/board-reliability.mjs \
-  --expected-version 0.27.3 \
+  --expected-version 0.27.4 \
   --board x5=root@192.0.2.10 \
   --board s100=root@192.0.2.11 \
   --board s600=root@192.0.2.12 \

@@ -993,6 +993,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(packager, /LICENSE/);
   assert.match(packager, /stage_dir\/runtime\/CHANGELOG\.md/);
   assert.match(packager, /install -m 0644 .*hobot\.env\.example.*stage_dir\/config\/hobot\.env\.example/);
+	assert.match(installer, /\/"retry": \{\/,\/"provider": \{\/ s\|"maxRetries": 3\|"maxRetries": 5\|/);
   assert.match(packager, /verify-model-egress-runtime\.py/);
   assert.match(makefile, /model-egress-board-check:/);
   assert.match(installer, /MANIFEST\.sha256/);

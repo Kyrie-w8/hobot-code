@@ -41,6 +41,7 @@ export function buildConversation(events) {
         notices: [],
         completed: false,
         failure: null,
+		retry: null,
       };
     }
     assistant.endedAt = event.time;
@@ -48,7 +49,7 @@ export function buildConversation(events) {
   };
 
   for (const event of events) {
-    const normalized = event.normalized;
+	const normalized = normalizedConversationEvent(event);
     const type = normalized?.type;
     const data = normalized?.data ?? {};
     if (type === 'user.message') {
@@ -66,7 +67,14 @@ export function buildConversation(events) {
       continue;
     }
     if (type === 'task.idle') {
-      if (assistant) assistant.completed = true;
+	  if (assistant) {
+		assistant.completed = true;
+		if (assistant.retry?.active) {
+		  assistant.retry.active = false;
+		  assistant.failure ??= assistant.retry.lastFailure;
+		  if (assistant.failure) assistant.notices.push({type: 'retry', label: `Automatic retry ${assistant.retry.attempt}/${assistant.retry.maxAttempts} exhausted`, time: event.time});
+		}
+	  }
       finishAssistant(event.time);
       continue;
     }
@@ -77,13 +85,20 @@ export function buildConversation(events) {
     else if (type === 'assistant.text.delta') turn.text += String(data.delta ?? '');
     else if (type === 'assistant.message.completed') {
       turn.completed = true;
-      if (data.errorMessage) turn.failure = failurePresentation(String(data.errorMessage));
+	  if (data.errorMessage) {
+		turn.failure = failurePresentation(String(data.errorMessage));
+		if (turn.retry) turn.retry.lastFailure = turn.failure;
+	  } else if (turn.retry?.active) {
+		turn.retry.active = false;
+		turn.retry.recovered = true;
+		turn.failure = null;
+	  }
     }
     else if (type.startsWith('tool.')) updateTool(turn, event, type, data);
     else if (type === 'approval.requested') turn.notices.push({type: 'approval', label: 'Approval requested', time: event.time});
     else if (type === 'approval.resolved') turn.notices.push({type: 'approval', label: 'Approval resolved', time: event.time});
-    else if (type === 'retry_start') turn.notices.push({type: 'retry', label: 'Retrying model request', time: event.time});
-    else if (type === 'retry_end') turn.notices.push({type: 'retry', label: 'Model request recovered', time: event.time});
+	else if (type === 'retry_start') beginRetry(turn, data);
+	else if (type === 'retry_end') finishRetry(turn, data, event.time);
     else if (type === 'compaction_start') turn.notices.push({type: 'compact', label: 'Compacting context', time: event.time});
     else if (type === 'compaction_end') turn.notices.push({type: 'compact', label: 'Context compacted', time: event.time});
     else if (type === 'extension_error') turn.notices.push({type: 'error', label: String(data.error ?? 'Extension error'), time: event.time});
@@ -95,19 +110,80 @@ export function buildConversation(events) {
 export function failurePresentation(value) {
   const message = String(value ?? '').replace(/^Error:\s*/i, '').slice(0, 8192);
   const normalized = message.toLowerCase();
-  if (/unsupported model|model.*not (found|available)|invalid.*model|unknown model/.test(normalized)) {
-    return {category: 'model', title: 'The selected model is unavailable', message: 'Check this model or choose another one, then try again.'};
-  }
   if (/unauthori[sz]ed|forbidden|invalid.*(token|credential|api key)|authentication|\b401\b|\b403\b/.test(normalized)) {
     return {category: 'authentication', title: 'Model authentication failed', message: 'Check the board model credentials, then try again.'};
   }
-  if (/rate.?limit|too many requests|\b429\b|quota/.test(normalized)) {
+	if (/rate.?limit|too many requests|\b429\b|quota|throttl/.test(normalized)) {
     return {category: 'rate-limit', title: 'The model is temporarily busy', message: 'Wait a moment, then try again.'};
   }
+	if (/unsupported model|model.*not (found|available)|invalid.*model|unknown model/.test(normalized)) {
+	  return {category: 'model', title: 'The selected model is unavailable', message: 'Check this model or choose another one, then try again.'};
+	}
   if (/timed? out|deadline exceeded|stream ended|message_stop|connection|network|gateway|\b5\d\d\b/.test(normalized)) {
     return {category: 'connection', title: 'The model connection was interrupted', message: 'Check model availability, then retry this request.'};
   }
   return {category: 'unknown', title: 'This response could not be completed', message: 'Retry the request. If it fails again, check the selected model.'};
+}
+
+function normalizedConversationEvent(event) {
+	if (event.normalized?.type) return event.normalized;
+	const raw = event.event;
+	if (!raw || typeof raw !== 'object') return undefined;
+	if (raw.type === 'auto_retry_start') {
+	  return {type: 'retry_start', data: retryEventData(raw, true)};
+	}
+	if (raw.type === 'auto_retry_end') {
+	  return {type: 'retry_end', data: retryEventData(raw, true)};
+	}
+	return undefined;
+}
+
+function retryEventData(value, automatic) {
+	const data = {automatic};
+	for (const field of ['attempt', 'maxAttempts', 'delayMs', 'success']) {
+	  if (field in value) data[field] = value[field];
+	}
+	return data;
+}
+
+function retryNumber(value, fallback) {
+	const parsed = Number(value);
+	return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 5) : fallback;
+}
+
+function beginRetry(turn, data) {
+	const previousAttempt = turn.retry?.attempt ?? 0;
+	const attempt = retryNumber(data.attempt, previousAttempt + 1);
+	const maxAttempts = Math.max(attempt, retryNumber(data.maxAttempts, turn.retry?.maxAttempts ?? 5));
+	turn.retry = {
+	  attempt,
+	  maxAttempts,
+	  active: true,
+	  recovered: false,
+	  automatic: data.automatic !== false,
+	  lastFailure: turn.failure ?? turn.retry?.lastFailure ?? null,
+	};
+	turn.failure = null;
+}
+
+function finishRetry(turn, data, time) {
+	if (!turn.retry) {
+	  const attempt = retryNumber(data.attempt, 1);
+	  turn.retry = {attempt, maxAttempts: attempt, active: false, recovered: false, automatic: data.automatic !== false, lastFailure: turn.failure};
+	}
+	turn.retry.active = false;
+	const success = data.success !== false;
+	turn.retry.recovered = success;
+	if (success) {
+	  turn.failure = null;
+	  const label = turn.retry.automatic ? `Recovered on retry ${turn.retry.attempt} of ${turn.retry.maxAttempts}` : 'Model request recovered';
+	  turn.notices.push({type: 'retry', label, time});
+	} else {
+	  turn.failure ??= turn.retry.lastFailure;
+	  if (turn.retry.automatic && turn.retry.attempt >= turn.retry.maxAttempts) {
+		turn.notices.push({type: 'retry', label: `Automatic retry ${turn.retry.attempt}/${turn.retry.maxAttempts} exhausted`, time});
+	  }
+	}
 }
 
 function updateTool(turn, event, type, data) {

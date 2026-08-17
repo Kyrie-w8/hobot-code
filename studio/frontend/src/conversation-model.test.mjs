@@ -88,6 +88,39 @@ test('a failed message remains visible even without assistant text', () => {
   assert.doesNotMatch(result[1].failure.message, /kimi|HTTP 400/);
 });
 
+test('automatic retries replace intermediate failures with bounded progress and recovery', () => {
+	const result = buildConversation([
+	  event(1, 'user.message', {text: 'Continue'}),
+	  event(2, 'assistant.message.completed', {errorMessage: 'Unsupported model route; fallback throttling rate limit'}),
+	  {...event(3, ''), normalized: undefined, event: {type: 'auto_retry_start', attempt: 1, maxAttempts: 5, delayMs: 2000, errorMessage: 'private gateway payload'}},
+	  event(4, 'task.running'),
+	  event(5, 'assistant.text.delta', {delta: 'Recovered.'}),
+	  event(6, 'assistant.message.completed'),
+	  {...event(7, ''), normalized: undefined, event: {type: 'auto_retry_end', attempt: 1, success: true}},
+	  event(8, 'task.idle'),
+	]);
+	assert.equal(result[1].failure, null);
+	assert.deepEqual({...result[1].retry, lastFailure: undefined}, {
+	  attempt: 1, maxAttempts: 5, active: false, recovered: true, automatic: true, lastFailure: undefined,
+	});
+	assert.deepEqual(result[1].notices.map((notice) => notice.label), [
+	  'Recovered on retry 1 of 5',
+	]);
+});
+
+test('an exhausted automatic retry restores the final actionable failure', () => {
+	const result = buildConversation([
+	  event(1, 'user.message', {text: 'Continue'}),
+	  event(2, 'assistant.message.completed', {errorMessage: 'HTTP 429 rate limit'}),
+	  event(3, 'retry_start', {attempt: 5, maxAttempts: 5, automatic: true}),
+	  event(4, 'task.idle'),
+	]);
+	assert.equal(result[1].retry.active, false);
+	assert.equal(result[1].retry.attempt, 5);
+	assert.equal(result[1].failure.category, 'rate-limit');
+	assert.deepEqual(result[1].notices.map((notice) => notice.label), ['Automatic retry 5/5 exhausted']);
+});
+
 test('failure presentation classifies common failures without exposing raw details', () => {
   const cases = [
     ['Bearer sk-private HTTP 401 unauthorized', 'authentication'],
@@ -100,6 +133,10 @@ test('failure presentation classifies common failures without exposing raw detai
     assert.equal(view.category, category);
     assert.doesNotMatch(`${view.title} ${view.message}`, /sk-private|request_id|\/root\/private|provider detail/);
   }
+});
+
+test('rate limiting takes precedence over a failed primary model route', () => {
+	assert.equal(failurePresentation("Unsupported model: 'kimi/kimi-k3'; fallback Throttling rate limit").category, 'rate-limit');
 });
 
 test('elapsed labels remain compact', () => {

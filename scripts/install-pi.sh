@@ -581,7 +581,9 @@ for config_name in settings.json models.json providers.json permissions.json mem
   chown "$install_user:$install_group" "$agent_dir/$config_name"
 done
 settings_migration=$(mktemp "$agent_dir/.settings.json.migrate.XXXXXX")
-sed 's|"drobotics/deepseek-v4-flash"|"drobotics/deepseek/deepseek-v4-flash"|g' \
+sed \
+  -e 's|"drobotics/deepseek-v4-flash"|"drobotics/deepseek/deepseek-v4-flash"|g' \
+  -e '/"retry": {/,/"provider": {/ s|"maxRetries": 3|"maxRetries": 5|' \
   "$agent_dir/settings.json" > "$settings_migration"
 chmod 0600 "$settings_migration"
 chown "$install_user:$install_group" "$settings_migration"

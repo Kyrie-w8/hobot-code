@@ -151,7 +151,7 @@ Pi 原生登录继续使用 `/login <provider>`。只有需要本地服务、无
 
 ## Pi 交互与扩展
 
-推荐使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认设置启用自动压缩、最多三次 Agent 级重试、可见 thinking 和 fullscreen TUI；后者用于提供稳定的分屏布局与按指针区域滚动。
+推荐使用 `/settings`、`/model`、`/scoped-models` 和 `/hotkeys`。默认设置启用自动压缩、最多五次 Agent 级重试、可见 thinking 和 fullscreen TUI；后者用于提供稳定的分屏布局与按指针区域滚动。
 
 扩展、Skills 和 Prompt 使用 Pi 原生命令管理：
 

@@ -13,6 +13,7 @@ export type AssistantConversationItem = {
   thinking: string; text: string; tools: ToolActivity[];
   notices: Array<{type: string; label: string; time: string}>; completed: boolean;
   failure: null | {category: string; title: string; message: string};
+	retry: null | {attempt: number; maxAttempts: number; active: boolean; recovered: boolean; automatic: boolean};
 };
 export type ConversationItem = UserConversationItem | AssistantConversationItem;
 

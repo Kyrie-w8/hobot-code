@@ -1407,7 +1407,7 @@ function AssistantTurn({item, running, canCheckModel, checkingModel, onCheckMode
     {item.notices.map((notice, index) => <div key={`${notice.time}-${index}`} className={`turn-notice notice-${notice.type}`}><Activity size={13} /><span>{notice.label}</span></div>)}
     {item.text && <div className="assistant-content"><MarkdownContent value={item.text} /><div className="assistant-actions"><CopyButton value={item.text} /></div></div>}
     {item.failure && <section className="turn-failure" role="alert"><div className="turn-failure-heading"><AlertTriangle size={16} /><strong>{item.failure.title}</strong></div><p>{item.failure.message}</p><div className="turn-failure-actions">{canCheckModel && <button className="secondary-button" type="button" onClick={onCheckModel} disabled={checkingModel}>{checkingModel ? <LoaderCircle size={14} className="spin" /> : <Activity size={14} />}Check model</button>}<button className="secondary-button" type="button" onClick={onRetry}><RefreshCw size={14} />Edit and retry</button></div></section>}
-    {running && <div className="agent-progress"><LoaderCircle size={14} className="spin" /><span>Working</span></div>}
+	{running && !item.failure && <div className="agent-progress"><LoaderCircle size={14} className="spin" /><span>{item.retry?.active ? `Automatic retry ${item.retry.attempt}/${item.retry.maxAttempts}` : 'Working'}</span></div>}
   </article>;
 }
 

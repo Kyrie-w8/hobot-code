@@ -68,6 +68,28 @@ func TestCompactionLifecycleIsNormalizedWithoutProviderFields(t *testing.T) {
 	}
 }
 
+func TestAutomaticRetryLifecycleIsNormalizedWithoutGatewayDetails(t *testing.T) {
+	started := normalizeWorkerEvent(json.RawMessage(`{"type":"auto_retry_start","attempt":2,"maxAttempts":5,"delayMs":4000,"errorMessage":"private gateway payload"}`))
+	if started == nil || started.Type != "retry_start" || started.Schema != eventSchemaVersion || started.Item != nil {
+		t.Fatalf("unexpected automatic retry start: %+v", started)
+	}
+	if started.Data["attempt"] != 2 || started.Data["maxAttempts"] != 5 || started.Data["delayMs"] != 4000 || started.Data["automatic"] != true {
+		t.Fatalf("automatic retry progress was not preserved: %+v", started.Data)
+	}
+	if _, present := started.Data["errorMessage"]; present {
+		t.Fatalf("automatic retry leaked the gateway error: %+v", started.Data)
+	}
+
+	completed := normalizeWorkerEvent(json.RawMessage(`{"type":"auto_retry_end","attempt":2,"success":true}`))
+	if completed == nil || completed.Type != "retry_end" || completed.Data["attempt"] != 2 || completed.Data["success"] != true || completed.Data["automatic"] != true {
+		t.Fatalf("unexpected automatic retry completion: %+v", completed)
+	}
+	invalid := normalizeWorkerEvent(json.RawMessage(`{"type":"auto_retry_start","attempt":6,"maxAttempts":999,"delayMs":-1}`))
+	if invalid == nil || invalid.Data["attempt"] != nil || invalid.Data["maxAttempts"] != nil || invalid.Data["delayMs"] != nil {
+		t.Fatalf("invalid retry bounds were retained: %+v", invalid)
+	}
+}
+
 func TestWorkerEventsOmitStructuredImagePayloads(t *testing.T) {
 	raw := json.RawMessage(`{"type":"retry_start","message":{"content":[{"type":"text","text":"keep"},{"type":"image","data":"private-simple","mimeType":"image/png"}]},"messages":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"private-source"}},{"type":"image_url","image_url":"data:image/webp;base64,private-url"}]}],"data":{"value":"keep-unrelated"}}`)
 	redacted := redactEventImagePayloads(raw)

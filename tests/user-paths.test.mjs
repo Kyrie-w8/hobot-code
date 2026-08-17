@@ -251,6 +251,7 @@ test("packaged settings and launcher do not default to system config or state", 
   const settings = JSON.parse(await readFile(new URL("../packaging/pi/settings.json", import.meta.url), "utf8"));
   const launcher = await readFile(new URL("../packaging/pi/hobot-launcher", import.meta.url), "utf8");
   assert.equal(settings.sessionDir, undefined);
+	assert.equal(settings.retry.maxRetries, 5);
   assert.doesNotMatch(launcher, /\/etc\/hobot-code|\/var\/lib\/hobot-code/);
   assert.match(launcher, /XDG_CONFIG_HOME/);
   assert.match(launcher, /XDG_STATE_HOME/);

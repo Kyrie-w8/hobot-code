@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.4
+
+### Fixed
+
+- Present Pi automatic model retries as explicit `n/5` progress, remove recoverable intermediate failure cards after a successful retry, and show an actionable error only after retry exhaustion.
+- Classify fallback throttling as temporary model load even when the primary gateway route also reports an unsupported model, avoiding a misleading permanent model-unavailable diagnosis.
+- Preserve retry progress through normalized board events without exposing gateway error payloads, while allowing Studio to repair the presentation of retained events created by older board versions.
+- Raise the default Agent retry limit from three to five and migrate installations that still use the previous default.
+
 ## 0.27.3
 
 ### Fixed

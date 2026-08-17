@@ -13,6 +13,7 @@ const (
 	maximumPendingApprovals   = 16
 	maximumAssistantErrorText = 8 * 1024
 	maximumEventPreviewText   = 12 * 1024
+	maximumModelRetries       = 5
 )
 
 type pendingApproval struct {
@@ -164,7 +165,19 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 	case "hobot_approval_resolved":
 		normalizedType = "approval.resolved"
 		copyEventFields(data, event, "id")
-	case "retry_start", "retry_end", "compaction_start", "compaction_end", "extension_error":
+	case "auto_retry_start":
+		normalizedType = "retry_start"
+		copyRetryEventFields(data, event, true)
+	case "auto_retry_end":
+		normalizedType = "retry_end"
+		copyRetryEventFields(data, event, true)
+	case "retry_start", "retry_end":
+		normalizedType = eventType
+		copyRetryEventFields(data, event, false)
+		if value, ok := event["error"]; ok {
+			data["error"] = value
+		}
+	case "compaction_start", "compaction_end", "extension_error":
 		normalizedType = eventType
 		if value, ok := event["error"]; ok {
 			data["error"] = value
@@ -173,6 +186,30 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 		return nil
 	}
 	return &normalizedEvent{Schema: eventSchemaVersion, Type: normalizedType, Data: data, Item: normalizedItemFor(normalizedType, data)}
+}
+
+func copyRetryEventFields(target, source map[string]any, automatic bool) {
+	target["automatic"] = automatic
+	for _, field := range []string{"attempt", "maxAttempts"} {
+		if value, ok := boundedRetryInteger(source[field], 1, maximumModelRetries); ok {
+			target[field] = value
+		}
+	}
+	if value, ok := boundedRetryInteger(source["delayMs"], 0, 10*60*1000); ok {
+		target["delayMs"] = value
+	}
+	if success, ok := source["success"].(bool); ok {
+		target["success"] = success
+	}
+}
+
+func boundedRetryInteger(value any, minimum, maximum int) (int, bool) {
+	number, ok := value.(float64)
+	if !ok || number < float64(minimum) || number > float64(maximum) {
+		return 0, false
+	}
+	integer := int(number)
+	return integer, float64(integer) == number
 }
 
 func normalizedItemFor(eventType string, data map[string]any) *normalizedItem {

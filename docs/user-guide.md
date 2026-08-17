@@ -5,7 +5,7 @@
 | 适用版本 | Hobot Code 0.27.x |
 | 适用设备 | RDK X5、RDK S100、RDK S600 |
 | 适用客户端 | 板端 TUI、Mac 版 Hobot Code Studio |
-| 最后核对 | 2026-08-16 |
+| 最后核对 | 2026-08-17 |
 
 Hobot Code 是面向地瓜机器人 RDK 的板端开发 Agent。它可以在 RDK 上理解项目、编辑代码、执行命令、调用 BPU 与多媒体工具、检索板型知识，并通过终端或 Mac 应用持续处理任务。
 
@@ -1085,6 +1085,16 @@ hobot task restart <task-id> -- "继续完成原任务，并先检查当前工�
 ### 20.13 Mac 仍显示旧版本
 
 板端 `hobot update` 只升级板端。点击 Mac 右上角版本号，在 **Studio for Mac** 中选择 **Check Studio**；发现新版后点击下载并用 DMG 替换 Applications 中的旧版。若仍显示旧版本，确认启动的是 `/Applications/Hobot Code.app`，而不是 Downloads 中的旧副本。
+
+### 20.14 模型报错后为什么仍显示 Working
+
+Hobot Code 会对临时网关、限流和连接错误最多自动重试五次。Studio 在重试期间显示 **Automatic retry n/5**，成功后保留一条简短的恢复记录，不再显示中间失败卡；只有重试耗尽后才显示最终错误和恢复操作。旧任务记录会按事件当时的上限显示，例如 `1/3`，新任务使用 `1/5`。
+
+### 20.15 Agent 说会定时汇报，是否真的会执行
+
+当前版本没有持久定时任务调度器。Agent 说“每 30 分钟汇报一次”只是文本承诺，不会在对话结束后自动唤醒，也不会创建后台计划。`hobot persistent`、`hobot task` 和 Studio 后台任务只能让已经启动的进程继续运行，不能按时间重新触发一轮 Agent。
+
+需要定时检查时，暂时使用系统 `cron`、`systemd timer` 或外部 CI 调用明确的 `hobot task` 命令，并单独管理权限和日志。未来的产品级调度应由板端持久保存计划、下次运行时间、上下文目标、停止条件和审批策略，Studio 只负责创建与查看，不能仅依赖模型口头承诺。
 
 ## 21. CLI 命令参考
 
