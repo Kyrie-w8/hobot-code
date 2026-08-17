@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.7
+
+### Changed
+
+- Introduce a consistent Studio typography scale, raise conversation and composer text to 16px, and keep navigation, controls, code, diagnostics, and capability metadata readable without sacrificing information hierarchy.
+- Preserve the larger typography at narrow window widths and add regression coverage that prevents sub-11px fixed text or responsive font-size reductions from returning.
+
 ## 0.27.6
 
 ### Fixed

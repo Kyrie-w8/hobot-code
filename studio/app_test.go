@@ -202,13 +202,13 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.27.6" {
+	if currentStudioVersion() != "0.27.7" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {
 		t.Fatalf("exposed Studio version = %q, want %q", app.GetAppVersion(), currentStudioVersion())
 	}
-	if !differentReleaseLine("0.27.6", "0.26.9") || differentReleaseLine("0.27.6", "0.27.6") {
+	if !differentReleaseLine("0.27.7", "0.26.9") || differentReleaseLine("0.27.7", "0.27.7") {
 		t.Fatal("release line comparison is incorrect")
 	}
 	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {
