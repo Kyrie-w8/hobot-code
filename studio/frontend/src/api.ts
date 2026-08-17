@@ -1,5 +1,5 @@
 import type {AddManagedProviderRequest, Board, BoardInstallResult, BoardUpdateCheck, BoardUpdateResult, Connection, CreateScheduleRequest, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventEnvelope, EventPage, ExtensionCatalog, ForkTaskRequest, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskPage, WorkspaceApplyResult, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
-
+import {historyPageBefore} from './conversation-history.js';
 
 export type TaskWatchStatus = {
   boardId: string;
@@ -32,35 +32,43 @@ declare global {
 const mockBoard: Board = {id: 's600-demo', name: 'RDK S600', host: 'rdk-s600.local', user: 'root', port: 22};
 const now = new Date();
 const mockTasks: Task[] = [
-  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 128, sessionId: '019fef9b-695f-7e9d', sessionFile: '/root/.local/state/hobot-code/sessions/demo.jsonl', model: 'drobotics/kimi-k3'},
+  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 240, sessionId: '019fef9b-695f-7e9d', sessionFile: '/root/.local/state/hobot-code/sessions/demo.jsonl', model: 'drobotics/kimi-k3'},
   {id: '04acf83b820b934e12345678', name: 'camera-pipeline', cwd: '/root/tros_ws', status: 'waiting', pid: 842244, createdAt: new Date(now.getTime() - 18 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 72, pendingApprovals: [{id: 'approval-demo', method: 'select', title: 'Allow bash?\nRisk: Executes a shell command with the current user privileges.\nTarget: hobot-board info', message: 'Choose how Hobot Code may run this tool.', options: ['Allow once', 'Allow network for this task', 'Deny'], active: true}]},
   {id: 'f30bb47e8d552f1812345678', name: 'deploy-review', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 841992, createdAt: new Date(now.getTime() - 70 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 53, parentTaskId: 'b8930da1a77e4a8f12345678', branchKind: 'side', model: 'drobotics/kimi-k3'},
 ];
 
-const mockEvents = (taskId: string): EventPage => ({
-  events: [
-    {protocol: 1, kind: 'event', taskId, sequence: 120, time: new Date(now.getTime() - 55_000).toISOString(), event: {type: 'hobot_user_prompt'}, normalized: {schema: 3, type: 'user.message', data: {text: 'Inspect the S100 runtime, then run a final latency pass.'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 121, time: new Date(now.getTime() - 48_000).toISOString(), event: {type: 'message_update'}, normalized: {schema: 3, type: 'assistant.thinking.delta', data: {delta: 'Inspecting the BPU runtime and benchmark workspace before changing the deployment configuration.'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 122, time: new Date(now.getTime() - 36_000).toISOString(), event: {type: 'tool_execution_start'}, normalized: {schema: 3, type: 'tool.started', data: {toolCallId: 'tool-1', toolName: 'bash'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 123, time: new Date(now.getTime() - 21_000).toISOString(), event: {type: 'tool_execution_end'}, normalized: {schema: 3, type: 'tool.completed', data: {toolCallId: 'tool-1', toolName: 'bash', isError: false}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 124, time: new Date(now.getTime() - 8_000).toISOString(), event: {type: 'message_update'}, normalized: {schema: 3, type: 'assistant.text.delta', data: {delta: 'The S100 runtime is healthy. The final latency pass completed successfully.'}}},
-    {protocol: 1, kind: 'event', taskId, sequence: 125, time: new Date(now.getTime() - 2_000).toISOString(), event: {type: 'task.idle'}, normalized: {schema: 3, type: 'task.idle'}},
-  ],
-  nextAfter: 125,
-  hasMore: false,
-  retainedFrom: 1,
-  retainedThrough: 125,
-  latestSequence: 125,
-  historyTruncated: false,
-  cursorExpired: false,
+const mockPrompts = [
+  '检查 S100 的运行时状态，并列出需要确认的指标。',
+  '先读取部署日志，不要修改板端文件。',
+  '把延迟结果按 p50 和 p95 汇总。',
+  '这个代码块的参数是否安全？\n```yaml\nbatch: 4\nprecision: fp16\n```',
+  '比较这次结果和上一轮基线。',
+  '确认摄像头链路是否已经稳定。',
+  '只给出可以复现的下一步。',
+  '检查工作区变更，再继续验证。',
+  '总结当前风险，不要启动新的任务。',
+  '现在生成最终的验收结论。',
+];
+
+const mockHistoryEvents = (taskId: string) => Array.from({length: 240}, (_, index) => {
+  const sequence = index + 1;
+  const turn = Math.floor(index / 24);
+  const time = new Date(now.getTime() - (240 - sequence) * 4_000).toISOString();
+  if (sequence % 24 === 1) return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'hobot_user_prompt'}, normalized: {schema: 4, type: 'user.message', data: {text: mockPrompts[turn]}}};
+  if (sequence % 24 === 0) return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'task_idle'}, normalized: {schema: 4, type: 'task.idle'}};
+  return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'message_update'}, normalized: {schema: 4, type: 'assistant.text.delta', data: {delta: `Checked evidence item ${sequence}. `}}};
 });
+
+export function mockHistoryPage(taskId: string, before = 0, limit = 200): EventPage {
+  return historyPageBefore(mockHistoryEvents(taskId), before, limit);
+}
 
 const mockBackend: Backend = {
   GetAppVersion: async () => '0.28.0',
 	CheckStudioUpdate: async (): Promise<StudioUpdateCheck> => ({status: 'current', installedVersion: '0.28.0', availableVersion: '0.28.0', message: 'Hobot Code Studio is current.', releaseUrl: 'https://github.com/bryant-w/hobot-code/releases/tag/v0.28.0'}),
   OpenStudioUpdate: async () => undefined,
   ListBoards: async () => [mockBoard],
-  ProbeBoard: async (board: Board): Promise<Connection> => ({board, connected: true, daemon: {version: '0.28.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 4, capabilities: ['extensions.catalog.v1', 'schedules.v1', 'events.normalized.v3', 'events.normalized.v4', 'events.items.v1', 'events.retention.v1', 'tasks.queue.v1', 'tasks.failure.v1', 'workspaces.changes.v1', 'workspaces.isolation.v1', 'workspaces.write-leases.v1', 'system.snapshot', 'tasks.lifecycle', 'tasks.page', 'events.page'], maximumActiveTasks: 3, maximumRetainedTasks: 100}, snapshot: {capturedAt: now.toISOString(), board: 'D-Robotics RDK S600', boardId: 's600', hostname: 'rdk', rdkOsVersion: '5.1.0', kernel: '6.1.158-rt58', architecture: 'arm64', cpuCores: 18, loadAverage: [], memory: {totalBytes: 0, availableBytes: 0}, disk: {path: '/root', totalBytes: 0, availableBytes: 0}, thermalZones: [], bpuDevices: [], rdkUtilities: {}, uptimeSeconds: 0}, compatibility: {status: 'supported', summary: 'Board and Studio capabilities are compatible.', appVersion: '0.28.0', agentdVersion: '0.28.0', protocol: 1, eventSchema: 4, boardId: 's600', rdkOsVersion: '5.1.0', validatedTarget: true, issues: []}}),
+  ProbeBoard: async (board: Board): Promise<Connection> => ({board, connected: true, daemon: {version: '0.28.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 4, capabilities: ['extensions.catalog.v1', 'schedules.v1', 'events.normalized.v3', 'events.normalized.v4', 'events.items.v1', 'events.retention.v1', 'events.page.before.v1', 'tasks.queue.v1', 'tasks.failure.v1', 'workspaces.changes.v1', 'workspaces.isolation.v1', 'workspaces.write-leases.v1', 'system.snapshot', 'tasks.lifecycle', 'tasks.page', 'events.page'], maximumActiveTasks: 3, maximumRetainedTasks: 100}, snapshot: {capturedAt: now.toISOString(), board: 'D-Robotics RDK S600', boardId: 's600', hostname: 'rdk', rdkOsVersion: '5.1.0', kernel: '6.1.158-rt58', architecture: 'arm64', cpuCores: 18, loadAverage: [], memory: {totalBytes: 0, availableBytes: 0}, disk: {path: '/root', totalBytes: 0, availableBytes: 0}, thermalZones: [], bpuDevices: [], rdkUtilities: {}, uptimeSeconds: 0}, compatibility: {status: 'supported', summary: 'Board and Studio capabilities are compatible.', appVersion: '0.28.0', agentdVersion: '0.28.0', protocol: 1, eventSchema: 4, boardId: 's600', rdkOsVersion: '5.1.0', validatedTarget: true, issues: []}}),
   SaveBoard: async (board: Board) => ({...board, id: board.id || `board-${Date.now()}`}),
   RemoveBoard: async () => undefined,
   ConnectBoard: async (id: string): Promise<Connection> => ({board: {...mockBoard, id}, connected: true, daemon: {version: '0.28.0', pid: 834124, startedAt: now.toISOString(), activeTasks: 3, maximumTasks: 3, maximumSideTasks: 2, stateRoot: '/root/.local/state/hobot-code'}, capabilities: {protocolMin: 1, protocolMax: 1, eventSchema: 4, capabilities: ['extensions.catalog.v1', 'providers.manage.v1', 'events.normalized.v3', 'events.normalized.v4', 'events.items.v1', 'events.retention.v1', 'tasks.queue.v1', 'tasks.failure.v1', 'workspaces.changes.v1', 'workspaces.isolation.v1', 'workspaces.write-leases.v1', 'workspaces.delivery.v1', 'system.snapshot', 'diagnostics.inspect.v1', 'diagnostics.repair.v1', 'support.bundle.v1', 'support.bundle.v2', 'deployments.v1', 'tasks.lifecycle', 'tasks.page', 'events.page', 'tasks.resume', 'tasks.restart', 'tasks.fork', 'tasks.fork.deferred-prompt.v1', 'tasks.collaboration.v1', 'tasks.models', 'tasks.permissions', 'tasks.sandbox.v1', 'tasks.network.v1', 'tasks.images', 'models.capabilities.v1', 'models.health.v1', 'models.conformance.v1', 'models.runtime-probe.v1', 'models.rdk-probe.v1', 'models.rdk-matrix.v1', 'models.qualification.v1', 'workspaces.browse', 'bridge.stdio'], maximumActiveTasks: 3, maximumSideTasks: 2, maximumRetainedTasks: 100, sandbox: {available: true, backend: 'bubblewrap', profiles: ['review', 'workspace', 'system', 'off'], networkModes: ['shared', 'offline'], filesystemWritesRestricted: true, devicesRestricted: true, capabilitiesDropped: true, networkRestricted: true}}, compatibility: {status: 'supported', summary: 'Board and Studio capabilities are compatible.', appVersion: '0.28.0', agentdVersion: '0.28.0', protocol: 1, eventSchema: 4, boardId: 's600', rdkOsVersion: '5.1.0', validatedTarget: true, issues: []}}),
@@ -85,7 +93,12 @@ const mockBackend: Backend = {
   ResumeSchedule: async (_board: string, id: string): Promise<Schedule> => ({id, name: 'Schedule', taskId: mockTasks[0].id, enabled: true, status: 'active', createdAt: now.toISOString(), updatedAt: new Date().toISOString(), runCount: 0}),
   RunSchedule: async (_board: string, id: string): Promise<Schedule> => ({id, name: 'Schedule', taskId: mockTasks[0].id, enabled: true, status: 'active', createdAt: now.toISOString(), updatedAt: new Date().toISOString(), runCount: 1, pending: true}),
   DeleteSchedule: async () => undefined,
-  GetEvents: async (_board: string, taskId: string) => mockEvents(taskId),
+  GetEvents: async (_board: string, taskId: string, after = 0, limit = 200) => {
+		const all = mockHistoryEvents(taskId).filter((event) => event.sequence > after);
+		const events = all.slice(0, Math.max(1, Math.min(200, limit)));
+		return {...mockHistoryPage(taskId), events, nextAfter: events.at(-1)?.sequence, hasMore: all.length > events.length};
+	},
+	GetEventsBefore: async (_board: string, taskId: string, before = 0, limit = 200) => mockHistoryPage(taskId, before, limit),
   StartTask: async (_board: string, request: any) => ({...mockTasks[2], id: `task-${Date.now()}`, name: request.name || 'new-task', cwd: request.cwd, projectCwd: request.cwd, workspaceMode: request.workspaceMode || 'shared', status: 'starting'}),
   SendPrompt: async () => undefined,
   AbortTask: async () => undefined,
@@ -148,7 +161,18 @@ const mockBackend: Backend = {
   OpenExternalURL: async (url: string) => { window.open(url, '_blank', 'noopener,noreferrer'); },
 };
 
-const backend = (): Backend => window.go?.main?.App ?? mockBackend;
+const withMockHistoryCapability = async (value: Promise<Connection>): Promise<Connection> => {
+  const connection = await value;
+  const capabilities = connection.capabilities?.capabilities;
+  if (capabilities && !capabilities.includes('events.page.before.v1')) capabilities.push('events.page.before.v1');
+  return connection;
+};
+
+const backend = (): Backend => window.go?.main?.App ?? {
+  ...mockBackend,
+  ConnectBoard: (id: string) => withMockHistoryCapability(mockBackend.ConnectBoard(id)),
+  RefreshBoard: (id: string) => withMockHistoryCapability(mockBackend.RefreshBoard(id)),
+};
 
 export const isMock = () => !window.go?.main?.App;
 export const api = {
@@ -182,6 +206,7 @@ export const api = {
   runSchedule: (boardId: string, id: string): Promise<Schedule> => backend().RunSchedule(boardId, id),
   deleteSchedule: (boardId: string, id: string) => backend().DeleteSchedule(boardId, id),
   events: (boardId: string, taskId: string, after = 0, limit = 200): Promise<EventPage> => backend().GetEvents(boardId, taskId, after, limit),
+	beforeEvents: (boardId: string, taskId: string, before = 0, limit = 200): Promise<EventPage> => backend().GetEventsBefore(boardId, taskId, before, limit),
   startTask: (boardId: string, request: {name: string; cwd: string; prompt: string; images?: ImageContent[]; approve: boolean; model?: string; permissionMode?: string; workspaceMode?: 'shared' | 'worktree'; sandboxMode?: 'review' | 'workspace' | 'system' | 'off'; networkMode?: 'shared' | 'model-only' | 'offline'}): Promise<Task> => backend().StartTask(boardId, request),
   sendPrompt: (boardId: string, taskId: string, prompt: string, images: ImageContent[] = []) => backend().SendPrompt(boardId, taskId, prompt, images),
   abortTask: (boardId: string, taskId: string) => backend().AbortTask(boardId, taskId),

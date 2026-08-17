@@ -541,6 +541,15 @@ func (client *Client) Events(ctx context.Context, taskID string, after uint64, l
 	return page, err
 }
 
+// EventsBefore returns a bounded page ending immediately before before. Pass
+// zero to open at the newest durable events. Callers must use NextBefore rather
+// than array positions when requesting earlier history.
+func (client *Client) EventsBefore(ctx context.Context, taskID string, before uint64, limit int) (EventPage, error) {
+	var page EventPage
+	err := client.Call(ctx, "task.events", map[string]any{"taskId": taskID, "before": before, "direction": "before", "limit": limit}, &page)
+	return page, err
+}
+
 func (client *Client) Subscribe(ctx context.Context, taskID string, after uint64, handler func(Event) error) error {
 	return client.SubscribeWithState(ctx, taskID, after, nil, handler)
 }

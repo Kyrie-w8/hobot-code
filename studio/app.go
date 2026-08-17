@@ -879,6 +879,16 @@ func (app *App) GetEvents(boardID, taskID string, after uint64, limit int) (hobo
 	return client.Events(ctx, taskID, after, limit)
 }
 
+func (app *App) GetEventsBefore(boardID, taskID string, before uint64, limit int) (hobot.EventPage, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.EventPage{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.EventsBefore(ctx, taskID, before, limit)
+}
+
 func (app *App) StartTask(boardID string, request hobot.StartTaskRequest) (hobot.Task, error) {
 	client, err := app.client(boardID)
 	if err != nil {

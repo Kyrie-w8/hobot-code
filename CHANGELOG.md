@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.4
+
+### Added
+
+- Add a low-profile Studio conversation navigator for user messages, with timestamped hover previews, exact click-to-jump highlighting, dense-history grouping, and keyboard navigation.
+- Add bounded reverse event pagination so Studio can open earlier retained history without downloading or rendering an unbounded log at startup.
+
+### Fixed
+
+- Preserve the reader's scroll anchor while older pages are inserted, and keep live Agent output from pulling a user away from earlier messages.
+- Disclose legacy-board, rotated-retention, expired-cursor, and conflicting-page boundaries instead of silently presenting an incomplete conversation.
+
 ## 0.28.3
 
 ### Fixed

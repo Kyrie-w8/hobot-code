@@ -845,7 +845,16 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		if params.Limit == 0 {
 			params.Limit = 200
 		}
-		page, err := current.eventPage(params.After, params.Limit)
+		if err := validateEventPageParams(params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		var page eventPage
+		if params.Direction == "before" {
+			page, err = current.eventPageBefore(params.Before, params.Limit)
+		} else {
+			page, err = current.eventPage(params.After, params.Limit)
+		}
 		if err != nil {
 			_ = writeJSON(connection, failure(req.ID, "event_log_failed", err))
 			return

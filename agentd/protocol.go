@@ -34,6 +34,7 @@ var protocolCapabilities = []string{
 	"tasks.turn-evidence.v1",
 	"tasks.page",
 	"events.page",
+	"events.page.before.v1",
 	"tasks.resume",
 	"tasks.restart",
 	"tasks.fork",

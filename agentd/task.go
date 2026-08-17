@@ -256,18 +256,38 @@ type subscribeParams struct {
 type eventPageParams struct {
 	TaskID string `json:"taskId"`
 	After  uint64 `json:"after,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
+	// Direction "before" returns the newest events strictly before Before. A
+	// zero Before is the durable tail, which lets clients open long histories
+	// without first reading every retained record.
+	Before    uint64 `json:"before,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
 }
 
 type eventPage struct {
 	Events           []taskEvent `json:"events"`
 	NextAfter        uint64      `json:"nextAfter,omitempty"`
 	HasMore          bool        `json:"hasMore"`
+	NextBefore       uint64      `json:"nextBefore,omitempty"`
+	HasEarlier       bool        `json:"hasEarlier,omitempty"`
 	RetainedFrom     uint64      `json:"retainedFrom,omitempty"`
 	RetainedThrough  uint64      `json:"retainedThrough,omitempty"`
 	LatestSequence   uint64      `json:"latestSequence,omitempty"`
 	HistoryTruncated bool        `json:"historyTruncated"`
 	CursorExpired    bool        `json:"cursorExpired"`
+}
+
+func validateEventPageParams(params eventPageParams) error {
+	if params.Direction != "" && params.Direction != "before" {
+		return fmt.Errorf("event page direction is invalid")
+	}
+	if params.Direction == "before" && params.After != 0 {
+		return fmt.Errorf("event page cannot combine after with before direction")
+	}
+	if params.Direction != "before" && params.Before != 0 {
+		return fmt.Errorf("event page before cursor requires before direction")
+	}
+	return nil
 }
 
 type subscriptionResult struct {
@@ -3352,6 +3372,19 @@ func (current *task) eventPage(after uint64, limit int) (eventPage, error) {
 	return page, nil
 }
 
+func (current *task) eventPageBefore(before uint64, limit int) (eventPage, error) {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	page, err := readEventPageBeforeWithRetention(current.events, current.metadata.ID, before, limit, current.metadata.LogTruncated)
+	if err != nil {
+		return eventPage{}, err
+	}
+	page.RetainedThrough = current.eventLastSequence
+	page.LatestSequence = current.metadata.LastSequence
+	page.HistoryTruncated = current.metadata.LogTruncated || page.RetainedFrom > 1
+	return page, nil
+}
+
 func readEvents(path, taskID string, after uint64) ([]taskEvent, error) {
 	page, err := readEventPage(path, taskID, after, 0)
 	return page.Events, err
@@ -3642,6 +3675,77 @@ func readEventPageWithRetention(path, taskID string, after uint64, limit int, al
 	}
 	if len(result) > 0 {
 		page.NextAfter = result[len(result)-1].Sequence
+	}
+	return page, nil
+}
+
+// readEventPageBeforeWithRetention reads a bounded tail ending before a stable
+// sequence cursor. It validates the complete append-only log while retaining
+// only one response-sized page in memory.
+func readEventPageBeforeWithRetention(path, taskID string, before uint64, limit int, allowRetainedStart bool) (eventPage, error) {
+	if limit < 1 || limit > 1000 {
+		return eventPage{}, fmt.Errorf("event page limit must be between 1 and 1000")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return eventPage{}, err
+	}
+	defer file.Close()
+
+	result := make([]taskEvent, 0, limit)
+	recordSizes := make([]int, 0, limit)
+	resultBytes := 0
+	lastSequence := uint64(0)
+	firstSequence := uint64(0)
+	hasEarlier := false
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxEventRecordBytes)
+	for scanner.Scan() {
+		var event taskEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return eventPage{}, fmt.Errorf("corrupt task event log: %w", err)
+		}
+		validSequence := event.Sequence == lastSequence+1
+		if firstSequence == 0 && allowRetainedStart {
+			validSequence = event.Sequence > 0
+		}
+		if event.Protocol != protocolVersion || event.Kind != "event" || event.TaskID != taskID || !validSequence {
+			return eventPage{}, fmt.Errorf("corrupt task event envelope at sequence %d", event.Sequence)
+		}
+		if firstSequence == 0 {
+			firstSequence = event.Sequence
+		}
+		lastSequence = event.Sequence
+		if before != 0 && event.Sequence >= before {
+			continue
+		}
+		eventBytes := len(scanner.Bytes()) + 1
+		if eventBytes > maxResponseBytes-64*1024 {
+			return eventPage{}, fmt.Errorf("event record exceeds page response limit")
+		}
+		for len(result) > 0 && (len(result) == limit || resultBytes+eventBytes > maxResponseBytes-64*1024) {
+			resultBytes -= recordSizes[0]
+			result = result[1:]
+			recordSizes = recordSizes[1:]
+			hasEarlier = true
+		}
+		result = append(result, event)
+		recordSizes = append(recordSizes, eventBytes)
+		resultBytes += eventBytes
+	}
+	if err := scanner.Err(); err != nil {
+		return eventPage{}, err
+	}
+	if len(result) > 0 && result[0].Sequence > firstSequence {
+		hasEarlier = true
+	}
+	page := eventPage{
+		Events: result, RetainedFrom: firstSequence, RetainedThrough: lastSequence,
+		HistoryTruncated: firstSequence > 1, HasEarlier: hasEarlier,
+		CursorExpired: before != 0 && firstSequence > 1 && before < firstSequence,
+	}
+	if len(result) > 0 {
+		page.NextBefore = result[0].Sequence
 	}
 	return page, nil
 }

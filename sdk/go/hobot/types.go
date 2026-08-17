@@ -621,6 +621,8 @@ type EventPage struct {
 	Events           []Event `json:"events"`
 	NextAfter        uint64  `json:"nextAfter,omitempty"`
 	HasMore          bool    `json:"hasMore"`
+	NextBefore       uint64  `json:"nextBefore,omitempty"`
+	HasEarlier       bool    `json:"hasEarlier,omitempty"`
 	RetainedFrom     uint64  `json:"retainedFrom,omitempty"`
 	RetainedThrough  uint64  `json:"retainedThrough,omitempty"`
 	LatestSequence   uint64  `json:"latestSequence,omitempty"`

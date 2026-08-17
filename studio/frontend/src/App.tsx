@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
 import 'katex/dist/katex.min.css';
@@ -12,7 +12,8 @@ import {
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldCancelTurnShortcut, shouldSubmitComposer, terminalStatuses, turnCancellationMode} from './composer-policy.js';
-import {buildConversation, elapsedLabel, eventRetentionPresentation, recentEventsAfter} from './conversation-model.js';
+import {buildConversation, elapsedLabel, eventRetentionPresentation} from './conversation-model.js';
+import {eventPageSize, mergeEventHistory, mergeMessageIndex, navigatorGroups, userMessagesFromEvents} from './conversation-history.js';
 import {approvalPresentation, approvalResponse} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
@@ -119,10 +120,21 @@ function App() {
   const [watchStatus, setWatchStatus] = useState<TaskWatchStatus | null>(null);
   const [eventRetention, setEventRetention] = useState<Pick<EventPage, 'retainedFrom' | 'retainedThrough' | 'latestSequence' | 'historyTruncated' | 'cursorExpired'> | null>(null);
   const [hasNewOutput, setHasNewOutput] = useState(false);
+	const [hasEarlierHistory, setHasEarlierHistory] = useState(false);
+	const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
+	const [historyFailure, setHistoryFailure] = useState('');
+	const [messageIndex, setMessageIndex] = useState<UserConversationItem[]>([]);
+	const [activeMessageSequence, setActiveMessageSequence] = useState<number | null>(null);
+	const [highlightedMessageSequence, setHighlightedMessageSequence] = useState<number | null>(null);
   const startupStarted = useRef(false);
   const timelineRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const followsOutput = useRef(true);
+	const prependAnchor = useRef<{height: number; top: number} | null>(null);
+	const historyPrepending = useRef(false);
+  const pendingMessageFocus = useRef<number | null>(null);
+  const messageIndexRequest = useRef(0);
+	const historySupportsBefore = useRef(false);
   const taskDrafts = useRef(new Map<string, {text: string; editingMessage: number | null; attachments: ImageContent[]; editingNeedsImages: boolean}>());
   const previousTaskId = useRef('');
   const activeBoardId = useRef('');
@@ -139,6 +151,7 @@ function App() {
   const appearanceRef = useRef<HTMLDivElement>(null);
 
   const boardId = connection?.board.id ?? '';
+	historySupportsBefore.current = Boolean(connection?.capabilities?.capabilities.includes('events.page.before.v1'));
   const resolvedTheme = resolveTheme(themePreference, systemPrefersDark);
   const AppearanceIcon = themePreference === 'system' ? Monitor : resolvedTheme === 'dark' ? Moon : Sun;
 
@@ -341,7 +354,8 @@ function App() {
   useEffect(() => {
     const removeEvent = api.onEvent(({boardId: eventBoard, event}) => {
       if (eventBoard !== activeBoardId.current || event.taskId !== selectedTask?.id) return;
-      setEvents((current) => current.some((item) => item.sequence === event.sequence) ? current : [...current, event]);
+		setEvents((current) => mergeEventHistory(current, [event]));
+		setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents([event])));
       if (['task.queued', 'task.starting', 'task.running', 'task.idle', 'task.cancelled', 'task.failed', 'task.interrupted', 'task.stopped', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
     });
     const removeError = api.onWatchError((watchError) => {
@@ -391,16 +405,31 @@ function App() {
     if (!boardId || !selectedTask || selectedTask.id.startsWith('draft:')) {
       setEvents([]);
       setEventRetention(null);
+		setHasEarlierHistory(false);
+		setHistoryFailure('');
+		setMessageIndex([]);
       setEventsLoading(false);
       return;
     }
     let active = true;
+		const request = ++messageIndexRequest.current;
     setEventsLoading(true);
     setEventRetention(null);
-    const initialAfter = recentEventsAfter(selectedTask.lastSequence);
-    api.events(boardId, selectedTask.id, initialAfter, 400).then((page) => {
+		setHasEarlierHistory(false);
+		setHistoryFailure('');
+		setMessageIndex([]);
+		const supportsHistoryBefore = historySupportsBefore.current;
+		const initialPage = supportsHistoryBefore
+			? api.beforeEvents(boardId, selectedTask.id, 0, eventPageSize)
+			: api.events(boardId, selectedTask.id, Math.max(0, selectedTask.lastSequence - eventPageSize), eventPageSize);
+    initialPage.then((page) => {
       if (!active) return;
       setEvents(page.events ?? []);
+		setMessageIndex(userMessagesFromEvents(page.events ?? []));
+		setHasEarlierHistory(Boolean(page.hasEarlier));
+		if (!supportsHistoryBefore && page.retainedFrom && page.retainedFrom < (page.events?.[0]?.sequence ?? page.retainedFrom)) {
+			setHistoryFailure('This board can show only its newest history. Update Hobot Code on the board to open earlier messages.');
+		}
       setEventRetention({
         retainedFrom: page.retainedFrom,
         retainedThrough: page.retainedThrough,
@@ -409,6 +438,21 @@ function App() {
         cursorExpired: Boolean(page.cursorExpired),
       });
       const after = page.nextAfter ?? page.events[page.events.length - 1]?.sequence ?? 0;
+		if (supportsHistoryBefore && page.hasEarlier) {
+			void (async () => {
+				let cursor = page.nextBefore;
+				let hasEarlier = Boolean(page.hasEarlier);
+				while (active && request === messageIndexRequest.current && hasEarlier && cursor) {
+					const indexPage = await api.beforeEvents(boardId, selectedTask.id, cursor, 500);
+					if (!active || request !== messageIndexRequest.current) return;
+					setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(indexPage.events ?? [])));
+					hasEarlier = Boolean(indexPage.hasEarlier);
+					cursor = indexPage.nextBefore;
+				}
+			})().catch((reason) => {
+				if (active && request === messageIndexRequest.current) setHistoryFailure(`Message navigator could not read the full history: ${String(reason)}`);
+			});
+		}
       return api.watch(boardId, selectedTask.id, after);
     }).catch((reason) => {
       if (active) scheduleWatchRetry(boardId, selectedTask.id, String(reason));
@@ -475,6 +519,10 @@ function App() {
   useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline) return;
+		if (historyPrepending.current) {
+			historyPrepending.current = false;
+			return;
+		}
     if (followsOutput.current) {
       window.requestAnimationFrame(() => timeline.scrollTo({top: timeline.scrollHeight, behavior: 'smooth'}));
       setHasNewOutput(false);
@@ -482,6 +530,25 @@ function App() {
       setHasNewOutput(true);
     }
   }, [events.length, selectedTask?.status]);
+
+	useLayoutEffect(() => {
+		const anchor = prependAnchor.current;
+		const timeline = timelineRef.current;
+		if (!anchor || !timeline) return;
+		prependAnchor.current = null;
+		timeline.scrollTop = anchor.top + timeline.scrollHeight - anchor.height;
+	}, [events]);
+
+	useEffect(() => {
+		const sequence = pendingMessageFocus.current;
+		if (!sequence) return;
+		const target = document.getElementById(`message-${sequence}`);
+		if (!target) return;
+		pendingMessageFocus.current = null;
+		target.scrollIntoView({block: 'center', behavior: 'smooth'});
+		setHighlightedMessageSequence(sequence);
+		window.setTimeout(() => setHighlightedMessageSequence((current) => current === sequence ? null : current), 1500);
+	}, [events]);
 
   useEffect(() => {
     if (!selectedTask || !['starting', 'running'].includes(selectedTask.status)) return;
@@ -570,6 +637,7 @@ function App() {
 	return query ? available.filter((task) => `${task.name} ${task.projectCwd || task.cwd} ${task.status}`.toLowerCase().includes(query)) : available;
   }, [search, selectedTask, tasks]);
   const conversation = useMemo(() => buildConversation(events), [events]);
+	const navigatorMessages = useMemo(() => mergeMessageIndex(messageIndex, userMessagesFromEvents(events)), [events, messageIndex]);
   const retentionNotice = useMemo(() => eventRetentionPresentation(eventRetention), [eventRetention]);
   const projects = useMemo(() => groupTasksByProject(visibleTasks), [visibleTasks]);
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
@@ -609,6 +677,18 @@ function App() {
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
     ? optimisticPrompt.time
     : latestConversationItem?.kind === 'user' ? latestConversationItem.time : selectedTask?.updatedAt;
+
+	useEffect(() => {
+		const root = timelineRef.current;
+		if (!root || typeof IntersectionObserver === 'undefined') return;
+		const observer = new IntersectionObserver((entries) => {
+			const visible = entries.filter((entry) => entry.isIntersecting).sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)[0];
+			const sequence = Number((visible?.target as HTMLElement | undefined)?.dataset.userMessageSequence);
+			if (Number.isSafeInteger(sequence) && sequence > 0) setActiveMessageSequence(sequence);
+		}, {root, threshold: 0.01});
+		root.querySelectorAll<HTMLElement>('[data-user-message-sequence]').forEach((element) => observer.observe(element));
+		return () => observer.disconnect();
+	}, [conversation, selectedTask?.id]);
 
   useEffect(() => {
     if (!selectedTask || !cancellationMode || busy || connectionState !== 'online') return;
@@ -1191,11 +1271,91 @@ function App() {
     if (selectedTask?.id === task.id) setWatchRevision((revision) => revision + 1);
     else setSelectedTask(task);
   }
+  const loadEarlierHistory = useCallback(async () => {
+		if (!boardId || !selectedTask || loadingEarlierHistory || !hasEarlierHistory) return;
+		const before = events[0]?.sequence;
+		if (!before) return;
+		setLoadingEarlierHistory(true);
+		setHistoryFailure('');
+		const timeline = timelineRef.current;
+		if (timeline) prependAnchor.current = {height: timeline.scrollHeight, top: timeline.scrollTop};
+		historyPrepending.current = true;
+		followsOutput.current = false;
+		try {
+			const page = await api.beforeEvents(boardId, selectedTask.id, before, eventPageSize);
+			if (page.cursorExpired) {
+				if (page.events?.length) {
+					setEvents((current) => mergeEventHistory(current, page.events));
+					setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(page.events)));
+				}
+				prependAnchor.current = null;
+				historyPrepending.current = false;
+				setHasEarlierHistory(false);
+				setEventRetention((current) => ({
+					retainedFrom: page.retainedFrom ?? current?.retainedFrom,
+					retainedThrough: page.retainedThrough ?? current?.retainedThrough,
+					latestSequence: page.latestSequence ?? current?.latestSequence,
+					historyTruncated: true,
+					cursorExpired: true,
+				}));
+				setHistoryFailure('Earlier history is no longer retained by this board.');
+				return;
+			}
+			if (!page.events?.length && page.hasEarlier) throw new Error('History page did not advance.');
+			setEvents((current) => mergeEventHistory(current, page.events ?? []));
+			setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(page.events ?? [])));
+			setHasEarlierHistory(Boolean(page.hasEarlier));
+			setEventRetention((current) => current ? {
+				...current,
+				retainedFrom: page.retainedFrom ?? current.retainedFrom,
+				retainedThrough: page.retainedThrough ?? current.retainedThrough,
+				latestSequence: page.latestSequence ?? current.latestSequence,
+				historyTruncated: Boolean(page.historyTruncated || current.historyTruncated),
+				cursorExpired: Boolean(page.cursorExpired || current.cursorExpired),
+			} : current);
+		} catch (reason) {
+			prependAnchor.current = null;
+			historyPrepending.current = false;
+			setHistoryFailure(`Earlier history could not be loaded: ${String(reason)}`);
+		} finally {
+			setLoadingEarlierHistory(false);
+		}
+	}, [boardId, events, hasEarlierHistory, loadingEarlierHistory, selectedTask]);
+
+  const navigateToMessage = useCallback(async (message: UserConversationItem) => {
+		if (!boardId || !selectedTask) return;
+		pendingMessageFocus.current = message.sequence;
+		const loaded = events.some((event) => event.sequence === message.sequence);
+		if (loaded) {
+			window.requestAnimationFrame(() => {
+				const target = document.getElementById(`message-${message.sequence}`);
+				if (!target) return;
+				pendingMessageFocus.current = null;
+				target.scrollIntoView({block: 'center', behavior: 'smooth'});
+				setHighlightedMessageSequence(message.sequence);
+				window.setTimeout(() => setHighlightedMessageSequence((current) => current === message.sequence ? null : current), 1500);
+			});
+			return;
+		}
+		setHistoryFailure('');
+		try {
+			const page = await api.beforeEvents(boardId, selectedTask.id, message.sequence + 1, eventPageSize);
+			if (!page.events?.some((event) => event.sequence === message.sequence)) throw new Error('The selected message is no longer available.');
+			followsOutput.current = false;
+			setEvents((current) => mergeEventHistory(current, page.events ?? []));
+			setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(page.events ?? [])));
+		} catch (reason) {
+			pendingMessageFocus.current = null;
+			setHistoryFailure(`Message could not be opened: ${String(reason)}`);
+		}
+	}, [boardId, events, selectedTask]);
+
   function onTimelineScroll(event: UIEvent<HTMLDivElement>) {
     const target = event.currentTarget;
     const atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 80;
     followsOutput.current = atBottom;
     if (atBottom) setHasNewOutput(false);
+		if (target.scrollTop < 120) void loadEarlierHistory();
   }
 
   function scrollToLatest() {
@@ -1329,16 +1489,19 @@ function App() {
           <div className="conversation" ref={timelineRef} onScroll={onTimelineScroll} aria-label="Conversation">
             <div className="conversation-inner">
               {eventsLoading && events.length === 0 && <div className="loading-conversation"><LoaderCircle size={18} className="spin" /><span>Loading conversation</span></div>}
+					{loadingEarlierHistory && <div className="history-loading" role="status"><LoaderCircle size={14} className="spin" />Loading earlier messages</div>}
               {retentionNotice && <div className="conversation-history-notice" role="status"><AlertTriangle size={14} /><span><strong>{retentionNotice.title}</strong>{retentionNotice.detail}</span></div>}
+					{historyFailure && <div className="conversation-history-notice" role="alert"><AlertTriangle size={14} /><span><strong>Conversation history is incomplete.</strong>{historyFailure}</span></div>}
               {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {if (workflow.id === 'deploy-model' && connection?.capabilities?.capabilities.includes('deployments.v1')) {setShowDeployment(true); return;} setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
               {conversation.map((item) => item.kind === 'user'
-                ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
+					? <UserMessage key={item.key} item={item} onEdit={editMessage} highlighted={highlightedMessageSequence === item.sequence} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
-              {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)})), source: 'user', scheduleId: ''}} />}
+					{optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)})), source: 'user', scheduleId: ''}} />}
               {selectedTask.status === 'queued' ? <div className="agent-progress immediate"><ListTodo size={14} /><span>Waiting for a board Agent slot</span><small>{selectedTask.queuedAt ? relativeTime(selectedTask.queuedAt) : 'queued'}</small></div> : ['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
               {selectedTaskRecovery && <TaskRecoveryCard presentation={selectedTaskRecovery} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} canDiagnose={Boolean(connection?.capabilities?.capabilities.includes('support.bundle.v1'))} busy={busy || checkingModel} onAction={() => {if (selectedTaskRecovery.recovery === 'check-model') {void checkModelHealth(); return;} if (selectedTaskRecovery.recovery === 'diagnose') {void saveSupportBundle(); return;} setComposer(selectedTaskRecovery.action?.prompt ?? ''); window.requestAnimationFrame(() => composerRef.current?.focus());}} />}
             </div>
           </div>
+				<ConversationNavigator messages={navigatorMessages} activeSequence={activeMessageSequence} onNavigate={navigateToMessage} />
 
           {hasNewOutput && <button className="jump-latest" onClick={scrollToLatest}><ArrowDown size={15} />New output</button>}
           <div className="composer-dock">
@@ -1399,9 +1562,38 @@ function App() {
   );
 }
 
-function UserMessage({item, onEdit}: {item: UserConversationItem; onEdit?: (item: UserConversationItem) => void}) {
+function ConversationNavigator({messages, activeSequence, onNavigate}: {messages: UserConversationItem[]; activeSequence: number | null; onNavigate: (message: UserConversationItem) => void}) {
+	const [openMarker, setOpenMarker] = useState<number | null>(null);
+	if (messages.length < 6) return null;
+	const markers = navigatorGroups(messages);
+	const activeIndex = activeSequence === null ? -1 : messages.findIndex((message) => message.sequence === activeSequence);
+	const move = (offset: number) => {
+		if (activeIndex < 0) return onNavigate(messages[offset > 0 ? 0 : messages.length - 1]);
+		onNavigate(messages[Math.max(0, Math.min(messages.length - 1, activeIndex + offset))]);
+	};
+	return <nav className="conversation-navigator" aria-label="Your message navigator" onKeyDown={(event) => {
+		if (event.key === 'Escape') { setOpenMarker(null); return; }
+		if (event.key === 'ArrowUp') { event.preventDefault(); move(-1); }
+		if (event.key === 'ArrowDown') { event.preventDefault(); move(1); }
+	}}>
+		<button className="navigator-step" title="Previous message" aria-label="Previous message" onClick={() => move(-1)}><ArrowUp size={13} /></button>
+		<div className="navigator-track">{markers.map((group, index) => {
+			const latest = group[group.length - 1];
+			const active = group.some((message) => message.sequence === activeSequence);
+			const preview = group.length === 1 ? latest : group[0];
+			return <span className="navigator-marker-wrap" key={latest.sequence}>
+				<button className={`navigator-marker${active ? ' active' : ''}${group.length > 1 ? ' grouped' : ''}`} aria-current={active ? 'step' : undefined} aria-label={group.length === 1 ? `Go to message: ${latest.text.slice(0, 120)}` : `Open ${group.length} messages`} onClick={() => group.length === 1 ? onNavigate(latest) : setOpenMarker(openMarker === index ? null : index)} />
+				<span className="navigator-preview" role="tooltip"><time>{formatTime(preview.time)}</time><span>{preview.text}</span>{group.length > 1 && <small>{group.length} messages here</small>}</span>
+				{openMarker === index && <div className="navigator-popover" role="dialog" aria-label="Messages in this part of the conversation">{group.map((message, messageIndex) => <button autoFocus={messageIndex === 0} key={message.sequence} onClick={() => {setOpenMarker(null); onNavigate(message);}}><time>{formatTime(message.time)}</time><span>{message.text}</span></button>)}</div>}
+			</span>;
+		})}</div>
+		<button className="navigator-step" title="Next message" aria-label="Next message" onClick={() => move(1)}><ArrowDown size={13} /></button>
+	</nav>;
+}
+
+function UserMessage({item, onEdit, highlighted = false}: {item: UserConversationItem; onEdit?: (item: UserConversationItem) => void; highlighted?: boolean}) {
   const scheduled = item.source === 'schedule';
-  return <article className={`user-message${scheduled ? ' scheduled-message' : ''}`}>{scheduled && <div className="scheduled-message-label" title={item.scheduleId ? `Schedule ${item.scheduleId}` : 'Scheduled task'}><CalendarClock size={13} />Scheduled</div>}{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && !scheduled && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
+  return <article id={`message-${item.sequence}`} data-user-message-sequence={item.sequence} className={`user-message${scheduled ? ' scheduled-message' : ''}${highlighted ? ' message-highlighted' : ''}`}>{scheduled && <div className="scheduled-message-label" title={item.scheduleId ? `Schedule ${item.scheduleId}` : 'Scheduled task'}><CalendarClock size={13} />Scheduled</div>}{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && !scheduled && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
 }
 
 function AssistantTurn({item, running, canCheckModel, checkingModel, onCheckModel, onRetry}: {item: AssistantConversationItem; running: boolean; canCheckModel: boolean; checkingModel: boolean; onCheckModel: () => void; onRetry: () => void}) {

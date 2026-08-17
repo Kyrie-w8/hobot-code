@@ -231,6 +231,8 @@ export type EventPage = {
   events: TaskEvent[];
   nextAfter?: number;
   hasMore: boolean;
+	  nextBefore?: number;
+	  hasEarlier?: boolean;
   retainedFrom?: number;
   retainedThrough?: number;
   latestSequence?: number;

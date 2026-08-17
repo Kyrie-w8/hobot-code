@@ -102,7 +102,7 @@
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
 | `task.approvals` | `{taskId}` | 有界待审批队列，包含活跃和已失效项 |
 | `task.stop` | `{taskId}` | 终止 worker 进程组 |
-| `task.events` | `{taskId, after?, limit?}` | 按序号读取最多 1000 条仍保留的持久事件，并返回保留边界 |
+| `task.events` | `{taskId, after?, limit?}` 或 `{taskId, direction:"before", before?, limit?}` | 向后读取 `sequence > after`，或在 `events.page.before.v1` 下读取严格早于 `before` 的最近一页；反向模式中 `before=0` 表示持久尾页；每页最多 1000 条并返回保留边界 |
 | `task.subscribe` | `{taskId, after?, follow?}` | 先返回保留边界并重放 `sequence > after` 的事件，再按需跟随 |
 
 终端 `hobot deploy inspect/start/status` 是上述部署方法的薄客户端，不另设权限或状态体系。`start` 返回普通持久任务 ID，可继续使用 `hobot task attach/stop`；SSH 断开不会终止任务。
@@ -171,6 +171,8 @@ tasks/<task-id>/queue.json                # queued 及短暂 starting 交接状�
 目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整。达到上限后，agentd 以原子方式滚动为连续的最新事件窗口，并继续持久化后续事件，不会因为旧历史占满空间而只向在线客户端发送。worker stderr 与 agentd 故障细节合计最多保留 1 MiB；支持文件最多 4 MiB、只保留最近 5 份；每次生成都使用原子私有写入。
 
 支持 `events.retention.v1` 的 `task.events` 结果和 `task.subscribe` 首个确认会返回 `retainedFrom`、`retainedThrough`、`latestSequence`、`historyTruncated` 与 `cursorExpired`。`retainedFrom..retainedThrough` 是当前可重放的连续持久区间；`cursorExpired` 表示客户端断点早于该区间，应从 `retainedFrom` 恢复；`latestSequence > retainedThrough` 则表示近期事件存在真实持久化缺口，而不只是旧历史正常滚动。旧客户端可以忽略这些新增字段。
+
+支持 `events.page.before.v1` 时，反向页保持事件按 sequence 升序，并额外返回 `nextBefore` 与 `hasEarlier`。客户端只能把 `nextBefore` 用作下一次 `before` 游标，不能用数组位置代替；`after` 与反向模式不能组合。每个反向请求都会重新验证完整日志 envelope、连续 sequence、单条记录和总响应大小。分页期间如果保留窗口已经越过客户端游标，结果设置 `cursorExpired`，客户端必须明确显示历史边界，不能静默当作已经读到第一条记录。
 
 客户端断开不会终止 daemon 或 worker。重新连接后使用最后收到的 `sequence` 继续订阅，即可先补齐仍保留的持久事件再接收实时事件；若断点已经过期，CLI 和 Studio 会明确提示实际重放起点。尚未启动的 `queued` 请求在 daemon 或板卡重启后继续排队；Prompt 在入队时只生成一次持久用户事件，恢复执行不会重复显示。已经启动的任务在 daemon 停止、崩溃或板卡重启时标记为 `interrupted`，其未完成审批标记为非活跃。`task.resume` 会先验证 session 是当前用户所有、权限私有、大小有界且物理路径位于配置的 session 目录内，然后使用上游运行时的 `--session` 续接。它不会自动重放已经开始的 Prompt、工具调用或审批；这是为了避免重复写文件、操作设备或执行其他不可逆副作用。`task.restart` 会清除任务的旧 session 绑定，并在同一工作目录中启动新 worker；事件日志与任务 ID 保留，但旧会话上下文不会注入新 worker。`task.fork` 不修改源 session 文件：它根据 session 树的 `parentId` 链物化私有分支文件。`side` 取最新已稳定叶节点并作为独立 Agent 展示；省略 Prompt 时只创建私有分支，首条消息才启动 worker。`edit` 要求指定 `sequence` 和替换 Prompt，停止被替代的空闲 worker，继承该条 `user.message` 之前的可见历史，并把修改后的 Prompt 作为同一会话的新时间线。旧时间线仍以内部任务记录保留，但 Studio 会折叠它，不会将编辑操作展示成 Side Agent。
 
