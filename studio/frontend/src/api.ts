@@ -32,7 +32,7 @@ declare global {
 const mockBoard: Board = {id: 's600-demo', name: 'RDK S600', host: 'rdk-s600.local', user: 'root', port: 22};
 const now = new Date();
 const mockTasks: Task[] = [
-  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 240, sessionId: '019fef9b-695f-7e9d', sessionFile: '/root/.local/state/hobot-code/sessions/demo.jsonl', model: 'drobotics/kimi-k3'},
+  {id: 'b8930da1a77e4a8f12345678', name: 'model-benchmark', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 842107, createdAt: new Date(now.getTime() - 42 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 2400, sessionId: '019fef9b-695f-7e9d', sessionFile: '/root/.local/state/hobot-code/sessions/demo.jsonl', model: 'drobotics/kimi-k3'},
   {id: '04acf83b820b934e12345678', name: 'camera-pipeline', cwd: '/root/tros_ws', status: 'waiting', pid: 842244, createdAt: new Date(now.getTime() - 18 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 72, pendingApprovals: [{id: 'approval-demo', method: 'select', title: 'Allow bash?\nRisk: Executes a shell command with the current user privileges.\nTarget: hobot-board info', message: 'Choose how Hobot Code may run this tool.', options: ['Allow once', 'Allow network for this task', 'Deny'], active: true}]},
   {id: 'f30bb47e8d552f1812345678', name: 'deploy-review', cwd: '/root/yolo_bench_s100', status: 'idle', pid: 841992, createdAt: new Date(now.getTime() - 70 * 60_000).toISOString(), updatedAt: now.toISOString(), lastSequence: 53, parentTaskId: 'b8930da1a77e4a8f12345678', branchKind: 'side', model: 'drobotics/kimi-k3'},
 ];
@@ -50,11 +50,11 @@ const mockPrompts = [
   '现在生成最终的验收结论。',
 ];
 
-const mockHistoryEvents = (taskId: string) => Array.from({length: 240}, (_, index) => {
+const mockHistoryEvents = (taskId: string) => Array.from({length: 2400}, (_, index) => {
   const sequence = index + 1;
   const turn = Math.floor(index / 24);
-  const time = new Date(now.getTime() - (240 - sequence) * 4_000).toISOString();
-  if (sequence % 24 === 1) return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'hobot_user_prompt'}, normalized: {schema: 4, type: 'user.message', data: {text: mockPrompts[turn]}}};
+  const time = new Date(now.getTime() - (2400 - sequence) * 4_000).toISOString();
+  if (sequence % 24 === 1) return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'hobot_user_prompt'}, normalized: {schema: 4, type: 'user.message', data: {text: `${mockPrompts[turn % mockPrompts.length]} (${turn + 1})`}}};
   if (sequence % 24 === 0) return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'task_idle'}, normalized: {schema: 4, type: 'task.idle'}};
   return {protocol: 1, kind: 'event', taskId, sequence, time, event: {type: 'message_update'}, normalized: {schema: 4, type: 'assistant.text.delta', data: {delta: `Checked evidence item ${sequence}. `}}};
 });

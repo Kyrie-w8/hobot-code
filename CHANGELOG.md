@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.5
+
+### Fixed
+
+- Keep a navigated conversation as one continuous event range and page forward as the reader scrolls down, instead of joining an old page directly to the latest scheduled output and silently skipping the messages between them.
+- Show a persistent **Latest** action while reading historical pages, while continuing to use **New output** for live messages that arrive when the reader is away from the current tail.
+
 ## 0.28.4
 
 ### Added

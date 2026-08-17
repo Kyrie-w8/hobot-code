@@ -11,6 +11,24 @@ export function mergeEventHistory(current, incoming) {
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence);
 }
 
+export function navigationEventWindow(events) {
+  const window = mergeEventHistory([], events ?? []);
+  for (let index = 1; index < window.length; index += 1) {
+    if (window[index].sequence !== window[index - 1].sequence + 1) throw new Error('History page contained a sequence gap.');
+  }
+  return window;
+}
+
+export function eventPageContinuesAfter(after, events) {
+  return (events ?? []).every((event, index) => event.sequence === after + index + 1);
+}
+
+export function eventPageHasLater(page) {
+  const lastSequence = page.events?.at(-1)?.sequence ?? 0;
+  const retainedThrough = page.retainedThrough ?? page.latestSequence ?? lastSequence;
+  return Boolean(page.hasMore || (lastSequence > 0 && retainedThrough > lastSequence));
+}
+
 export function userMessagesFromEvents(events) {
   return events.flatMap((event) => {
     const data = event.normalized?.type === 'user.message' ? event.normalized.data ?? {} : null;

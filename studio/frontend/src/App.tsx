@@ -13,7 +13,7 @@ import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldCancelTurnShortcut, shouldSubmitComposer, terminalStatuses, turnCancellationMode} from './composer-policy.js';
 import {buildConversation, elapsedLabel, eventRetentionPresentation} from './conversation-model.js';
-import {eventPageSize, mergeEventHistory, mergeMessageIndex, navigatorGroups, userMessagesFromEvents} from './conversation-history.js';
+import {eventPageContinuesAfter, eventPageHasLater, eventPageSize, mergeEventHistory, mergeMessageIndex, navigationEventWindow, navigatorGroups, userMessagesFromEvents} from './conversation-history.js';
 import {approvalPresentation, approvalResponse} from './approval-model.js';
 import {acceleratorMemoryMetrics, activeDDRBandwidth, boardHealth, bpuCoreLabel, bpuFrequency, bpuTemperature, bpuUnavailableReason, bpuUtilization, durationLabel, formatBytes, orphanedIONNotice, percentLabel, systemResourceMetrics} from './board-health.js';
 import {arrangeTasks, groupTasksByProject} from './project-model.js';
@@ -122,6 +122,8 @@ function App() {
   const [hasNewOutput, setHasNewOutput] = useState(false);
 	const [hasEarlierHistory, setHasEarlierHistory] = useState(false);
 	const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
+	const [hasLaterHistory, setHasLaterHistory] = useState(false);
+	const [loadingLaterHistory, setLoadingLaterHistory] = useState(false);
 	const [historyFailure, setHistoryFailure] = useState('');
 	const [messageIndex, setMessageIndex] = useState<UserConversationItem[]>([]);
 	const [activeMessageSequence, setActiveMessageSequence] = useState<number | null>(null);
@@ -132,6 +134,10 @@ function App() {
   const followsOutput = useRef(true);
 	const prependAnchor = useRef<{height: number; top: number} | null>(null);
 	const historyPrepending = useRef(false);
+	const historyWindowUpdating = useRef(false);
+	const hasLaterHistoryRef = useRef(false);
+	const laterHistoryLoadingRef = useRef(false);
+	const pendingLatestScroll = useRef(false);
   const pendingMessageFocus = useRef<number | null>(null);
   const messageIndexRequest = useRef(0);
 	const historySupportsBefore = useRef(false);
@@ -152,6 +158,10 @@ function App() {
 
   const boardId = connection?.board.id ?? '';
 	historySupportsBefore.current = Boolean(connection?.capabilities?.capabilities.includes('events.page.before.v1'));
+	const updateHasLaterHistory = useCallback((value: boolean) => {
+		hasLaterHistoryRef.current = value;
+		setHasLaterHistory(value);
+	}, []);
   const resolvedTheme = resolveTheme(themePreference, systemPrefersDark);
   const AppearanceIcon = themePreference === 'system' ? Monitor : resolvedTheme === 'dark' ? Moon : Sun;
 
@@ -354,7 +364,8 @@ function App() {
   useEffect(() => {
     const removeEvent = api.onEvent(({boardId: eventBoard, event}) => {
       if (eventBoard !== activeBoardId.current || event.taskId !== selectedTask?.id) return;
-		setEvents((current) => mergeEventHistory(current, [event]));
+		if (hasLaterHistoryRef.current) setHasNewOutput(true);
+		else setEvents((current) => mergeEventHistory(current, [event]));
 		setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents([event])));
       if (['task.queued', 'task.starting', 'task.running', 'task.idle', 'task.cancelled', 'task.failed', 'task.interrupted', 'task.stopped', 'approval.requested'].includes(event.normalized?.type ?? '')) void refreshTasks();
     });
@@ -406,6 +417,10 @@ function App() {
       setEvents([]);
       setEventRetention(null);
 		setHasEarlierHistory(false);
+		updateHasLaterHistory(false);
+		laterHistoryLoadingRef.current = false;
+		historyWindowUpdating.current = false;
+		setLoadingLaterHistory(false);
 		setHistoryFailure('');
 		setMessageIndex([]);
       setEventsLoading(false);
@@ -415,8 +430,12 @@ function App() {
 		const request = ++messageIndexRequest.current;
     setEventsLoading(true);
     setEventRetention(null);
-		setHasEarlierHistory(false);
-		setHistoryFailure('');
+	setHasEarlierHistory(false);
+	updateHasLaterHistory(false);
+	laterHistoryLoadingRef.current = false;
+	historyWindowUpdating.current = false;
+	setLoadingLaterHistory(false);
+	setHistoryFailure('');
 		setMessageIndex([]);
 		const supportsHistoryBefore = historySupportsBefore.current;
 		const initialPage = supportsHistoryBefore
@@ -424,7 +443,7 @@ function App() {
 			: api.events(boardId, selectedTask.id, Math.max(0, selectedTask.lastSequence - eventPageSize), eventPageSize);
     initialPage.then((page) => {
       if (!active) return;
-      setEvents(page.events ?? []);
+      setEvents(navigationEventWindow(page.events));
 		setMessageIndex(userMessagesFromEvents(page.events ?? []));
 		setHasEarlierHistory(Boolean(page.hasEarlier));
 		if (!supportsHistoryBefore && page.retainedFrom && page.retainedFrom < (page.events?.[0]?.sequence ?? page.retainedFrom)) {
@@ -463,7 +482,7 @@ function App() {
       active = false;
       void api.stopWatch(boardId, selectedTask.id);
     };
-  }, [boardId, scheduleWatchRetry, selectedTask?.id, watchRevision]);
+  }, [boardId, scheduleWatchRetry, selectedTask?.id, updateHasLaterHistory, watchRevision]);
 
   useEffect(() => {
     const nextTaskId = selectedTask?.id ?? '';
@@ -523,18 +542,29 @@ function App() {
 			historyPrepending.current = false;
 			return;
 		}
+		if (historyWindowUpdating.current) {
+			historyWindowUpdating.current = false;
+			return;
+		}
     if (followsOutput.current) {
       window.requestAnimationFrame(() => timeline.scrollTo({top: timeline.scrollHeight, behavior: 'smooth'}));
       setHasNewOutput(false);
     } else if (events.length > 0) {
       setHasNewOutput(true);
     }
-  }, [events.length, selectedTask?.status]);
+  }, [events, selectedTask?.status]);
 
 	useLayoutEffect(() => {
-		const anchor = prependAnchor.current;
 		const timeline = timelineRef.current;
-		if (!anchor || !timeline) return;
+		if (!timeline) return;
+		if (pendingLatestScroll.current) {
+			pendingLatestScroll.current = false;
+			prependAnchor.current = null;
+			timeline.scrollTop = timeline.scrollHeight;
+			return;
+		}
+		const anchor = prependAnchor.current;
+		if (!anchor) return;
 		prependAnchor.current = null;
 		timeline.scrollTop = anchor.top + timeline.scrollHeight - anchor.height;
 	}, [events]);
@@ -1320,9 +1350,49 @@ function App() {
 		} finally {
 			setLoadingEarlierHistory(false);
 		}
-	}, [boardId, events, hasEarlierHistory, loadingEarlierHistory, selectedTask]);
+		}, [boardId, events, hasEarlierHistory, loadingEarlierHistory, selectedTask]);
 
-  const navigateToMessage = useCallback(async (message: UserConversationItem) => {
+	const loadLaterHistory = useCallback(async () => {
+		if (!boardId || !selectedTask || laterHistoryLoadingRef.current || !hasLaterHistory) return;
+		const after = events.at(-1)?.sequence;
+		if (!after) return;
+		laterHistoryLoadingRef.current = true;
+		setLoadingLaterHistory(true);
+		setHistoryFailure('');
+		followsOutput.current = false;
+		try {
+			const page = await api.events(boardId, selectedTask.id, after, eventPageSize);
+			const incoming = page.events ?? [];
+			if (!incoming.length && (page.hasMore || (page.retainedThrough ?? 0) > after)) throw new Error('History page did not advance.');
+			if (!page.cursorExpired && !eventPageContinuesAfter(after, incoming)) throw new Error('History page did not continue from the current message.');
+			if (page.cursorExpired) {
+				historyWindowUpdating.current = true;
+				setEvents(navigationEventWindow(incoming));
+				setHasEarlierHistory(false);
+				setHistoryFailure('The history retained by this board changed while later messages were loading.');
+			} else {
+				historyWindowUpdating.current = true;
+				setEvents((current) => mergeEventHistory(current, incoming));
+			}
+			setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(incoming)));
+			updateHasLaterHistory(eventPageHasLater(page));
+			setEventRetention((current) => ({
+				retainedFrom: page.retainedFrom ?? current?.retainedFrom,
+				retainedThrough: page.retainedThrough ?? current?.retainedThrough,
+				latestSequence: page.latestSequence ?? current?.latestSequence,
+				historyTruncated: Boolean(page.historyTruncated || current?.historyTruncated),
+				cursorExpired: Boolean(page.cursorExpired || current?.cursorExpired),
+			}));
+		} catch (reason) {
+			historyWindowUpdating.current = false;
+			setHistoryFailure(`Later history could not be loaded: ${String(reason)}`);
+		} finally {
+			laterHistoryLoadingRef.current = false;
+			setLoadingLaterHistory(false);
+		}
+	}, [boardId, events, hasLaterHistory, selectedTask, updateHasLaterHistory]);
+
+	  const navigateToMessage = useCallback(async (message: UserConversationItem) => {
 		if (!boardId || !selectedTask) return;
 		pendingMessageFocus.current = message.sequence;
 		const loaded = events.some((event) => event.sequence === message.sequence);
@@ -1338,31 +1408,77 @@ function App() {
 			return;
 		}
 		setHistoryFailure('');
-		try {
-			const page = await api.beforeEvents(boardId, selectedTask.id, message.sequence + 1, eventPageSize);
-			if (!page.events?.some((event) => event.sequence === message.sequence)) throw new Error('The selected message is no longer available.');
-			followsOutput.current = false;
-			setEvents((current) => mergeEventHistory(current, page.events ?? []));
-			setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(page.events ?? [])));
-		} catch (reason) {
-			pendingMessageFocus.current = null;
+			try {
+				const page = await api.beforeEvents(boardId, selectedTask.id, message.sequence + 1, eventPageSize);
+				if (!page.events?.some((event) => event.sequence === message.sequence)) throw new Error('The selected message is no longer available.');
+				followsOutput.current = false;
+					prependAnchor.current = null;
+					laterHistoryLoadingRef.current = false;
+					setLoadingLaterHistory(false);
+					historyWindowUpdating.current = true;
+					setEvents(navigationEventWindow(page.events));
+				setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(page.events ?? [])));
+				setHasEarlierHistory(Boolean(page.hasEarlier));
+				updateHasLaterHistory(eventPageHasLater(page));
+				setEventRetention({
+					retainedFrom: page.retainedFrom,
+					retainedThrough: page.retainedThrough,
+					latestSequence: page.latestSequence,
+					historyTruncated: Boolean(page.historyTruncated),
+					cursorExpired: Boolean(page.cursorExpired),
+				});
+				} catch (reason) {
+				historyWindowUpdating.current = false;
+				pendingMessageFocus.current = null;
 			setHistoryFailure(`Message could not be opened: ${String(reason)}`);
 		}
-	}, [boardId, events, selectedTask]);
+		}, [boardId, events, selectedTask, updateHasLaterHistory]);
 
-  function onTimelineScroll(event: UIEvent<HTMLDivElement>) {
-    const target = event.currentTarget;
-    const atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 80;
-    followsOutput.current = atBottom;
-    if (atBottom) setHasNewOutput(false);
-		if (target.scrollTop < 120) void loadEarlierHistory();
-  }
+	  function onTimelineScroll(event: UIEvent<HTMLDivElement>) {
+	    const target = event.currentTarget;
+		const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+		const atLatest = distanceFromBottom < 80 && !hasLaterHistoryRef.current;
+	    followsOutput.current = atLatest;
+	    if (atLatest) setHasNewOutput(false);
+			if (target.scrollTop < 120) void loadEarlierHistory();
+			if (distanceFromBottom < 240 && hasLaterHistoryRef.current) void loadLaterHistory();
+	  }
 
-  function scrollToLatest() {
-    followsOutput.current = true;
-    setHasNewOutput(false);
-    timelineRef.current?.scrollTo({top: timelineRef.current.scrollHeight, behavior: 'smooth'});
-  }
+	  async function scrollToLatest() {
+		if (!hasLaterHistoryRef.current) {
+			followsOutput.current = true;
+			setHasNewOutput(false);
+			timelineRef.current?.scrollTo({top: timelineRef.current.scrollHeight, behavior: 'smooth'});
+			return;
+		}
+		if (!boardId || !selectedTask || laterHistoryLoadingRef.current || !historySupportsBefore.current) return;
+		laterHistoryLoadingRef.current = true;
+		setLoadingLaterHistory(true);
+		setHistoryFailure('');
+		try {
+			const page = await api.beforeEvents(boardId, selectedTask.id, 0, eventPageSize);
+			pendingLatestScroll.current = true;
+			followsOutput.current = true;
+			setEvents(navigationEventWindow(page.events));
+			setMessageIndex((current) => mergeMessageIndex(current, userMessagesFromEvents(page.events ?? [])));
+			setHasEarlierHistory(Boolean(page.hasEarlier));
+			updateHasLaterHistory(eventPageHasLater(page));
+			setEventRetention({
+				retainedFrom: page.retainedFrom,
+				retainedThrough: page.retainedThrough,
+				latestSequence: page.latestSequence,
+				historyTruncated: Boolean(page.historyTruncated),
+				cursorExpired: Boolean(page.cursorExpired),
+			});
+			setHasNewOutput(false);
+		} catch (reason) {
+			pendingLatestScroll.current = false;
+			setHistoryFailure(`Latest history could not be loaded: ${String(reason)}`);
+		} finally {
+			laterHistoryLoadingRef.current = false;
+			setLoadingLaterHistory(false);
+		}
+	  }
 
   async function saveSupportBundle() {
     if (!boardId || busy) return;
@@ -1496,6 +1612,7 @@ function App() {
               {conversation.map((item) => item.kind === 'user'
 					? <UserMessage key={item.key} item={item} onEdit={editMessage} highlighted={highlightedMessageSequence === item.sequence} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
+					{loadingLaterHistory && <div className="history-loading" role="status"><LoaderCircle size={14} className="spin" />Loading later messages</div>}
 					{optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)})), source: 'user', scheduleId: ''}} />}
               {selectedTask.status === 'queued' ? <div className="agent-progress immediate"><ListTodo size={14} /><span>Waiting for a board Agent slot</span><small>{selectedTask.queuedAt ? relativeTime(selectedTask.queuedAt) : 'queued'}</small></div> : ['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
               {selectedTaskRecovery && <TaskRecoveryCard presentation={selectedTaskRecovery} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} canDiagnose={Boolean(connection?.capabilities?.capabilities.includes('support.bundle.v1'))} busy={busy || checkingModel} onAction={() => {if (selectedTaskRecovery.recovery === 'check-model') {void checkModelHealth(); return;} if (selectedTaskRecovery.recovery === 'diagnose') {void saveSupportBundle(); return;} setComposer(selectedTaskRecovery.action?.prompt ?? ''); window.requestAnimationFrame(() => composerRef.current?.focus());}} />}
@@ -1503,7 +1620,7 @@ function App() {
           </div>
 				<ConversationNavigator messages={navigatorMessages} activeSequence={activeMessageSequence} onNavigate={navigateToMessage} />
 
-          {hasNewOutput && <button className="jump-latest" onClick={scrollToLatest}><ArrowDown size={15} />New output</button>}
+          {(hasLaterHistory || hasNewOutput) && <button className="jump-latest" onClick={scrollToLatest}><ArrowDown size={15} />{hasLaterHistory ? 'Latest' : 'New output'}</button>}
           <div className="composer-dock">
             {activeApproval && <ApprovalBar key={activeApproval.id} approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
             <form className="composer" onSubmit={submitPrompt}>

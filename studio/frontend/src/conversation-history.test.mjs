@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import test from 'node:test';
-import {historyPageBefore, mergeEventHistory, mergeMessageIndex, navigatorGroups, userMessagesFromEvents} from './conversation-history.js';
+import {eventPageContinuesAfter, eventPageHasLater, historyPageBefore, mergeEventHistory, mergeMessageIndex, navigationEventWindow, navigatorGroups, userMessagesFromEvents} from './conversation-history.js';
 
 const event = (sequence, text = `message ${sequence}`) => ({sequence, time: new Date(sequence * 1000).toISOString(), normalized: {type: 'user.message', data: {text}}});
 
@@ -37,6 +37,20 @@ test('mock-style tail pages use an exclusive before cursor across two pages', ()
   assert.deepEqual([older.events[0].sequence, older.events.at(-1).sequence, older.nextBefore, older.hasEarlier], [1, 40, 1, false]);
 });
 
+test('navigation replaces disjoint history with one continuous window and exposes later pages', () => {
+  const newest = Array.from({length: 200}, (_, index) => event(1801 + index));
+  const target = Array.from({length: 200}, (_, index) => event(601 + index));
+  const window = navigationEventWindow(target);
+  assert.deepEqual([window[0].sequence, window.at(-1).sequence, window.length], [601, 800, 200]);
+  assert.equal(window.some((entry) => entry.sequence >= newest[0].sequence), false);
+  assert.equal(eventPageHasLater({events: target, retainedThrough: 2000, hasMore: false}), true);
+  assert.equal(eventPageHasLater({events: newest, retainedThrough: 2000, hasMore: false}), false);
+  assert.equal(eventPageHasLater({events: target, retainedThrough: 800, hasMore: true}), true);
+	assert.equal(eventPageContinuesAfter(800, Array.from({length: 200}, (_, index) => event(801 + index))), true);
+	assert.equal(eventPageContinuesAfter(800, [event(802)]), false);
+	assert.throws(() => navigationEventWindow([event(601), event(603)]), /sequence gap/);
+});
+
 test('Studio wires anchor preservation, hover previews, and accessible navigator state', async () => {
   const source = await readFile(new URL('./App.tsx', import.meta.url), 'utf8');
   assert.match(source, /prependAnchor/);
@@ -47,4 +61,11 @@ test('Studio wires anchor preservation, hover previews, and accessible navigator
   assert.match(source, /page\.cursorExpired/);
   assert.match(source, /setHasEarlierHistory\(false\)/);
   assert.match(source, /Earlier history is no longer retained by this board/);
+	assert.match(source, /loadLaterHistory/);
+	assert.match(source, /hasLaterHistoryRef\.current/);
+	assert.match(source, /navigationEventWindow\(page\.events/);
+	assert.match(source, /eventPageContinuesAfter\(after, incoming\)/);
+	assert.match(source, /\[events, selectedTask\?\.status\]/);
+	assert.match(source, /hasLaterHistory \|\| hasNewOutput/);
+	assert.match(source, /hasLaterHistory \? 'Latest' : 'New output'/);
 });
