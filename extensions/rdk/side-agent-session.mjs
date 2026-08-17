@@ -134,6 +134,25 @@ export function sideAgentFocusSwitchAllowed(focused, mainFocus, sideFocus) {
   return focused == null || focused === mainFocus || focused === sideFocus;
 }
 
+export function sideAgentParentStatus({ active = false, activity = "" } = {}) {
+  const safeActivity = active && /^(?:thinking|responding|waiting for approval|using [A-Za-z0-9_.:-]{1,80})$/.test(String(activity))
+    ? String(activity)
+    : "";
+  return {
+    active: Boolean(active),
+    activity: safeActivity,
+    label: active ? `main: ${safeActivity || "running"}` : "main: idle",
+    context: [
+      "Live collaboration status: You are a Side Agent and the Main Agent exists in the other pane.",
+      `The Main Agent is currently ${active ? "running" : "idle"}${safeActivity ? ` (${safeActivity})` : ""}. This status was refreshed when this side turn started.`,
+      "Do not continue, stop, approve, or impersonate the Main Agent. Hidden reasoning is intentionally not shared.",
+      active
+        ? "The shared workspace is Main-Agent priority while it is active. Stay read-only, wait for it to settle, or use a separate isolated workspace."
+        : "Before writing, re-read live files and obey workspace and hardware leases because prior side effects persist.",
+    ].join("\n"),
+  };
+}
+
 function messageText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";

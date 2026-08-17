@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.6
+
+### Fixed
+
+- Give Studio and TUI Side Agents an enforced Side identity, refresh bounded Main-Agent activity without sharing hidden reasoning, keep Side Agents flat while retaining their true source task, and fail closed on shared-workspace writes whenever the Main Agent is active or collaboration state cannot be verified.
+- Limit live Side Agents per main task, advertise the limit through the board protocol, and expose safe collaboration activity in Studio while retaining existing workspace, worker, model-egress, and RDK hardware coordination boundaries.
+
 ## 0.27.5
 
 ### Fixed

@@ -21,6 +21,23 @@ func TestEnvironmentWithoutGatewayCredential(t *testing.T) {
 	}
 }
 
+func TestSafeChildEnvironmentRemovesUntrustedTaskCoordination(t *testing.T) {
+	result := safeChildEnvironment([]string{
+		"PATH=/usr/bin",
+		"HOBOT_CODE_AGENT_ROLE=side",
+		"HOBOT_CODE_BACKGROUND_TASK_ID=00112233445566778899aabb",
+		"HOBOT_CODE_SIDE_COLLABORATION_FILE=/tmp/spoofed",
+		"LANG=C.UTF-8",
+	})
+	joined := strings.Join(result, "\n")
+	if strings.Contains(joined, "HOBOT_CODE_AGENT_ROLE") || strings.Contains(joined, "HOBOT_CODE_BACKGROUND_TASK_ID") || strings.Contains(joined, "HOBOT_CODE_SIDE_COLLABORATION_FILE") {
+		t.Fatalf("task coordination injection remained in child environment: %v", result)
+	}
+	if !strings.Contains(joined, "PATH=/usr/bin") || !strings.Contains(joined, "LANG=C.UTF-8") {
+		t.Fatalf("ordinary environment was removed: %v", result)
+	}
+}
+
 func TestManagedProviderCredentialBundleRoundTrip(t *testing.T) {
 	bundle, err := ambientGatewayCredentials([]string{
 		gatewayTokenEnvironment + "=drobotics-secret",

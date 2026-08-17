@@ -13,6 +13,7 @@ export type Capabilities = {
   eventSchema: number;
   capabilities: string[];
   maximumActiveTasks: number;
+  maximumSideTasks?: number;
   maximumRetainedTasks: number;
   sandbox?: {available: boolean; backend?: string; profiles?: string[]; networkModes?: string[]; filesystemWritesRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
 };
@@ -28,6 +29,7 @@ export type DaemonInfo = {
   activeTasks: number;
   queuedTasks?: number;
   maximumTasks: number;
+  maximumSideTasks?: number;
   stateRoot: string;
   configurationCurrent?: boolean;
   build?: {status: 'verified' | 'invalid' | 'unavailable'; reason?: string; commit?: string; dirty?: boolean; builtAt?: string; target?: string; binarySha256?: string; piVersion?: string; piCommit?: string; piCompatibilitySha256?: string};
@@ -169,8 +171,10 @@ export type Task = {
   networkMode?: 'shared' | 'model-only' | 'offline';
   sandbox?: {requested: string; effective: string; backend: string; filesystemRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};
   parentTaskId?: string;
+  sourceTaskId?: string;
   forkSequence?: number;
   branchKind?: 'side' | 'edit';
+  currentActivity?: string;
   awaitingPrompt?: boolean;
   queuedAt?: string;
   queueOperation?: 'start' | 'fork' | 'resume' | 'restart';

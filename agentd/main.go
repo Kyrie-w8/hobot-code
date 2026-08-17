@@ -83,7 +83,7 @@ func main() {
 	if credentialPayload != "" {
 		executable, err := os.Executable()
 		if err == nil {
-			err = replaceProcess(executable, os.Args[1:], environmentWithoutGatewayCredential(os.Environ()), credentialPayload)
+			err = replaceProcess(executable, os.Args[1:], safeChildEnvironment(os.Environ()), credentialPayload)
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error: isolate model gateway credential:", err)
@@ -238,7 +238,7 @@ func runTUICLI(cfg config, args []string) error {
 	if networkMode == networkModeShared {
 		credentialPayload = gatewayCredentialPayload(cfg)
 	}
-	return replaceProcess(commandName, commandArgs, environmentWithoutGatewayCredential(environment), credentialPayload)
+	return replaceProcess(commandName, commandArgs, safeChildEnvironment(environment), credentialPayload)
 }
 
 func runExtensionsCLI(cfg config, args []string) error {

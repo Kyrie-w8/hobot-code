@@ -39,6 +39,7 @@ import {
   writeNotificationConfig,
   writePolicy,
 } from "./control-plane.mjs";
+import { formatAgentCollaboration, readAgentCollaboration, readEphemeralSideCollaboration, sideAgentWorkspaceWriteBlocked } from "./agent-collaboration.mjs";
 import { formatCacheMetrics, recordCacheObservation, resetCacheMetrics } from "./cache-metrics.mjs";
 import { createDroboticsModelConfig } from "./drobotics-models.mjs";
 import { DEFAULT_DROBOTICS_BASE_URL, streamDrobotics } from "./drobotics-provider.ts";
@@ -756,7 +757,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
   const maxTokens = Number.isInteger(configuredMaxTokens) && configuredMaxTokens >= 2048
     ? Math.min(configuredMaxTokens, 131_072)
     : 8192;
-  const sideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
+  const ephemeralSideAgentMode = process.env.HOBOT_CODE_SIDE_AGENT === "1";
+  const backgroundTaskID = String(process.env.HOBOT_CODE_BACKGROUND_TASK_ID ?? "").trim();
+  const backgroundAgentRole = String(process.env.HOBOT_CODE_AGENT_ROLE ?? "").trim();
+  const ephemeralCollaborationFile = String(process.env.HOBOT_CODE_SIDE_COLLABORATION_FILE ?? "").trim();
+  const sideAgentMode = ephemeralSideAgentMode || backgroundAgentRole === "side";
   const runtimeProbeMode = process.env.HOBOT_CODE_RUNTIME_PROBE === "1";
   const rdkProbeMode = process.env.HOBOT_CODE_RDK_PROBE === "1";
   const openExplorerSkillPack = String(process.env.HOBOT_CODE_OPENEXPLORER_SKILLS_ROOT ?? "").trim();
@@ -834,6 +839,15 @@ export default function rdkExtension(pi: ExtensionAPI) {
   let workspaceTurnFingerprintError: string | undefined;
   let workspaceFingerprintWarningShown = false;
   let permissionHiddenTools = new Set<string>();
+
+  async function currentAgentCollaboration() {
+    if (ephemeralCollaborationFile) return readEphemeralSideCollaboration(ephemeralCollaborationFile);
+    if (!backgroundTaskID) return undefined;
+    return readAgentCollaboration({
+      stateRoot: resolveUserPaths().stateRoot,
+      currentTaskId: backgroundTaskID,
+    });
+  }
 
   async function releaseAllHardwareLeases(): Promise<void> {
     const leases = [...hardwareLeases.values()];
@@ -1553,7 +1567,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     else applyDeniedTools();
 	workspaceFingerprintWarningShown = false;
 	if (!rdkProbeMode) await captureWorkspaceTurnFingerprint(ctx.cwd);
-    if (sideAgentMode || runtimeProbeMode) return undefined;
+    if (ephemeralSideAgentMode || runtimeProbeMode) return undefined;
     const snapshot = currentSnapshot ?? await getBoardSnapshot(false);
     currentSnapshot = snapshot;
     const expertPrompt = currentExpertPrompt ?? await renderExpertPrompt(snapshot);
@@ -1596,7 +1610,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
             : "Stay within budget and call goal_complete only after the full objective and verification requirements are satisfied.",
         ].join("\n")
       : undefined;
-    const dynamicContext = [qualityContext, memoryContext, goalContext, openExplorerPromptContext].filter(Boolean).join("\n\n");
+    const collaborationContext = formatAgentCollaboration(await currentAgentCollaboration());
+    const dynamicContext = [qualityContext, memoryContext, goalContext, collaborationContext, openExplorerPromptContext].filter(Boolean).join("\n\n");
     const systemPrompt = [event.systemPrompt, expertPrompt, dynamicContext].filter(Boolean).join("\n\n");
     lastPromptSnapshot = {
       text: systemPrompt,
@@ -1868,6 +1883,17 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
 	const writesWorkspace = workspaceChangingToolNames.has(event.toolName) || toolIsMcp(event.toolName);
+	if (writesWorkspace) {
+		const collaboration = await currentAgentCollaboration();
+		if (sideAgentWorkspaceWriteBlocked(sideAgentMode, collaboration)) {
+			return {
+				block: true,
+				reason: collaboration
+					? "The Main Agent is active in this shared workspace and has write priority. Continue with read-only analysis, wait for it to settle, or move this Side Agent to an isolated workspace."
+					: "This Side Agent cannot verify the Main Agent's live state, so shared-workspace writes are paused. Read-only analysis can continue; retry after collaboration status recovers or move this Side Agent to an isolated workspace.",
+			};
+		}
+	}
 	if (writesWorkspace && workspaceMutationCalls.size > 0) {
 		return { block: true, reason: "Workspace-changing tools must run sequentially; wait for the active tool call to finish" };
 	}

@@ -39,6 +39,7 @@ type daemonInfo struct {
 	ActiveTasks          int            `json:"activeTasks"`
 	QueuedTasks          int            `json:"queuedTasks"`
 	MaximumTasks         int            `json:"maximumTasks"`
+	MaximumSideTasks     int            `json:"maximumSideTasks"`
 	SocketPath           string         `json:"socketPath"`
 	StateRoot            string         `json:"stateRoot"`
 	BackgroundTasks      bool           `json:"backgroundTasks"`
@@ -74,7 +75,7 @@ func (server *daemonServer) info(clientFingerprint string) daemonInfo {
 	capabilities := server.capabilities()
 	info := daemonInfo{
 		Version: version, Protocol: protocolVersion, PID: os.Getpid(), StartedAt: server.started,
-		ActiveTasks: server.manager.activeCount(), QueuedTasks: server.manager.queuedCount(), MaximumTasks: server.cfg.MaxTasks,
+		ActiveTasks: server.manager.activeCount(), QueuedTasks: server.manager.queuedCount(), MaximumTasks: server.cfg.MaxTasks, MaximumSideTasks: server.manager.sideTaskLimit(),
 		SocketPath: server.cfg.SocketPath, StateRoot: server.cfg.StateRoot, BackgroundTasks: true,
 		Capabilities: capabilities, Build: server.build,
 	}
@@ -92,7 +93,7 @@ func (server *daemonServer) capabilities() capabilityInfo {
 	}
 	return capabilityInfo{
 		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion, EventSchema: eventSchemaVersion,
-		Capabilities: capabilities, MaximumRequest: maxRequestBytes,
+		Capabilities: capabilities, MaximumRequest: maxRequestBytes, MaximumSideTasks: server.manager.sideTaskLimit(),
 		MaximumResponse: maxResponseBytes, MaximumPrompt: maxPromptBytes, MaximumTasks: server.cfg.MaxTasks,
 		MaximumRetained: server.cfg.MaxRetainedTasks, Sandbox: server.sandbox,
 	}

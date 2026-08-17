@@ -352,6 +352,7 @@ button:disabled { cursor: default; opacity: 0.42; }
 .status-waiting { color: var(--amber); }
 .status-idle { color: var(--green); }
 .status-failed, .status-interrupted { color: var(--red); }
+.task-activity { overflow: hidden; max-width: 180px; color: var(--text-dim); font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .stream-status { display: inline-flex; min-width: 0; align-items: center; gap: 4px; color: var(--amber); font-size: 9px; font-weight: 560; white-space: nowrap; }
 .stream-status.stream-failed { color: var(--red); }
 .primary-button, .secondary-button, .danger-button { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 620; cursor: pointer; }

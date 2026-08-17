@@ -7,6 +7,7 @@
     "activeTasks": 0,
     "queuedTasks": 0,
     "maximumTasks": 2,
+    "maximumSideTasks": 2,
     "backgroundTasks": true,
     "capabilities": {
       "protocolMin": 1,
@@ -32,6 +33,7 @@
         "support.bundle.v2",
         "deployments.v1",
         "tasks.fork",
+        "tasks.collaboration.v1",
         "tasks.queue.v1",
         "tasks.failure.v1",
         "tasks.turn-evidence.v1",

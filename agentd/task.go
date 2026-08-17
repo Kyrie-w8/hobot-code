@@ -40,46 +40,49 @@ const (
 var errTaskLaunchCancelled = errors.New("task launch was cancelled")
 
 var taskIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+var taskToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,80}$`)
 
 const maximumWorkerStderrBytes int64 = 1024 * 1024
 
 type taskMetadata struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Cwd            string             `json:"cwd"`
-	ProjectCwd     string             `json:"projectCwd,omitempty"`
-	WorkspaceMode  string             `json:"workspaceMode"`
-	WorkspaceID    string             `json:"workspaceId,omitempty"`
-	WorktreePath   string             `json:"worktreePath,omitempty"`
-	WorktreeBase   string             `json:"worktreeBase,omitempty"`
-	Status         taskStatus         `json:"status"`
-	PID            int                `json:"pid,omitempty"`
-	CreatedAt      time.Time          `json:"createdAt"`
-	UpdatedAt      time.Time          `json:"updatedAt"`
-	LastSequence   uint64             `json:"lastSequence"`
-	LogTruncated   bool               `json:"logTruncated,omitempty"`
-	LastError      string             `json:"lastError,omitempty"`
-	Failure        *taskFailure       `json:"failure,omitempty"`
-	SessionFile    string             `json:"sessionFile,omitempty"`
-	SessionID      string             `json:"sessionId,omitempty"`
-	Approved       bool               `json:"approved,omitempty"`
-	ResumeCount    int                `json:"resumeCount,omitempty"`
-	RestartCount   int                `json:"restartCount,omitempty"`
-	Model          string             `json:"model,omitempty"`
-	PermissionMode string             `json:"permissionMode,omitempty"`
-	SandboxMode    string             `json:"sandboxMode"`
-	NetworkMode    string             `json:"networkMode"`
-	Sandbox        taskSandboxStatus  `json:"sandbox"`
-	ParentTaskID   string             `json:"parentTaskId,omitempty"`
-	ForkSequence   uint64             `json:"forkSequence,omitempty"`
-	BranchKind     string             `json:"branchKind,omitempty"`
-	AwaitingPrompt bool               `json:"awaitingPrompt,omitempty"`
-	QueuedAt       *time.Time         `json:"queuedAt,omitempty"`
-	QueueOperation string             `json:"queueOperation,omitempty"`
-	ArchivedAt     *time.Time         `json:"archivedAt,omitempty"`
-	Approvals      []pendingApproval  `json:"pendingApprovals,omitempty"`
-	Deployment     *deploymentRecord  `json:"deployment,omitempty"`
-	TurnEvidence   []taskTurnEvidence `json:"turnEvidence,omitempty"`
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	Cwd             string             `json:"cwd"`
+	ProjectCwd      string             `json:"projectCwd,omitempty"`
+	WorkspaceMode   string             `json:"workspaceMode"`
+	WorkspaceID     string             `json:"workspaceId,omitempty"`
+	WorktreePath    string             `json:"worktreePath,omitempty"`
+	WorktreeBase    string             `json:"worktreeBase,omitempty"`
+	Status          taskStatus         `json:"status"`
+	PID             int                `json:"pid,omitempty"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
+	LastSequence    uint64             `json:"lastSequence"`
+	LogTruncated    bool               `json:"logTruncated,omitempty"`
+	LastError       string             `json:"lastError,omitempty"`
+	Failure         *taskFailure       `json:"failure,omitempty"`
+	SessionFile     string             `json:"sessionFile,omitempty"`
+	SessionID       string             `json:"sessionId,omitempty"`
+	Approved        bool               `json:"approved,omitempty"`
+	ResumeCount     int                `json:"resumeCount,omitempty"`
+	RestartCount    int                `json:"restartCount,omitempty"`
+	Model           string             `json:"model,omitempty"`
+	PermissionMode  string             `json:"permissionMode,omitempty"`
+	SandboxMode     string             `json:"sandboxMode"`
+	NetworkMode     string             `json:"networkMode"`
+	Sandbox         taskSandboxStatus  `json:"sandbox"`
+	ParentTaskID    string             `json:"parentTaskId,omitempty"`
+	SourceTaskID    string             `json:"sourceTaskId,omitempty"`
+	ForkSequence    uint64             `json:"forkSequence,omitempty"`
+	BranchKind      string             `json:"branchKind,omitempty"`
+	CurrentActivity string             `json:"currentActivity,omitempty"`
+	AwaitingPrompt  bool               `json:"awaitingPrompt,omitempty"`
+	QueuedAt        *time.Time         `json:"queuedAt,omitempty"`
+	QueueOperation  string             `json:"queueOperation,omitempty"`
+	ArchivedAt      *time.Time         `json:"archivedAt,omitempty"`
+	Approvals       []pendingApproval  `json:"pendingApprovals,omitempty"`
+	Deployment      *deploymentRecord  `json:"deployment,omitempty"`
+	TurnEvidence    []taskTurnEvidence `json:"turnEvidence,omitempty"`
 }
 
 type taskFailure struct {
@@ -554,6 +557,27 @@ func (manager *taskManager) queuedCount() int {
 	count := 0
 	for _, current := range manager.tasks {
 		if current.snapshot().Status == statusQueued {
+			count++
+		}
+	}
+	return count
+}
+
+func (manager *taskManager) sideTaskLimit() int {
+	if manager.cfg.MaxSideTasks >= 1 && manager.cfg.MaxSideTasks <= maximumMaxSideTasks {
+		return manager.cfg.MaxSideTasks
+	}
+	return defaultMaxSideTasks
+}
+
+func (manager *taskManager) liveSideTaskCount(rootTaskID string) int {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	count := 0
+	for _, current := range manager.tasks {
+		metadata := current.snapshot()
+		if metadata.BranchKind == "side" && metadata.ParentTaskID == rootTaskID &&
+			(metadata.AwaitingPrompt || isLiveStatus(metadata.Status)) {
 			count++
 		}
 	}
@@ -1145,6 +1169,13 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 		return taskMetadata{}, err
 	}
 	parent := source.snapshot()
+	if params.Kind == "side" {
+		rootTaskID := manager.rootTaskID(parent)
+		limit := manager.sideTaskLimit()
+		if manager.liveSideTaskCount(rootTaskID) >= limit {
+			return taskMetadata{}, fmt.Errorf("side agent limit reached (%d) for this main task; stop or close a Side Agent before opening another", limit)
+		}
+	}
 	id, err := newTaskID()
 	if err != nil {
 		return taskMetadata{}, err
@@ -1281,6 +1312,7 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
 			SessionFile: forkFile, Model: model, PermissionMode: permissionMode,
 			SandboxMode: sandboxMode, NetworkMode: networkMode, Sandbox: sandbox, ParentTaskID: parentTaskID,
+			SourceTaskID: parent.ID,
 			ForkSequence: params.Sequence, BranchKind: params.Kind, AwaitingPrompt: awaitingPrompt,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
@@ -1595,9 +1627,12 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	}
 	command := exec.Command(commandName, commandArgs...)
 	command.Dir = metadata.Cwd
-	commandEnvironment := append(environmentWithoutGatewayCredential(os.Environ()),
+	commandEnvironment := append(safeChildEnvironment(os.Environ()),
 		"HOBOT_CODE_BACKGROUND_TASK=1",
 		"HOBOT_CODE_BACKGROUND_TASK_ID="+metadata.ID,
+		"HOBOT_CODE_AGENT_ROLE="+taskAgentRole(metadata),
+		"HOBOT_CODE_PARENT_TASK_ID="+metadata.ParentTaskID,
+		"HOBOT_CODE_SOURCE_TASK_ID="+metadata.SourceTaskID,
 		"HOBOT_CODING_AGENT_DIR="+taskAgentDir,
 		"HOBOT_CODE_PERMISSION_POLICY="+current.permissionPolicyPath(),
 		"HOBOT_CODE_SANDBOX_MODE="+metadata.SandboxMode,
@@ -1703,6 +1738,20 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		}
 	}
 	return nil
+}
+
+func taskAgentRole(metadata taskMetadata) string {
+	if metadata.BranchKind == "side" {
+		return "side"
+	}
+	return "main"
+}
+
+func taskToolActivity(name string) string {
+	if !taskToolNamePattern.MatchString(name) {
+		return "thinking"
+	}
+	return "using " + name
 }
 
 func (current *task) taskSessionDirectory() string {
@@ -1969,6 +2018,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		IsError    bool   `json:"isError"`
 		ID         string `json:"id"`
 		ToolCallID string `json:"toolCallId"`
+		ToolName   string `json:"toolName"`
 		Data       struct {
 			SessionFile string `json:"sessionFile"`
 			SessionID   string `json:"sessionId"`
@@ -2004,6 +2054,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	case "agent_start":
 		if acceptWorkerTransition {
 			current.metadata.Status = statusRunning
+			current.metadata.CurrentActivity = "thinking"
 		}
 		if current.currentRunningTurnLocked() == 0 {
 			beginTurnEvidenceLocked(&current.metadata, nil)
@@ -2016,10 +2067,20 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	case "agent_settled":
 		if acceptWorkerTransition {
 			current.metadata.Status = statusIdle
+			current.metadata.CurrentActivity = ""
 		}
 		finalizeTurnEvidenceLocked(&current.metadata, "completed", boundaryWorkspace, current.metadata.LastSequence)
 	case "tool_execution_start", "tool_execution_end":
 		current.updateTurnToolEvidenceLocked(header.Type, header.ToolCallID, header.IsError)
+		if acceptWorkerTransition {
+			if header.Type == "tool_execution_start" {
+				current.metadata.CurrentActivity = taskToolActivity(header.ToolName)
+			} else if len(current.openToolCalls) > 0 || current.openAnonymousTools > 0 {
+				current.metadata.CurrentActivity = "using tools"
+			} else {
+				current.metadata.CurrentActivity = "thinking"
+			}
+		}
 	case "hobot_task_failed":
 		finalizeTurnEvidenceLocked(&current.metadata, "failed", boundaryWorkspace, current.metadata.LastSequence)
 	case "hobot_task_interrupted":
@@ -2029,6 +2090,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	case "extension_ui_request":
 		if approval, ok := approvalFromEvent(raw); ok && acceptWorkerTransition {
 			current.metadata.Status = statusWaiting
+			current.metadata.CurrentActivity = "waiting for approval"
 			current.upsertApprovalLocked(approval)
 		}
 	case "response":
@@ -2037,6 +2099,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 			current.pendingSessionID = header.Data.SessionID
 			if current.metadata.Status == statusStarting {
 				current.metadata.Status = statusIdle
+				current.metadata.CurrentActivity = ""
 			}
 			if header.Data.Model != nil {
 				if model := workerModelSelection(header.Data.Model.Provider, header.Data.Model.ID); model != "" {
@@ -2223,6 +2286,7 @@ func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordP
 			return fmt.Errorf("task must be idle before accepting another prompt")
 		}
 		current.metadata.Status = statusRunning
+		current.metadata.CurrentActivity = "thinking"
 		current.metadata.UpdatedAt = time.Now().UTC()
 		beginTurnEvidenceLocked(&current.metadata, nil)
 		current.openToolCalls = nil
@@ -2271,6 +2335,7 @@ func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordP
 		}
 		if current.metadata.Status == statusWaiting && !current.hasActiveApprovalLocked("") {
 			current.metadata.Status = statusRunning
+			current.metadata.CurrentActivity = "thinking"
 			current.metadata.UpdatedAt = time.Now().UTC()
 		}
 		current.mu.Unlock()
@@ -2420,6 +2485,7 @@ func (current *task) setTerminal(status taskStatus, message string) {
 		return
 	}
 	current.metadata.Status = status
+	current.metadata.CurrentActivity = ""
 	current.metadata.UpdatedAt = time.Now().UTC()
 	removeQueuedLaunch := false
 	if isTerminalStatus(status) {

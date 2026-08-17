@@ -226,16 +226,56 @@ func TestBlankSideTaskStartsOnlyAfterItsFirstPrompt(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesAdvertiseDeferredSidePrompt(t *testing.T) {
-	found := false
-	for _, capability := range protocolCapabilities {
-		if capability == "tasks.fork.deferred-prompt.v1" {
-			found = true
-			break
+func TestSideTaskLimitIsEnforcedPerMainTask(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := addSettledSourceTask(t, manager, cfg)
+	for index := 0; index < defaultMaxSideTasks; index++ {
+		if _, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "side"}); err != nil {
+			t.Fatalf("side task %d was rejected: %v", index+1, err)
 		}
 	}
-	if !found {
+	if _, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "side"}); err == nil || !strings.Contains(err.Error(), "side agent limit reached (2)") {
+		t.Fatalf("excess Side Agent was not rejected clearly: %v", err)
+	}
+}
+
+func TestSideTaskSourceIsAuditableWhileHierarchyStaysFlat(t *testing.T) {
+	cfg := testConfig(t)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := addSettledSourceTask(t, manager, cfg)
+	first, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "side"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.fork(forkTaskParams{TaskID: first.ID, Kind: "side"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ParentTaskID != source.metadata.ID {
+		t.Fatalf("nested Side Agent parent = %q, want flat root %q", second.ParentTaskID, source.metadata.ID)
+	}
+	if second.SourceTaskID != first.ID {
+		t.Fatalf("nested Side Agent source = %q, want actual source %q", second.SourceTaskID, first.ID)
+	}
+}
+
+func TestCapabilitiesAdvertiseDeferredSidePrompt(t *testing.T) {
+	found := map[string]bool{}
+	for _, capability := range protocolCapabilities {
+		found[capability] = true
+	}
+	if !found["tasks.fork.deferred-prompt.v1"] {
 		t.Fatal("deferred side prompts are implemented but not advertised")
+	}
+	if !found["tasks.collaboration.v1"] {
+		t.Fatal("Agent collaboration is implemented but not advertised")
 	}
 }
 

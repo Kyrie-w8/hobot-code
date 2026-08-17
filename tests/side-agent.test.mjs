@@ -22,6 +22,7 @@ import {
   sideAgentFocusSwitchAllowed,
   sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
+  sideAgentParentStatus,
   sideAgentPhaseAfterEvent,
   sideAgentPointerFocusTarget,
 } from "../extensions/rdk/side-agent-session.mjs";
@@ -135,6 +136,21 @@ test("side parent context is bounded and rejects unsafe limits", () => {
   assert.ok(context.length <= 512);
   assert.match(context, /Content truncated/);
   assert.throws(() => buildSideAgentParentContext({ currentEntries: entries, inheritedEntries: [], maximumChars: 128 }), /at least 256/);
+});
+
+test("side agent receives bounded live Main Agent status without hidden reasoning", () => {
+  const running = sideAgentParentStatus({active: true, activity: "using bash"});
+  assert.equal(running.label, "main: using bash");
+  assert.match(running.context, /Main Agent is currently running \(using bash\)/);
+  assert.match(running.context, /Main-Agent priority/);
+
+  const unsafe = sideAgentParentStatus({active: true, activity: "thinking about secret credentials"});
+  assert.equal(unsafe.label, "main: running");
+  assert.doesNotMatch(unsafe.context, /secret credentials/);
+
+  const idle = sideAgentParentStatus({active: false, activity: "using edit"});
+  assert.equal(idle.label, "main: idle");
+  assert.match(idle.context, /currently idle/);
 });
 
 test("side agent captures the leaf before a newly started user or custom turn", () => {

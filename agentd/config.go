@@ -15,6 +15,8 @@ import (
 const (
 	defaultMaxTasks      = 2
 	maximumMaxTasks      = 8
+	defaultMaxSideTasks  = 2
+	maximumMaxSideTasks  = 8
 	defaultRetainedTasks = 100
 	maximumRetainedTasks = 1000
 	defaultMaxEventMiB   = 16
@@ -45,6 +47,7 @@ type config struct {
 	SandboxBinary         string
 	ConfigFingerprint     string
 	MaxTasks              int
+	MaxSideTasks          int
 	MaxRetainedTasks      int
 	MaxEventSize          int64
 	gatewayToken          string
@@ -166,6 +169,7 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 	maxTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_BACKGROUND_TASKS"), defaultMaxTasks, 1, maximumMaxTasks)
+	maxSideTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_SIDE_AGENTS"), defaultMaxSideTasks, 1, maximumMaxSideTasks)
 	maxRetainedTasks := boundedInteger(os.Getenv("HOBOT_CODE_MAX_RETAINED_TASKS"), defaultRetainedTasks, 10, maximumRetainedTasks)
 	maxEventMiB := boundedInteger(os.Getenv("HOBOT_CODE_MAX_EVENT_MIB"), defaultMaxEventMiB, 1, maximumMaxEventMiB)
 	configFingerprint, err := normalizeConfigFingerprint(os.Getenv("HOBOT_CODE_CONFIG_FINGERPRINT"))
@@ -197,6 +201,7 @@ func loadConfig() (config, error) {
 		SandboxBinary:         sandboxBinary,
 		ConfigFingerprint:     configFingerprint,
 		MaxTasks:              maxTasks,
+		MaxSideTasks:          maxSideTasks,
 		MaxRetainedTasks:      maxRetainedTasks,
 		MaxEventSize:          int64(maxEventMiB) * 1024 * 1024,
 		gatewayToken:          gatewayCredentials.DRobotics,

@@ -1473,7 +1473,7 @@ func runtimeProbeEnvironment(source []string) []string {
 		"HOBOT_CODE_MODEL_CONTEXT_WINDOW": true, "HOBOT_CODE_MODEL_MAX_TOKENS": true,
 	}
 	filtered := make([]string, 0, len(source))
-	for _, entry := range environmentWithoutGatewayCredential(source) {
+	for _, entry := range safeChildEnvironment(source) {
 		name, _, _ := strings.Cut(entry, "=")
 		if allowed[name] || strings.HasPrefix(name, "LC_") {
 			filtered = append(filtered, entry)

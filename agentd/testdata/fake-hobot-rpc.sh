@@ -1,5 +1,13 @@
 #!/bin/sh
 
+if [ -n "${HOBOT_CODE_TEST_AGENT_ENV_PATH:-}" ]; then
+  umask 077
+  printf '%s\n' \
+    "role=${HOBOT_CODE_AGENT_ROLE:-}" \
+    "parent=${HOBOT_CODE_PARENT_TASK_ID:-}" \
+    "source=${HOBOT_CODE_SOURCE_TASK_ID:-}" > "$HOBOT_CODE_TEST_AGENT_ENV_PATH"
+fi
+
 if [ "${1:-}" = "--offline" ] && [ "${2:-}" = "--list-models" ]; then
   printf '%s\n' \
     'provider model context max-out thinking images' \

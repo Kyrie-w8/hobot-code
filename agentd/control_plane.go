@@ -82,7 +82,7 @@ func listModels(cfg config) ([]modelOption, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, cfg.AgentBinary, "--offline", "--list-models")
-	command.Env = environmentWithoutGatewayCredential(os.Environ())
+	command.Env = safeChildEnvironment(os.Environ())
 	closeCredential, err := attachGatewayCredential(command, gatewayCredentialPayload(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("prepare model discovery credential: %w", err)

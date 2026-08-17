@@ -188,7 +188,7 @@ func startDaemon(cfg config) error {
 	}
 	defer logFile.Close()
 	command := exec.Command(executable, "serve")
-	command.Env = environmentWithoutGatewayCredential(os.Environ())
+	command.Env = safeChildEnvironment(os.Environ())
 	closeCredential, err := attachGatewayCredential(command, gatewayCredentialPayload(cfg))
 	if err != nil {
 		return err

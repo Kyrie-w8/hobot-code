@@ -38,6 +38,7 @@ var protocolCapabilities = []string{
 	"tasks.restart",
 	"tasks.fork",
 	"tasks.fork.deferred-prompt.v1",
+	"tasks.collaboration.v1",
 	"tasks.models",
 	"tasks.permissions",
 	"tasks.sandbox.v1",
@@ -111,16 +112,17 @@ type normalizedItem struct {
 }
 
 type capabilityInfo struct {
-	ProtocolMin     int               `json:"protocolMin"`
-	ProtocolMax     int               `json:"protocolMax"`
-	EventSchema     int               `json:"eventSchema"`
-	Capabilities    []string          `json:"capabilities"`
-	MaximumRequest  int               `json:"maximumRequestBytes"`
-	MaximumResponse int               `json:"maximumResponseBytes"`
-	MaximumPrompt   int               `json:"maximumPromptBytes"`
-	MaximumTasks    int               `json:"maximumActiveTasks"`
-	MaximumRetained int               `json:"maximumRetainedTasks"`
-	Sandbox         sandboxCapability `json:"sandbox"`
+	ProtocolMin      int               `json:"protocolMin"`
+	ProtocolMax      int               `json:"protocolMax"`
+	EventSchema      int               `json:"eventSchema"`
+	Capabilities     []string          `json:"capabilities"`
+	MaximumRequest   int               `json:"maximumRequestBytes"`
+	MaximumResponse  int               `json:"maximumResponseBytes"`
+	MaximumPrompt    int               `json:"maximumPromptBytes"`
+	MaximumTasks     int               `json:"maximumActiveTasks"`
+	MaximumSideTasks int               `json:"maximumSideTasks"`
+	MaximumRetained  int               `json:"maximumRetainedTasks"`
+	Sandbox          sandboxCapability `json:"sandbox"`
 }
 
 type sandboxCapability struct {

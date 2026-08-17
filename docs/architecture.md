@@ -73,6 +73,8 @@ flowchart LR
 
 运行时为所有可修改工作区的工具轮次建立 crash-recoverable 写租约。租约按物理路径和 Git 根目录归一化，覆盖前台 TUI、Side Agent 和 agentd 后台 worker；同一工作区只允许一个 Agent 轮次写入，不同 worktree 可并行。Agent 内并行写工具同样被拒绝。对非 Hobot Code 进程，运行时在模型步骤开始和每个写工具边界比较有界元数据指纹，发现外部变化后要求重新读取。这些机制是协作边界，不替代文件权限、Git 审阅或操作系统 sandbox；大型目录会显式降级为租约保护。
 
+主从协作不共享隐藏推理。agentd 从任务树派生不可伪造的 `main`/`side` 身份，只发布有界状态、白名单活动、主任务关系和工作区是否重叠。Side Agent 在每轮开始时刷新这些公开状态；共享目录中主任务活跃时拥有写入优先级，状态不可验证时 Side 写入 fail closed。真实派生来源单独记录，界面仍将所有 Side Agent 扁平放在主任务下。文件和硬件租约是执行时权威，状态提示只用于协作，不作为授权。
+
 `agentd` 是 Go 编写的按用户常驻控制面，只负责后台任务、事件日志、进程组和客户端重连。每个任务启动发行包内同一个 `runtime/hobot --mode rpc` worker，因此 TUI 与后台模式共享模型、工具、权限、Skills、RDK 知识和系统 Prompt，不存在第二套 Agent 实现。
 
 CLI 通过私有 Unix socket 使用版本化 JSONL 协议。Linux 上除 `0700` 目录和 `0600` socket 外，还校验 `SO_PEERCRED` UID。事件按任务持久化并分配单调序号，客户端可在 SSH 重连后从最后序号继续读取；达到空间上限时原子滚动为最新连续窗口，并返回明确的保留边界，不会停止后续持久化。每个用户默认最多两个常驻 worker；新工作会挂起最久未使用的 idle worker，但不会打断正在工作或等待审批的 Agent。槽位忙时 Prompt 进入板端私有 FIFO 队列，断线或 daemon 重启后仍可恢复；已经启动的副作用操作不会自动重放。终态也作为持久事件发送，客户端可区分任务结束与传输断线；对外失败原因是稳定脱敏结构，原始诊断只写入板端私有日志。事件保留窗口、队列输入和 stderr 均有硬上限。
@@ -90,7 +92,7 @@ daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但�
 3. **入口中的板卡编排**：从 device tree、`/etc/version`、procfs、sysfs 和 RDK 工具路径取得实机证据，并按 X5 3.x、S100 4.x、S600 5.x 路由版本化知识。
 4. **`control-plane.mjs`、`runtime-safety.mjs` 与 `user-paths.mjs`**：实现权限和质量门辅助逻辑、脱敏、工作区指纹、路径解析及高风险 Shell 识别。
 5. **`memory-store.ts`、`goal-store.ts`、`hook-runner.ts`、`lsp-manager.ts` 与 `notifications.ts`**：分别管理 SQLite 状态、结构化 Hook 子进程、按需语言服务器和终端通知，入口只负责生命周期衔接。
-6. **`side-agent.ts` 及其会话和租约模块**：管理右侧窗格、独立 Pi RPC 子进程、多轮事件和同 UID 并发。
+6. **`side-agent.ts`、`agent-collaboration.mjs` 及其会话和租约模块**：管理右侧窗格、独立 Pi RPC 子进程、多轮事件、公开主任务状态、主任务写优先级和有界并发。
 7. **板卡交互层**：渲染紧凑 RDK 专家角色，在 Pi footer 显示本机摘要，并注册 `/rdk`、`/doctor`、`/knowledge`、`/system-prompt`、`/btw` 和退出别名。
 
 扩展继续使用 Pi 的 `read`、`bash`、`edit`、`write`、`grep`、`find` 和 `ls`，不维护同名工具的替代实现。Pi 的其他 Provider、扩展包、Skills、Prompt templates 和 themes 保持可用。

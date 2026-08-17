@@ -140,6 +140,10 @@ agentd 停止或重启时的已启动状态 -> interrupted
 
 支持空白 Side Agent 的服务声明 `tasks.fork.deferred-prompt.v1`。客户端不得仅凭 `tasks.fork` 推断 Prompt 可省略；连接旧服务时应提示升级，而不是发送必然失败的创建请求。
 
+支持 `tasks.collaboration.v1` 的服务在任务元数据中提供 `sourceTaskId`、`currentActivity`，并在能力响应中提供 `maximumSideTasks`。`parentTaskId` 保持 Side Agent 在同一主任务下的扁平展示关系，`sourceTaskId` 记录实际派生来源。`currentActivity` 只允许 `thinking`、`responding`、`waiting for approval` 和经过严格工具名校验的 `using <tool>`；它不包含 Prompt、回答正文、隐藏思考、命令参数或工具输出。默认每个主任务最多有两个正在运行或等待首条消息的 Side Agent，可通过 `HOBOT_CODE_MAX_SIDE_AGENTS=1..8` 调整。
+
+每个后台 worker 根据不可由客户端覆盖的任务元数据收到 `main` 或 `side` 身份。Side worker 禁止写持久记忆和目标状态。扩展在每轮开始时从私有任务元数据重新构造同一任务族的有界协作快照；共享工作区中主任务处于 `starting`、`running` 或 `waiting` 时，Side Agent 的写工具会在执行前拒绝。协作元数据缺失、过宽、超限、链接、格式错误或关系无效时不向 Prompt 注入内容，Side Agent 的工作区写入 fail closed。独立工作区仍按通常租约和权限执行。
+
 ## 持久化与恢复
 
 状态位于 `~/.local/state/hobot-code/agentd`：

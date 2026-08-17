@@ -11,7 +11,7 @@ import (
 )
 
 func replaceProcess(command string, args, environment []string, token string) error {
-	environment = environmentWithoutGatewayCredential(environment)
+	environment = safeChildEnvironment(environment)
 	if token != "" {
 		reader, writer, err := os.Pipe()
 		if err != nil {

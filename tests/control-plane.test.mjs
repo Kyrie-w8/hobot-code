@@ -199,6 +199,9 @@ test("child processes do not inherit credentials or runtime injection variables"
     LD_LIBRARY_PATH: "/tmp/linker-inject",
     PYTHONPATH: "/tmp/python-inject",
     RUBYLIB: "/tmp/ruby-inject",
+    HOBOT_CODE_AGENT_ROLE: "side",
+    HOBOT_CODE_BACKGROUND_TASK_ID: "00112233445566778899aabb",
+    HOBOT_CODE_SIDE_COLLABORATION_FILE: "/tmp/spoofed",
   });
   assert.deepEqual(env, { PATH: "/usr/bin", LANG: "C.UTF-8" });
 });

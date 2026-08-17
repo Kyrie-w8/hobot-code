@@ -53,6 +53,7 @@ import {
   sideAgentFocusSwitchAllowed,
   sideAgentLeafBeforeRun,
   sideAgentPanelLayout,
+  sideAgentParentStatus,
   sideAgentPhaseAfterEvent,
   sideAgentPointerFocusTarget,
 } from "./side-agent-session.mjs";
@@ -66,6 +67,7 @@ const MAX_PARENT_CONTEXT_CHARS = 24_000;
 const MAX_SIDE_UI_WAIT_MS = 120_000;
 const SIDE_AGENT_TERM_GRACE_MS = 5_000;
 const SIDE_AGENT_EXIT_TIMEOUT_MS = 8_000;
+const SIDE_AGENT_PARENT_HEARTBEAT_MS = 2_000;
 const SIDE_AGENT_SYSTEM_NOTE = `
 
 ## Ephemeral side-agent mode
@@ -119,6 +121,11 @@ interface SideAgentLease {
   activeCount: number;
   limit: number;
   release: () => Promise<void>;
+}
+
+interface ParentAgentStatus {
+  active: boolean;
+  activity: string;
 }
 
 function terminateSideAgent(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
@@ -182,6 +189,10 @@ class SideAgentRun {
   private readonly parentSession: string | undefined;
   private readonly parentContext: string;
   private readonly gatewayCredential: string;
+  private readonly readParentStatus: () => ParentAgentStatus;
+  private readonly collaborationPath: string;
+  private parentStatusWrite: Promise<void> = Promise.resolve();
+  private parentStatusHeartbeat: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     id: string,
@@ -193,6 +204,8 @@ class SideAgentRun {
     parentSession: string | undefined,
     parentContext: string,
     gatewayCredential: string,
+    readParentStatus: () => ParentAgentStatus,
+    collaborationPath: string,
   ) {
     this.id = id;
     this.initialQuestion = initialQuestion;
@@ -203,6 +216,8 @@ class SideAgentRun {
     this.parentSession = parentSession;
     this.parentContext = parentContext;
     this.gatewayCredential = gatewayCredential;
+    this.readParentStatus = readParentStatus;
+    this.collaborationPath = collaborationPath;
     this.finished = new Promise((resolve) => {
       this.finish = resolve;
     });
@@ -222,6 +237,48 @@ class SideAgentRun {
 
   get pendingUiRequestCount(): number {
     return this.uiRequests.length;
+  }
+
+  get parentStatusLabel(): string {
+    return sideAgentParentStatus(this.readParentStatus()).label;
+  }
+
+  parentStatusChanged(): void {
+    this.queueParentStatusWrite();
+    this.changed();
+  }
+
+  private queueParentStatusWrite(): void {
+    this.parentStatusWrite = this.parentStatusWrite.then(() => this.writeParentStatus());
+  }
+
+  private stopParentStatusHeartbeat(): void {
+    if (this.parentStatusHeartbeat) clearInterval(this.parentStatusHeartbeat);
+    this.parentStatusHeartbeat = undefined;
+  }
+
+  private async writeParentStatus(): Promise<void> {
+    const status = sideAgentParentStatus(this.readParentStatus());
+    const document = {
+      schemaVersion: 1,
+      role: "side",
+      updatedAt: new Date().toISOString(),
+      main: {
+        name: "Main Agent",
+        status: status.active ? "running" : "idle",
+        activity: status.activity,
+        cwd: this.cwd,
+      },
+    };
+    try {
+      // Make a failed refresh unreadable to the child instead of leaving a
+      // stale idle snapshot that could incorrectly permit a write.
+      await rm(this.collaborationPath, { force: true });
+      await writeFile(this.collaborationPath, `${JSON.stringify(document)}\n`, { encoding: "utf8", mode: 0o600 });
+      await chmod(this.collaborationPath, 0o600);
+    } catch {
+      // A missed status refresh fails closed in the child; normal leases remain authoritative.
+    }
   }
 
   subscribe(listener: () => void): () => void {
@@ -307,10 +364,13 @@ class SideAgentRun {
         env: sanitizedChildEnv(process.env, {
           HOBOT_CODE_SIDE_AGENT: "1",
           HOBOT_CODE_SIDE_PARENT_SESSION: this.parentSession ?? "",
+          HOBOT_CODE_SIDE_COLLABORATION_FILE: this.collaborationPath,
           ...(this.gatewayCredential ? { [gatewayCredentialFdEnvironment]: "3" } : {}),
         }),
       });
       this.process = child;
+      this.parentStatusHeartbeat = setInterval(() => this.queueParentStatusWrite(), SIDE_AGENT_PARENT_HEARTBEAT_MS);
+      this.parentStatusHeartbeat.unref?.();
       child.stdin.on("error", (error) => {
         if (this.terminating) return;
         this.addNotice(error.message);
@@ -329,6 +389,7 @@ class SideAgentRun {
         this.changed();
       });
       child.on("close", (code) => {
+        this.stopParentStatusHeartbeat();
         this.consumeLine(this.stdoutBuffer);
         this.stdoutBuffer = "";
         this.exitCode = code;
@@ -346,6 +407,7 @@ class SideAgentRun {
       this.changed();
       this.sendPrompt(this.initialQuestion, this.parentContext);
     } catch (error) {
+      this.stopParentStatusHeartbeat();
       const child = this.process;
       if (child && child.exitCode === null && child.signalCode === null) {
         try {
@@ -368,9 +430,13 @@ class SideAgentRun {
     this.appendTranscript({ role: "user", text: trimmed });
     this.turnStartedAt = Date.now();
     this.phase = "running";
-    const message = parentContext
-      ? `Parent task snapshot (${parentContext.length} characters; read-only):\n${parentContext}\n\nSide task request (${trimmed.length} characters):\n${trimmed}`
-      : trimmed;
+    const liveContext = sideAgentParentStatus(this.readParentStatus()).context;
+    const snapshotContext = parentContext
+      ? `Parent task snapshot (${parentContext.length} characters; read-only):\n${parentContext}`
+      : "";
+    const message = [liveContext, snapshotContext, `Side task request (${trimmed.length} characters):\n${trimmed}`]
+      .filter(Boolean)
+      .join("\n\n");
     this.pendingPromptId = this.sendCommand("prompt", { message });
     this.changed();
     return Boolean(this.pendingPromptId);
@@ -517,6 +583,7 @@ class SideAgentRun {
 
   private async cleanupOnce(): Promise<void> {
     this.terminating = true;
+    this.stopParentStatusHeartbeat();
     this.clearUiRequests();
     const child = this.process;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
@@ -968,7 +1035,7 @@ class SideAgentPane extends VStack implements Focusable {
       const clipped = truncateToWidth(status, layout.panelWidth, "", true);
       return [clipped + " ".repeat(Math.max(0, layout.panelWidth - visibleWidth(clipped)))];
     }
-    const title = ` BTW side agent | ${displayPhase} | ${this.focused ? "side active" : "main active"} | ${elapsed}s `;
+    const title = ` BTW side agent | ${displayPhase} | ${this.run.parentStatusLabel} | ${this.focused ? "side active" : "main active"} | ${elapsed}s `;
     const titleText = truncateToWidth(title, layout.innerWidth, layout.innerWidth >= 3 ? "..." : "", true);
     const titleRule = "─".repeat(Math.max(0, layout.innerWidth - visibleWidth(titleText)));
     return [
@@ -1073,6 +1140,7 @@ async function createSideAgentRun(
   parentEntries: unknown[],
   parentContext: string,
   gatewayCredential: string,
+  readParentStatus: () => ParentAgentStatus,
 ): Promise<SideAgentRun> {
   const question = args.trim();
   if (!question) throw new Error("Usage: /btw <task>");
@@ -1086,6 +1154,7 @@ async function createSideAgentRun(
     const timestamp = new Date().toISOString();
     const sessionPath = join(tempDir, "session.jsonl");
     const systemPromptPath = join(tempDir, "system-prompt.md");
+    const collaborationPath = join(tempDir, "collaboration.json");
     const parentSession = ctx.sessionManager.getSessionFile();
     const snapshot = buildSideSessionSnapshot({
       header: ctx.sessionManager.getHeader(),
@@ -1100,6 +1169,18 @@ async function createSideAgentRun(
       encoding: "utf8",
       mode: 0o600,
     });
+    const initialParentStatus = sideAgentParentStatus(readParentStatus());
+    await writeFile(collaborationPath, `${JSON.stringify({
+      schemaVersion: 1,
+      role: "side",
+      updatedAt: new Date().toISOString(),
+      main: {
+        name: "Main Agent",
+        status: initialParentStatus.active ? "running" : "idle",
+        activity: initialParentStatus.activity,
+        cwd: ctx.cwd,
+      },
+    })}\n`, { encoding: "utf8", mode: 0o600 });
     const childArgs = buildSideAgentArgs({
       sessionPath,
       sessionDir: tempDir,
@@ -1109,7 +1190,7 @@ async function createSideAgentRun(
       tools: pi.getActiveTools(),
       projectTrusted: ctx.isProjectTrusted(),
     });
-    return new SideAgentRun(id, question, tempDir, sessionPath, childArgs, ctx.cwd, parentSession, parentContext, gatewayCredential);
+    return new SideAgentRun(id, question, tempDir, sessionPath, childArgs, ctx.cwd, parentSession, parentContext, gatewayCredential, readParentStatus, collaborationPath);
   } catch (error) {
     await rm(tempDir, { recursive: true, force: true });
     throw error;
@@ -1122,12 +1203,14 @@ export function registerSideAgent(pi: ExtensionAPI, gatewayCredential = ""): () 
   let activeFocus: { focusSide: () => void; focusMain: () => void } | undefined;
   let activeWorkspace: SideAgentSplitWorkspace | undefined;
   let parentRunActive = false;
+  let parentActivity = "idle";
   let lastSettledLeafId: string | undefined;
   let transitioning = false;
   let disposed = false;
 
   pi.on("session_start", async (_event, ctx) => {
     parentRunActive = false;
+    parentActivity = "idle";
     lastSettledLeafId = ctx.sessionManager.getLeafId() ?? undefined;
   });
 
@@ -1136,6 +1219,9 @@ export function registerSideAgent(pi: ExtensionAPI, gatewayCredential = ""): () 
       // Pi emits this before the submitted user message is persisted.
       lastSettledLeafId = ctx.sessionManager.getLeafId() ?? undefined;
     }
+    parentRunActive = true;
+    parentActivity = "thinking";
+    active?.parentStatusChanged();
   });
 
   pi.on("agent_start", async (_event, ctx) => {
@@ -1143,15 +1229,34 @@ export function registerSideAgent(pi: ExtensionAPI, gatewayCredential = ""): () 
       lastSettledLeafId = sideAgentLeafBeforeRun(ctx.sessionManager.getBranch());
     }
     parentRunActive = true;
+    parentActivity = "thinking";
+    active?.parentStatusChanged();
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     if (!ctx.isIdle()) {
       parentRunActive = true;
+      parentActivity = "thinking";
+      active?.parentStatusChanged();
       return;
     }
     lastSettledLeafId = ctx.sessionManager.getLeafId() ?? undefined;
     parentRunActive = false;
+    parentActivity = "idle";
+    active?.parentStatusChanged();
+  });
+
+  pi.on("tool_call", async (event) => {
+    if (!parentRunActive) return;
+    const toolName = /^[A-Za-z0-9_.:-]{1,80}$/.test(event.toolName) ? event.toolName : "tool";
+    parentActivity = `using ${toolName}`;
+    active?.parentStatusChanged();
+  });
+
+  pi.on("tool_result", async () => {
+    if (!parentRunActive) return;
+    parentActivity = "thinking";
+    active?.parentStatusChanged();
   });
 
   pi.registerShortcut("ctrl+shift+right", {
@@ -1207,7 +1312,15 @@ export function registerSideAgent(pi: ExtensionAPI, gatewayCredential = ""): () 
         }) as SideAgentLease;
         activeLease = lease;
         if (disposed) return;
-        run = await createSideAgentRun(pi, String(args ?? ""), ctx, parentEntries, parentContext, gatewayCredential);
+        run = await createSideAgentRun(
+          pi,
+          String(args ?? ""),
+          ctx,
+          parentEntries,
+          parentContext,
+          gatewayCredential,
+          () => ({ active: parentRunActive, activity: parentActivity }),
+        );
         active = run;
         if (disposed) return;
         ctx.ui.setStatus("hobot-btw", `btw: open ${lease.activeCount}/${lease.limit}`);

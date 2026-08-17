@@ -129,7 +129,7 @@ func TestBoardUpdateRejectsUnknownOrDisconnectedBoard(t *testing.T) {
 func TestConnectionCompatibilityMatrix(t *testing.T) {
 	allCapabilities := []string{
 		"extensions.catalog.v1", "tasks.lifecycle", "tasks.page", "events.page", "models.capabilities.v1", "models.health.v1", "models.conformance.v1", "models.runtime-probe.v1", "models.rdk-probe.v1", "models.rdk-matrix.v1", "models.qualification.v1", "providers.manage.v1", "system.snapshot", "diagnostics.inspect.v1", "diagnostics.repair.v1",
-		"support.bundle.v1", "deployments.v1", "tasks.fork", "tasks.queue.v1", "tasks.failure.v1", "tasks.turn-evidence.v1", "events.items.v1", "events.retention.v1", "workspaces.browse", "workspaces.changes.v1", "workspaces.isolation.v1", "workspaces.write-leases.v1", "workspaces.delivery.v1", "tasks.sandbox.v1", "tasks.network.v1", "build.identity.v1", "pi.compatibility.v1",
+		"support.bundle.v1", "deployments.v1", "tasks.fork", "tasks.collaboration.v1", "tasks.queue.v1", "tasks.failure.v1", "tasks.turn-evidence.v1", "events.items.v1", "events.retention.v1", "workspaces.browse", "workspaces.changes.v1", "workspaces.isolation.v1", "workspaces.write-leases.v1", "workspaces.delivery.v1", "tasks.sandbox.v1", "tasks.network.v1", "build.identity.v1", "pi.compatibility.v1",
 	}
 	dirty := false
 	info := hobot.DaemonInfo{
@@ -202,13 +202,13 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.27.5" {
+	if currentStudioVersion() != "0.27.6" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {
 		t.Fatalf("exposed Studio version = %q, want %q", app.GetAppVersion(), currentStudioVersion())
 	}
-	if !differentReleaseLine("0.27.5", "0.26.9") || differentReleaseLine("0.27.5", "0.27.5") {
+	if !differentReleaseLine("0.27.6", "0.26.9") || differentReleaseLine("0.27.6", "0.27.6") {
 		t.Fatal("release line comparison is incorrect")
 	}
 	if major, ok := versionMajor("5.1.0"); !ok || major != 5 {

@@ -67,6 +67,7 @@ var recommendedStudioCapabilities = []struct {
 	{Name: "support.bundle.v1", Impact: "One-click support bundles are unavailable."},
 	{Name: "deployments.v1", Impact: "The guided model deployment workflow is unavailable."},
 	{Name: "tasks.fork", Impact: "Side agents and edit-from-history are unavailable."},
+	{Name: "tasks.collaboration.v1", Impact: "Main and Side Agents cannot share bounded live status or enforce Main-Agent write priority."},
 	{Name: "tasks.queue.v1", Impact: "Busy Agent requests cannot wait safely for a board worker slot."},
 	{Name: "tasks.failure.v1", Impact: "Task failures cannot provide safe, structured recovery actions."},
 	{Name: "tasks.turn-evidence.v1", Impact: "Interrupted tasks cannot show whether tools completed or the Git workspace changed."},

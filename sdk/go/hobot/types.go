@@ -46,6 +46,7 @@ type Capabilities struct {
 	MaximumResponseBytes int               `json:"maximumResponseBytes"`
 	MaximumPromptBytes   int               `json:"maximumPromptBytes"`
 	MaximumActiveTasks   int               `json:"maximumActiveTasks"`
+	MaximumSideTasks     int               `json:"maximumSideTasks"`
 	MaximumRetainedTasks int               `json:"maximumRetainedTasks"`
 	Sandbox              SandboxCapability `json:"sandbox"`
 }
@@ -117,6 +118,7 @@ type DaemonInfo struct {
 	ActiveTasks          int           `json:"activeTasks"`
 	QueuedTasks          int           `json:"queuedTasks"`
 	MaximumTasks         int           `json:"maximumTasks"`
+	MaximumSideTasks     int           `json:"maximumSideTasks"`
 	SocketPath           string        `json:"socketPath"`
 	StateRoot            string        `json:"stateRoot"`
 	BackgroundTasks      bool          `json:"backgroundTasks"`
@@ -499,8 +501,10 @@ type Task struct {
 	NetworkMode      string             `json:"networkMode"`
 	Sandbox          TaskSandboxStatus  `json:"sandbox"`
 	ParentTaskID     string             `json:"parentTaskId,omitempty"`
+	SourceTaskID     string             `json:"sourceTaskId,omitempty"`
 	ForkSequence     uint64             `json:"forkSequence,omitempty"`
 	BranchKind       string             `json:"branchKind,omitempty"`
+	CurrentActivity  string             `json:"currentActivity,omitempty"`
 	AwaitingPrompt   bool               `json:"awaitingPrompt,omitempty"`
 	QueuedAt         *time.Time         `json:"queuedAt,omitempty"`
 	QueueOperation   string             `json:"queueOperation,omitempty"`

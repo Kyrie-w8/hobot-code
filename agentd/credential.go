@@ -22,6 +22,17 @@ const (
 	maximumCredentialBundleBytes = 512 * 1024
 )
 
+var taskCoordinationEnvironment = map[string]bool{
+	"HOBOT_CODE_AGENT_ROLE":              true,
+	"HOBOT_CODE_BACKGROUND_TASK":         true,
+	"HOBOT_CODE_BACKGROUND_TASK_ID":      true,
+	"HOBOT_CODE_PARENT_TASK_ID":          true,
+	"HOBOT_CODE_SIDE_AGENT":              true,
+	"HOBOT_CODE_SIDE_COLLABORATION_FILE": true,
+	"HOBOT_CODE_SIDE_PARENT_SESSION":     true,
+	"HOBOT_CODE_SOURCE_TASK_ID":          true,
+}
+
 type gatewayCredentialBundle struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	DRobotics     string            `json:"drobotics,omitempty"`
@@ -36,6 +47,18 @@ func environmentWithoutGatewayCredential(source []string) []string {
 			continue
 		}
 		result = append(result, value)
+	}
+	return result
+}
+
+func safeChildEnvironment(source []string) []string {
+	withoutCredentials := environmentWithoutGatewayCredential(source)
+	result := make([]string, 0, len(withoutCredentials))
+	for _, value := range withoutCredentials {
+		name, _, _ := strings.Cut(value, "=")
+		if !taskCoordinationEnvironment[name] {
+			result = append(result, value)
+		}
 	}
 	return result
 }

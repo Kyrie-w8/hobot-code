@@ -227,7 +227,7 @@ test("RDK extension delegates runtime paths to the shared fail-closed resolver",
 test("runtime model probes retain the D-Robotics provider without the full RDK prompt overlay", async () => {
   const source = await readFile(new URL("../extensions/rdk/index.ts", import.meta.url), "utf8");
   assert.match(source, /const runtimeProbeMode = process\.env\.HOBOT_CODE_RUNTIME_PROBE === "1"/u);
-  assert.match(source, /if \(sideAgentMode \|\| runtimeProbeMode\) return undefined/u);
+  assert.match(source, /if \(ephemeralSideAgentMode \|\| runtimeProbeMode\) return undefined/u);
   assert.match(source, /pi\.registerProvider\("drobotics"/u);
 });
 
