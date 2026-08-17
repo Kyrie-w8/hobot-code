@@ -43,6 +43,7 @@ var protocolCapabilities = []string{
 	"schedules.v1",
 	"tasks.models",
 	"tasks.permissions",
+	"tasks.permissions.auto-review.v1",
 	"tasks.sandbox.v1",
 	"tasks.network.v1",
 	"tasks.images",

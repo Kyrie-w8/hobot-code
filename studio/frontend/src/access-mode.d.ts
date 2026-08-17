@@ -1,5 +1,5 @@
 export type AccessModeInput = {
-  permissionMode?: 'review' | 'ask' | 'developer';
+  permissionMode?: 'review' | 'ask' | 'auto-review' | 'developer';
   sandboxMode?: 'review' | 'workspace' | 'system' | 'off';
   networkMode?: 'shared' | 'model-only' | 'offline';
 };

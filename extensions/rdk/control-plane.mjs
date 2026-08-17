@@ -208,6 +208,10 @@ export function parsePolicy(value) {
   if (!rootPermissionModes.has(rootMode)) {
     throw new Error("permission policy rootMode must be confirm or policy");
   }
+  const reviewer = value.reviewer === undefined ? undefined : String(value.reviewer).trim();
+  if (reviewer !== undefined && reviewer !== "auto-review") {
+    throw new Error("permission policy reviewer must be auto-review when set");
+  }
   if (!Array.isArray(value.rules) || value.rules.length > 128) {
     throw new Error("permission policy rules must be an array with at most 128 items");
   }
@@ -239,6 +243,7 @@ export function parsePolicy(value) {
     rootMode,
     default: value.schemaVersion === 1 && value.default === "allow" ? "ask" : value.default,
     rules,
+    ...(reviewer ? { reviewer } : {}),
   };
 }
 

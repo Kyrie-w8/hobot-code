@@ -125,6 +125,9 @@ export type Approval = {
   placeholder?: string;
   prefill?: string;
   active: boolean;
+  state?: 'reviewing' | 'approved' | 'denied' | 'manual-required';
+  decisionSource?: 'board-reviewer' | 'human';
+  decisionReason?: string;
 };
 
 export type TurnWorkspaceEvidence = {status: 'captured' | 'partial' | 'not-repository' | 'unavailable'; capturedAt: string; stateDigest?: string; dirty?: boolean; changedFiles?: number; truncated?: boolean};
@@ -169,7 +172,7 @@ export type Task = {
   resumeCount?: number;
   restartCount?: number;
   model?: string;
-  permissionMode?: 'review' | 'ask' | 'developer';
+  permissionMode?: 'review' | 'ask' | 'auto-review' | 'developer';
   sandboxMode?: 'review' | 'workspace' | 'system' | 'off';
   networkMode?: 'shared' | 'model-only' | 'offline';
   sandbox?: {requested: string; effective: string; backend: string; filesystemRestricted: boolean; devicesRestricted: boolean; capabilitiesDropped: boolean; networkRestricted: boolean; reason?: string};

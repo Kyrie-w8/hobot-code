@@ -803,7 +803,7 @@ function addPathWriteReasons(reasons, ambiguities, name, args, redirections) {
 
 export function analyzeShellCommand(command) {
   const root = parseShellProgram(command);
-  const result = { destructiveReasons: [], networkReasons: [], ambiguousReasons: [...root.ambiguousReasons], remoteScanReasons: [] };
+  const result = { destructiveReasons: [], networkReasons: [], ambiguousReasons: [...root.ambiguousReasons], remoteScanReasons: [], executables: [] };
   const visited = new Set();
   const inspectProgram = (program, inheritedTimeout = false) => {
     if (visited.has(program)) return;
@@ -830,6 +830,7 @@ export function analyzeShellCommand(command) {
         if (networkRedirection) pushUnique(result.networkReasons, ["uses a recognized outbound network client while the OS sandbox shares host networking"]);
         continue;
       }
+      pushUnique(result.executables, [name]);
       if (!commandIsKnown(name)) pushUnique(result.ambiguousReasons, [`runs an unclassified external command: ${name}`]);
       if (["eval", ".", "source"].includes(name)) pushUnique(result.ambiguousReasons, [name === "eval" ? "evaluates shell text that cannot be classified safely" : "loads shell code that cannot be classified safely"]);
 

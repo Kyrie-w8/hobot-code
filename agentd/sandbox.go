@@ -200,10 +200,16 @@ func (manager *taskManager) resolveTaskSandbox(requested, permissionMode string,
 	if err != nil {
 		return "", taskSandboxStatus{}, err
 	}
+	if permissionMode == "auto-review" && mode != sandboxModeReview && mode != sandboxModeWorkspace {
+		return "", taskSandboxStatus{}, fmt.Errorf("auto-review requires the review or workspace OS sandbox; board hardware and no-sandbox modes are not eligible")
+	}
 	if mode == sandboxModeOff {
 		return mode, sandboxStatus(mode, "none", "disabled explicitly for this task"), nil
 	}
 	if manager.cfg.SandboxBinary == "" {
+		if permissionMode == "auto-review" {
+			return "", taskSandboxStatus{}, fmt.Errorf("auto-review requires an available board OS sandbox")
+		}
 		// Non-Linux development hosts cannot enforce the board sandbox. Release
 		// builds on Linux use the explicit unavailable sentinel and fail closed.
 		return sandboxModeOff, sandboxStatus(sandboxModeOff, "none", "OS sandboxing is available on Linux board targets"), nil

@@ -2,9 +2,9 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, open, readFile, readdir, rename, stat } from "node:fs/promises";
 import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -73,6 +73,8 @@ import {
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
 import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety, unboundedRemoteScanReasons } from "./runtime-safety.mjs";
+import { analyzeShellCommand } from "./shell-command-safety.mjs";
+import { AUTO_REVIEW_MODE, createPermissionReviewer } from "./permission-reviewer.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 import { acquireWorkspaceWriteLease } from "./workspace-write-lease.mjs";
@@ -88,6 +90,8 @@ const BUILTIN_DROBOTICS_MODELS = [
 ] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
+const REVIEWER_AUDIT_TIMEOUT_MS = 1_000;
+const REVIEWER_AUDIT_MAX_BYTES = 5 * 1024 * 1024;
 type JsonRecord = Record<string, unknown>;
 
 interface BoardSnapshot {
@@ -155,6 +159,7 @@ interface PermissionPolicy {
   rootMode: "confirm" | "policy";
   default: PermissionAction;
   rules: PermissionRule[];
+  reviewer?: "auto-review";
 }
 
 interface QualityGateResult {
@@ -632,6 +637,10 @@ function permissionPolicyPath(): string {
   return resolveUserPaths().permissionPolicy;
 }
 
+function permissionReviewAuditPath(): string {
+  return resolve(dirname(permissionPolicyPath()), "approval-review-audit.jsonl");
+}
+
 function memoryConfigPath(): string {
   return resolveUserPaths().memoryConfig;
 }
@@ -765,6 +774,8 @@ export default function rdkExtension(pi: ExtensionAPI) {
   const backgroundAgentRole = String(process.env.HOBOT_CODE_AGENT_ROLE ?? "").trim();
   const ephemeralCollaborationFile = String(process.env.HOBOT_CODE_SIDE_COLLABORATION_FILE ?? "").trim();
   const sideAgentMode = ephemeralSideAgentMode || backgroundAgentRole === "side";
+  const permissionReviewer = createPermissionReviewer();
+	let reviewerAuditTail: Promise<void> = Promise.resolve();
   const runtimeProbeMode = process.env.HOBOT_CODE_RUNTIME_PROBE === "1";
   const rdkProbeMode = process.env.HOBOT_CODE_RDK_PROBE === "1";
   const openExplorerSkillPack = String(process.env.HOBOT_CODE_OPENEXPLORER_SKILLS_ROOT ?? "").trim();
@@ -992,10 +1003,73 @@ export default function rdkExtension(pi: ExtensionAPI) {
     return resolveToolCallAction(permissionPolicy, toolName, input, isMcpTool(info ?? toolName)) as PermissionAction;
   }
 
+  async function auditReviewerDecision(tool: string, input: JsonRecord, decision: Record<string, unknown>): Promise<void> {
+    const record = JSON.stringify({
+      schema: 1,
+      at: new Date().toISOString(),
+      taskId: backgroundTaskID || undefined,
+      sideAgent: sideAgentMode || undefined,
+      tool,
+      action: decision.status,
+      source: decision.source,
+      fingerprint: decision.fingerprint,
+      scope: decision.scope,
+      reasons: decision.reasons,
+      // Do not retain tool arguments: target paths and command payloads can
+      // themselves be sensitive. The exact-action fingerprint is auditable.
+      inputShape: Object.keys(input).sort(),
+      targetKind: typeof input.path === "string" ? "path" : typeof input.command === "string" ? "command" : "structured",
+    });
+    const write = async () => {
+      await mkdir(dirname(permissionReviewAuditPath()), { recursive: true, mode: 0o700 });
+		const directory = await lstat(dirname(permissionReviewAuditPath()));
+		if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("review audit directory is not a private real directory");
+		await chmod(dirname(permissionReviewAuditPath()), 0o700);
+      try {
+		const existing = await lstat(permissionReviewAuditPath());
+		if (!existing.isFile() || existing.isSymbolicLink()) throw new Error("review audit path is not a regular file");
+        if ((await stat(permissionReviewAuditPath())).size >= REVIEWER_AUDIT_MAX_BYTES) {
+			try {
+				const backup = await lstat(`${permissionReviewAuditPath()}.1`);
+				if (!backup.isFile() || backup.isSymbolicLink()) throw new Error("review audit backup path is not a regular file");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+          await rename(permissionReviewAuditPath(), `${permissionReviewAuditPath()}.1`);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+		const flags = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_CLOEXEC;
+		const audit = await open(permissionReviewAuditPath(), flags, 0o600);
+		try {
+			const info = await audit.stat();
+			if (!info.isFile()) throw new Error("review audit path is not a regular file");
+			await audit.chmod(0o600);
+			await audit.write(`${record}\n`);
+		} finally {
+			await audit.close();
+		}
+    };
+	const queued = reviewerAuditTail.then(async () => Promise.race([
+		write(),
+		new Promise<never>((_, reject) => setTimeout(() => reject(new Error("review audit timed out")), REVIEWER_AUDIT_TIMEOUT_MS)),
+	]));
+	reviewerAuditTail = queued.catch(() => undefined);
+	await queued;
+  }
+
   async function refreshPermissionPolicy(): Promise<void> {
     const loaded = await loadPolicy(permissionPolicyPath());
     permissionPolicy = loaded.policy as PermissionPolicy;
     permissionPolicyError = loaded.error;
+  }
+
+  function autoReviewEnabled(): boolean {
+    const sandbox = sandboxRuntimeStatus();
+    return permissionPolicy.reviewer === AUTO_REVIEW_MODE
+      && sandbox.managed
+      && ["review", "workspace"].includes(sandbox.mode);
   }
 
   function toolIsMcp(toolName: string): boolean {
@@ -1781,6 +1855,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
     const approvalReasons: string[] = [];
+    const reviewFacts: Record<string, unknown> = {
+      withinWorkspace: true,
+      sideAgent: sideAgentMode,
+      mcp: toolIsMcp(event.toolName),
+      persistent: ["memory_save", "goal_progress", "goal_complete"].includes(event.toolName),
+    };
     let canAllowTaskNetwork = false;
     let canTrustBuildHost = false;
     if (action === "ask") approvalReasons.push("the permission policy requires confirmation");
@@ -1794,6 +1874,10 @@ export default function rdkExtension(pi: ExtensionAPI) {
       if (inspected.criticalRoot) {
         return { block: true, reason: `Direct writes under ${inspected.criticalRoot} are blocked by the RDK safety policy` };
       }
+      reviewFacts.withinWorkspace = inspected.withinWorkspace;
+      reviewFacts.outsideWorkspace = !inspected.withinWorkspace;
+      reviewFacts.criticalPath = Boolean(inspected.criticalRoot);
+      reviewFacts.target = inspected.target;
       if (!inspected.withinWorkspace) {
         approvalReasons.push("the target is outside the current workspace");
       }
@@ -1809,6 +1893,12 @@ export default function rdkExtension(pi: ExtensionAPI) {
         };
       }
       const sandbox = sandboxRuntimeStatus();
+      const shellAnalysis = analyzeShellCommand(command);
+      reviewFacts.destructiveReasons = shellAnalysis.destructiveReasons;
+      reviewFacts.networkReasons = shellAnalysis.networkReasons;
+      reviewFacts.ambiguousReasons = shellAnalysis.ambiguousReasons;
+      reviewFacts.executables = shellAnalysis.executables;
+      reviewFacts.networkBoundary = sandbox.network;
       const shellSafety = resolveShellSafety(
         command,
         effectiveNetworkAction(resolveToolCallAction(permissionPolicy, "network", event.input), sandbox.network),
@@ -1828,6 +1918,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
     if (event.toolName === "openexplorer_remote_run" || (event.toolName === "openexplorer_build_host" && event.input.action === "probe")) {
+      reviewFacts.remote = true;
       const sandbox = sandboxRuntimeStatus();
       const requestedTarget = event.input.target
         ? normalizeBuildHostTarget(event.input.target)
@@ -1856,40 +1947,91 @@ export default function rdkExtension(pi: ExtensionAPI) {
     }
 
     if (approvalReasons.length > 0) {
-      if (!ctx.hasUI) {
+      let reviewerApproved = false;
+      let reviewerDecision: Record<string, unknown> | undefined;
+      const autoReviewMode = autoReviewEnabled();
+      if (autoReviewMode) {
+        let decision: Record<string, unknown>;
+        try {
+          decision = permissionReviewer.review({
+            taskId: backgroundTaskID,
+            tool: event.toolName,
+            input: event.input as JsonRecord,
+            facts: reviewFacts,
+          });
+          reviewerDecision = decision;
+          await auditReviewerDecision(event.toolName, event.input as JsonRecord, decision);
+        } catch (error) {
+          // Reviewer parse, timeout, and audit failures are never permissions.
+          decision = {
+            status: "manual-required",
+            source: "board-reviewer",
+            reasons: [`reviewer unavailable: ${error instanceof Error ? error.message : String(error)}`],
+          };
+        }
+        if (decision.status === "approved") {
+          // A review is a one-shot exact action. It never changes policy, roots,
+          // network, sandbox, or writable paths.
+          reviewerApproved = true;
+        }
+        if (decision.status === "denied") {
+          if (typeof decision.fingerprint === "string") permissionReviewer.recordDenial(decision.fingerprint);
+          if (!ctx.hasUI) return { block: true, reason: `board reviewer denied ${event.toolName}: ${(decision.reasons as string[]).join("; ")}` };
+          const retry = await ctx.ui.select(
+            `Board reviewer denied ${event.toolName}. ${(decision.reasons as string[]).join("; ")}`,
+            ["Retry this exact action once with reviewer", "Cancel"],
+          );
+          if (retry === "Retry this exact action once with reviewer" && typeof decision.fingerprint === "string" && permissionReviewer.requestExactRetry(decision.fingerprint)) {
+            const retried = permissionReviewer.review({ taskId: backgroundTaskID, tool: event.toolName, input: event.input as JsonRecord, facts: reviewFacts });
+            try { await auditReviewerDecision(event.toolName, event.input as JsonRecord, retried); } catch { return { block: true, reason: "board reviewer audit failed during exact retry; request manual approval" }; }
+            if (retried.status === "approved") reviewerApproved = true;
+            decision = retried;
+            reviewerDecision = decision;
+          }
+          if (decision.status === "denied") {
+			return { block: true, reason: `board reviewer denied ${event.toolName}: ${(decision.reasons as string[]).join("; ")}. Find a materially safer path.` };
+		}
+        }
+        if (!reviewerApproved) approvalReasons.push(`board reviewer requires a human decision: ${(decision.reasons as string[]).join("; ")}`);
+      }
+      if (!reviewerApproved && !ctx.hasUI) {
         return {
           block: true,
           reason: `${event.toolName} requires interactive approval: ${approvalReasons.join("; ")}`,
         };
       }
-      if (notificationConfig.onApproval) {
+      if (!reviewerApproved && notificationConfig.onApproval) {
         notifyRemote("Hobot Code approval", `${event.toolName} is waiting for confirmation`);
       }
-      const detail = [
+      const detail = !reviewerApproved ? [
         describeToolCall(event.toolName, event.input, qualityGateState.commands),
         `Reason: ${approvalReasons.join("; ")}`,
-      ].join("\n");
+      ].join("\n") : "";
       const approvalScope = canTrustBuildHost
         ? "build-host"
         : canAllowTaskNetwork
           ? "network"
           : undefined;
-      const choice = await ctx.ui.select(
+      const choice = !reviewerApproved ? await ctx.ui.select(
         `Allow ${event.toolName}?\n\n${detail}`,
         approvalChoices(approvalScope),
         sideAgentMode ? { timeout: SIDE_AGENT_APPROVAL_TIMEOUT_MS } : undefined,
-      );
-      if (choice === APPROVAL_CHOICES.allowTaskNetwork) {
+      ) : APPROVAL_CHOICES.allowOnce;
+      if (!reviewerApproved && choice === APPROVAL_CHOICES.allowTaskNetwork) {
+        permissionReviewer.recordNonDenial();
         permissionPolicy = await writePolicy(
           permissionPolicyPath(),
           setPolicyRule(permissionPolicy, "network", "allow"),
         ) as PermissionPolicy;
         permissionPolicyError = undefined;
-      } else if (choice === APPROVAL_CHOICES.trustTaskBuildHost) {
+      } else if (!reviewerApproved && choice === APPROVAL_CHOICES.trustTaskBuildHost) {
+        permissionReviewer.recordNonDenial();
         trustedBuildHostCalls.add(event.toolCallId);
-      } else if (choice !== APPROVAL_CHOICES.allowOnce) {
+      } else if (!reviewerApproved && choice !== APPROVAL_CHOICES.allowOnce) {
+		if (autoReviewMode && typeof reviewerDecision?.fingerprint === "string") permissionReviewer.recordDenial(reviewerDecision.fingerprint);
         return { block: true, reason: `${event.toolName} was cancelled by the user` };
       }
+		if (!reviewerApproved && autoReviewMode && choice === APPROVAL_CHOICES.allowOnce) permissionReviewer.recordNonDenial();
     }
 
 	const writesWorkspace = workspaceChangingToolNames.has(event.toolName) || toolIsMcp(event.toolName);
@@ -2112,6 +2254,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           .join("\n");
         ctx.ui.notify([
           `Policy: ${permissionPolicyPath()}`,
+          `Reviewer: ${permissionPolicy.reviewer === AUTO_REVIEW_MODE ? "board auto-review" : "human"}`,
           `Root mode: ${permissionPolicy.rootMode}`,
           `Default: ${permissionPolicy.default}`,
           `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}; network ${sandboxRuntimeStatus().network})`,

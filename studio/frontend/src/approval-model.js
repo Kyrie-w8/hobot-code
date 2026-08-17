@@ -17,6 +17,8 @@ export function approvalPresentation(approval) {
     detail: detailParts.join('\n\n') || 'Review this tool request before continuing.',
     remembersExactCall: Array.isArray(approval?.options)
       && approval.options.some((option) => /exact call/i.test(String(option))),
+    state: ['reviewing', 'approved', 'denied', 'manual-required'].includes(approval?.state) ? approval.state : 'manual-required',
+    decisionSource: approval?.decisionSource === 'board-reviewer' ? 'board-reviewer' : 'human',
   };
 }
 

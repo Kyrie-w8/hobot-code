@@ -13,6 +13,13 @@ test('approval presentation preserves security detail over generic messages', ()
   assert.match(view.detail, /Tool: bash[\s\S]*Target:[\s\S]*pwd[\s\S]*Reason: policy/);
   assert.doesNotMatch(view.detail, /Choose how/);
   assert.equal(view.remembersExactCall, false);
+  assert.equal(view.state, 'manual-required');
+});
+
+test('approval presentation distinguishes reviewer state from a human approval', () => {
+  const view = approvalPresentation({title: 'Reviewing bash', state: 'reviewing', decisionSource: 'board-reviewer'});
+  assert.equal(view.state, 'reviewing');
+  assert.equal(view.decisionSource, 'board-reviewer');
 });
 
 test('approval presentation retains non-generic backend guidance', () => {

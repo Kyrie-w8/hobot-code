@@ -21,6 +21,7 @@ type taskPermissionPolicy struct {
 	RootMode      string           `json:"rootMode"`
 	Default       string           `json:"default"`
 	Rules         []permissionRule `json:"rules"`
+	Reviewer      string           `json:"reviewer,omitempty"`
 }
 
 func normalizePermissionMode(value string) (string, error) {
@@ -28,10 +29,10 @@ func normalizePermissionMode(value string) (string, error) {
 		return defaultTaskPermissionMode, nil
 	}
 	switch value {
-	case "review", "ask", "developer":
+	case "review", "ask", "auto-review", "developer":
 		return value, nil
 	default:
-		return "", fmt.Errorf("permission mode must be review, ask, or developer")
+		return "", fmt.Errorf("permission mode must be review, ask, auto-review, or developer")
 	}
 }
 
@@ -65,8 +66,13 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 			permissionRule{Tool: "goal_complete", Action: "deny"},
 			permissionRule{Tool: "mcp:*", Action: "ask"},
 		)
-	case "ask":
+	case "ask", "auto-review":
+		// Auto-review has Ask's board policy. Its extension reviewer can only
+		// decide one qualifying action and cannot persist a broader grant.
 		policy.RootMode = "confirm"
+		if normalized == "auto-review" {
+			policy.Reviewer = "auto-review"
+		}
 		policy.Rules = append(policy.Rules,
 			permissionRule{Tool: "network", Action: "ask"},
 			permissionRule{Tool: "write", Action: "ask"},

@@ -49,9 +49,11 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 		bash     string
 		network  string
 		quality  string
+		reviewer string
 	}{
 		{mode: "review", rootMode: "policy", bash: "deny", network: "deny", quality: "deny"},
 		{mode: "ask", rootMode: "confirm", bash: "ask", network: "ask", quality: "ask"},
+		{mode: "auto-review", rootMode: "confirm", bash: "ask", network: "ask", quality: "ask", reviewer: "auto-review"},
 		{mode: "developer", rootMode: "policy", bash: "allow", network: "allow", quality: "allow"},
 	}
 	for _, test := range tests {
@@ -60,7 +62,7 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if policy.RootMode != test.rootMode || permissionAction(policy, "bash") != test.bash || permissionAction(policy, "network") != test.network || permissionAction(policy, "quality_gate") != test.quality {
+			if policy.RootMode != test.rootMode || policy.Reviewer != test.reviewer || permissionAction(policy, "bash") != test.bash || permissionAction(policy, "network") != test.network || permissionAction(policy, "quality_gate") != test.quality {
 				t.Fatalf("unexpected policy: %+v", policy)
 			}
 		})
@@ -70,6 +72,16 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 	}
 	if got, err := normalizePermissionMode(""); err != nil || got != "ask" {
 		t.Fatalf("default permission mode = %q, %v", got, err)
+	}
+}
+
+func TestAutoReviewRequiresAnEnforcedWorkspaceOrReviewSandbox(t *testing.T) {
+	manager := &taskManager{cfg: config{SandboxBinary: ""}}
+	if _, _, err := manager.resolveTaskSandbox(sandboxModeOff, "auto-review", false); err == nil {
+		t.Fatal("auto-review accepted an unsandboxed task")
+	}
+	if _, _, err := manager.resolveTaskSandbox(sandboxModeWorkspace, "auto-review", false); err == nil {
+		t.Fatal("auto-review accepted an unavailable OS sandbox")
 	}
 }
 
@@ -123,15 +135,19 @@ func TestDeveloperModeMigratesLegacyRootConfirmation(t *testing.T) {
 
 func TestSetPermissionModePersistsPrivateTaskPolicy(t *testing.T) {
 	root := t.TempDir()
+	sandboxBinary := filepath.Join(root, "bwrap")
+	if err := os.WriteFile(sandboxBinary, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(root, "00112233445566778899aabb")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	current := &task{
 		dir:     dir,
-		manager: &taskManager{cfg: config{SessionDir: filepath.Join(root, "sessions")}},
+		manager: &taskManager{cfg: config{SessionDir: filepath.Join(root, "sessions"), SandboxBinary: sandboxBinary}},
 		metadata: taskMetadata{
-			ID: "00112233445566778899aabb", Name: "test", Status: statusIdle,
+			ID: "00112233445566778899aabb", Name: "test", Status: statusIdle, SandboxMode: sandboxModeWorkspace,
 		},
 	}
 	manager := &taskManager{cfg: current.manager.cfg, tasks: map[string]*task{current.metadata.ID: current}}
@@ -151,6 +167,21 @@ func TestSetPermissionModePersistsPrivateTaskPolicy(t *testing.T) {
 	if json.Unmarshal(content, &policy) != nil || permissionAction(policy, "bash") != "allow" {
 		t.Fatalf("unexpected persisted policy: %s", content)
 	}
+	if _, err := manager.setPermissionMode(setTaskPermissionParams{TaskID: current.metadata.ID, Mode: "auto-review"}); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(current.permissionPolicyPath())
+	if err != nil || json.Unmarshal(content, &policy) != nil || policy.Reviewer != "auto-review" {
+		t.Fatalf("auto-review marker was not persisted: %s, %v", content, err)
+	}
+	if _, err := manager.setPermissionMode(setTaskPermissionParams{TaskID: current.metadata.ID, Mode: "ask"}); err != nil {
+		t.Fatal(err)
+	}
+	content, err = os.ReadFile(current.permissionPolicyPath())
+	policy = taskPermissionPolicy{}
+	if err != nil || json.Unmarshal(content, &policy) != nil || policy.Reviewer != "" {
+		t.Fatalf("ask did not remove auto-review marker: %s, %v", content, err)
+	}
 	remembered := []byte(`{"schemaVersion":2,"rootMode":"policy","default":"ask","rules":[{"tool":"bash","action":"allow"}]}`)
 	if err := os.WriteFile(current.permissionPolicyPath(), remembered, 0o600); err != nil {
 		t.Fatal(err)
@@ -161,6 +192,29 @@ func TestSetPermissionModePersistsPrivateTaskPolicy(t *testing.T) {
 	content, err = os.ReadFile(current.permissionPolicyPath())
 	if err != nil || string(content) != string(remembered) {
 		t.Fatalf("remembered task policy was replaced: %q, %v", content, err)
+	}
+}
+
+func TestSetPermissionModeRejectsAutoReviewWithoutAnEligibleSandbox(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "00112233445566778899aabb")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	current := &task{
+		dir: dir,
+		metadata: taskMetadata{
+			ID: "00112233445566778899aabb", Name: "test", Status: statusIdle,
+			PermissionMode: "ask", SandboxMode: sandboxModeOff,
+		},
+	}
+	manager := &taskManager{cfg: config{SessionDir: filepath.Join(root, "sessions")}, tasks: map[string]*task{current.metadata.ID: current}}
+	current.manager = manager
+	if _, err := manager.setPermissionMode(setTaskPermissionParams{TaskID: current.metadata.ID, Mode: "auto-review"}); err == nil {
+		t.Fatal("auto-review was enabled without an eligible OS sandbox")
+	}
+	if got := current.snapshot().PermissionMode; got != "ask" {
+		t.Fatalf("rejected permission change mutated metadata: %s", got)
 	}
 }
 

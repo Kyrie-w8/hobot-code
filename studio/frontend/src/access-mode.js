@@ -1,6 +1,7 @@
 const permissionLabels = {
   review: 'Review only',
   ask: 'Ask first',
+  'auto-review': 'Approve for me',
   developer: 'Developer',
 };
 
@@ -32,6 +33,8 @@ export function accessModePresentation({permissionMode = 'ask', sandboxMode = 'w
     label = 'Developer';
   } else if (permissionMode === 'ask' && sandboxMode === 'workspace') {
     label = 'Ask first';
+  } else if (permissionMode === 'auto-review' && ['review', 'workspace'].includes(sandboxMode)) {
+    label = 'Approve for me';
   } else {
     label = 'Custom';
   }

@@ -85,7 +85,7 @@
 | `schedule.pause` / `schedule.resume` | `{id}` | 暂停或恢复未来触发；已完成的一次性计划不可恢复 |
 | `schedule.run-now` | `{id}` | 请求一轮立即执行；忙碌任务只保留一个待执行 occurrence |
 | `schedule.delete` | `{id}` | 删除未来计划，不中断已经开始的本轮 |
-| `task.start` | `{name?, cwd, prompt, images?, approve?, model?, permissionMode?, workspaceMode?, sandboxMode?, networkMode?}` | 新任务元数据；`workspaceMode` 为 `shared` 或 `worktree`；`sandboxMode` 为 `review`、`workspace`、`system` 或 `off`；`networkMode` 为 `shared`、`model-only` 或 `offline`；无 worker 槽时返回 `queued` 任务 |
+| `task.start` | `{name?, cwd, prompt, images?, approve?, model?, permissionMode?, workspaceMode?, sandboxMode?, networkMode?}` | 新任务元数据；`permissionMode` 可为 `review`、`ask`、`auto-review` 或 `developer`。`auto-review` 仅在声明 `tasks.permissions.auto-review.v1` 且有效 `review`/`workspace` OS sandbox 时可用；`workspaceMode` 为 `shared` 或 `worktree`；`sandboxMode` 为 `review`、`workspace`、`system` 或 `off`；`networkMode` 为 `shared`、`model-only` 或 `offline`；无 worker 槽时返回 `queued` 任务 |
 | `task.list` | `{}` | 未归档任务元数据，按创建时间倒序 |
 | `task.page` | `{cursor?, limit?, includeArchived?}` | 有界任务分页与下一游标 |
 | `task.get` | `{taskId}` | 单个任务元数据 |
@@ -96,7 +96,7 @@
 | `task.restart` | `{taskId, prompt, images?}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
 | `task.fork` | `{taskId, sequence?, prompt?, images?, name?, kind, model?, permissionMode?, sandboxMode?, networkMode?}` | `side` 从最新稳定上下文创建独立任务，Prompt 可省略并在首条消息时启动；`edit` 从指定用户消息之前创建替换时间线且必须提供 Prompt |
 | `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为 queued/终态任务持久化下次启动使用的模型 |
-| `task.permissions` | `{taskId, mode}` | 为 idle、queued 或终态任务设置独立的 `review`、`ask` 或 `developer` 权限策略 |
+| `task.permissions` | `{taskId, mode}` | 为 idle、queued 或终态任务设置独立的 `review`、`ask`、`auto-review` 或 `developer` 权限策略；旧服务未声明 `tasks.permissions.auto-review.v1` 时客户端不得显示或发送该模式 |
 | `task.sandbox` | `{taskId, mode}` | 为 queued 或终态任务设置板端 OS 隔离档位；运行中的 worker 不允许热切换 |
 | `task.network` | `{taskId, mode}` | 为 queued 或终态任务设置 `shared`/`model-only`/`offline` 网络边界；后两者要求有效 Bubblewrap sandbox |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |
@@ -205,7 +205,7 @@ Hbmem 容量与当前分配优先来自 `/sys/kernel/debug/ion/heaps/all_heap_in
 - 每个 OS 用户默认最多保留 2 个后台 worker，可通过 `HOBOT_CODE_MAX_BACKGROUND_TASKS=1..8` 调整。创建、分支、Resume 或 Restart 需要空位时，会原子挂起最久未使用的 `idle` worker并保留 session；`running`、`waiting`、`starting` 和 `stopping` 任务绝不会被自动回收。所有槽位都在工作时，新请求进入持久 FIFO 队列，不再返回并发上限错误。
 - 默认最多保留 100 个任务，可通过 `HOBOT_CODE_MAX_RETAINED_TASKS=10..1000` 调整。达到上限后拒绝新任务，不会静默删除旧任务。
 - worker 位于独立进程组；停止任务会先发送 `SIGTERM`，超时后发送 `SIGKILL`。
-- `hobot task start --workspace shared|worktree`、`--model PROVIDER/MODEL`、`--permissions review|ask|developer`、`--sandbox review|workspace|system|off` 和 `--network shared|model-only|offline` 可在创建时固定工作区、模型、工具权限、OS 与网络隔离。`--trust-project` 只传递 Pi 的项目资源信任选项，不会关闭 Hobot Code 的工具权限和硬安全边界；旧 `--approve` 仅作为兼容别名保留。
+- `hobot task start --workspace shared|worktree`、`--model PROVIDER/MODEL`、`--permissions review|ask|auto-review|developer`、`--sandbox review|workspace|system|off` 和 `--network shared|model-only|offline` 可在创建时固定工作区、模型、工具权限、OS 与网络隔离。`--trust-project` 只传递 Pi 的项目资源信任选项，不会关闭 Hobot Code 的工具权限和硬安全边界；旧 `--approve` 仅作为兼容别名保留。
 - 交互式终端中的 `hobot task attach` 可原地处理 confirm、select、input 和多行 editor 审批；`Ctrl+C` 只退出附着界面，板端 Agent 保持运行。首次附着显示全部仍保留的持久事件，之后从当前用户私有的最后已显示序号继续；断点每两秒和退出时原子、跨进程单调写入，多个终端不会让进度倒退，过期时明确提示实际重放起点，损坏时 fail closed 并提示显式使用 `--replay-all`。非交互输出不会代替用户答复，而会打印可复制的 `hobot task respond` 命令。
 - `hobot task show` 与 `hobot task approvals` 默认输出适合日常排障的脱敏摘要，不包含 session 文件/标识、审批正文或部署产物与报告绝对路径；本机用户只有显式传入 `--details` 才会获得协议中的完整记录。
 - 启动器为当前私有 `hobot.env`、`settings.json`、`models.json` 和受管 `providers.json` 生成不显示在响应中的组合配置指纹。支持 `configuration.fingerprint.v1` 的客户端在模型相关操作前只获得“一致/已变化”结果；变化时必须显式执行 `hobot daemon restart`，任务查看、停止和审批仍然可用。

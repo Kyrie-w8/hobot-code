@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.6
+
+### Added
+
+- Add **Approve for me**, a capability-negotiated board-side reviewer for exact low-risk workspace actions. It replaces repetitive human review without expanding the task sandbox, network, writable roots, root access, device access, or persistent policy.
+- Add private bounded reviewer audit records, repeated-denial circuit breaking, and one exact-action re-review while preserving human review for destructive, remote, persistent, dynamic, hardware, MCP, and quality-gate operations.
+
+### Fixed
+
+- Classify Shell risk from executable positions so arguments such as `grep -v chmod` and stored schedule prompts do not create false permission requests.
+- Reject auto-review at the daemon boundary when an effective `Review` or `Workspace` OS sandbox is unavailable, including direct CLI or RPC changes that bypass Studio controls.
+
 ## 0.28.5
 
 ### Fixed

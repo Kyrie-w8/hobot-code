@@ -366,7 +366,7 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 
 ```bash
 hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] \
-  [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
+  [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
 hobot task list
 hobot task show TASK_ID [--details]
 hobot task logs TASK_ID [--after SEQUENCE] [--follow]

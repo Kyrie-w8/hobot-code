@@ -531,7 +531,10 @@ Route check 缓存 5 分钟，Gateway probe 缓存 1 小时；可用 `--force` �
 |---|---|---|
 | **Review only** | 禁止修改项目和系统状态 | 代码审查、日志分析、方案讨论 |
 | **Ask for changes** | 变更前询问 | 初次使用、陌生项目、高风险任务 |
+| **Approve for me（帮我批准/帮我审阅）** | 板端确定性 reviewer 只审查原本需要确认的单次低风险工作区操作 | 有效 Bubblewrap `Review`/`Workspace` sandbox 中的受信日常编辑 |
 | **Developer** | 普通读取、构建、测试和工作区编辑尽量不打断 | 受信项目的日常开发 |
+
+`Approve for me` 是审核者替换，不是权限授予：它不会扩大 sandbox、工作区、网络、root 或设备边界，也不会创建任务级或永久 allow。删除、外联或 SSH、凭据/启动/持久化路径、权限或安全弱化、服务/软件包/内核/硬件写入、下载后执行、动态或无法分类的命令、MCP、质量门和不可逆外部写入仍必须人工确认或被拒绝。reviewer 不可用、超时、审计失败或解析异常时回退人工；连续 3 次拒绝或 10 分钟内 10 次拒绝会打开断路器，要求 Agent 改走实质更安全的路径。断路器拒绝当前 action 时，界面允许请求一次完全相同 action 的重新审阅；硬禁止不能覆盖。板端审计仅保留 action 指纹、分类和理由，5 MiB 轮转且不保存参数。Side Agent 使用相同逐请求政策和自己的 task scope，不继承主任务的 allow 或 lease。
 
 Developer 不是“允许所有命令”。以下行为仍可能询问或被拒绝：
 
@@ -1213,7 +1216,7 @@ hobot workspace cleanup TASK_ID --yes
 hobot task start [--name NAME] [--cwd DIR]
                  [--workspace shared|worktree]
                  [--model PROVIDER/MODEL]
-                 [--permissions review|ask|developer]
+                 [--permissions review|ask|auto-review|developer]
                  [--sandbox review|workspace|system|off]
                  [--network shared|model-only|offline]
                  [--trust-project] -- PROMPT
@@ -1229,7 +1232,7 @@ hobot task resume TASK_ID [-- PROMPT]
 hobot task restart TASK_ID [--] PROMPT
 hobot task rename TASK_ID NAME
 hobot task model TASK_ID PROVIDER/MODEL
-hobot task permissions TASK_ID review|ask|developer
+hobot task permissions TASK_ID review|ask|auto-review|developer
 hobot task sandbox TASK_ID review|workspace|system|off
 hobot task network TASK_ID shared|model-only|offline
 hobot task archive|unarchive TASK_ID

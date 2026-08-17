@@ -105,7 +105,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 Studio 添加板卡时会先验证 SSH、协议、能力与实际板型，成功后才保存；错误地址不会污染板卡列表。已保存板卡可直接编辑或删除，删除连接不会停止板端任务。版本页分别提供 Studio 下载和板端事务升级；两侧都有新版时可以先升级板端并重连，再打开 Studio 下载。执行板端升级时仍由板端拒绝活跃 Agent、Studio bridge、并发安装和隐式降级，桌面端不能绕过这些保护。
 
-输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 让日常 Shell 与工作区编辑按实际风险运行。root 会话先使用 `/permissions root policy` 和 `/permissions preset developer` 切换为风险判定；删除、系统路径、权限/凭据、服务/软件包、网络/内核、硬件和语义无法安全分类的命令仍会询问。审批可选择仅放行一次；对可识别的网络访问还可授予当前任务的网络能力，对经过探测的 OpenExplorer 构建机可授予当前任务信任。Shell 分类只检查 executable 位置，`grep`/`echo` 文本和 `hobot schedule --prompt` 数据不会污染风险判断。工作区外写入和受保护系统路径仍需要单独处理。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
+输入框底部的权限菜单为当前任务独立选择板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Approve for me（帮我批准）** 以板端确定性 reviewer 审查符合条件的单次低风险操作，**Developer** 让日常 Shell 与工作区编辑按实际风险运行。`Approve for me` 只在支持该能力且具有 `Review`/`Workspace` OS sandbox 的板端显示；它不扩大 sandbox、网络、可写目录、root 或设备权限，也不创建任务级 allow。删除、外联/SSH、凭据或持久化路径、服务/软件包/内核/硬件写入、动态或未分类操作、MCP 和质量门仍进入人工确认或拒绝。reviewer 不可用或审计失败时自动回退人工。root 会话先使用 `/permissions root policy` 和 `/permissions preset developer` 切换为风险判定；Shell 分类只检查 executable 位置，`grep`/`echo` 文本和 `hobot schedule --prompt` 数据不会污染风险判断。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
 
 桌面端在当前模型明确声明支持图像输入时，允许在新任务和后续消息中附加 JPEG、PNG、WebP 或 GIF 图片；模型能力未知时按纯文本处理。大图会在 Mac 本地缩放压缩，每条消息最多 4 张、编码前合计不超过 1 MiB；图片通过既有 SSH/RPC 通道直接写入板端会话，不创建公开上传地址，事件日志只保留文件名和 MIME 摘要。Studio 和 agentd 会分别校验同一套[模型能力契约](docs/model-capabilities.md)，客户端不能绕过。PDF、Word 等文档附件尚未开放，也不会被静默当作纯文本发送。
 
@@ -125,7 +125,7 @@ hobot deploy status <task-id>
 
 ```bash
 hobot task model <task-id> drobotics/kimi-k3
-hobot task permissions <task-id> review|ask|developer
+hobot task permissions <task-id> review|ask|auto-review|developer
 hobot task sandbox <task-id> review|workspace|system|off
 hobot task network <task-id> shared|model-only|offline
 ```

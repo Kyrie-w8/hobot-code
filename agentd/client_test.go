@@ -234,7 +234,7 @@ func TestTaskStartOptionsRejectInvalidModelAndPermission(t *testing.T) {
 	if _, err := parseTaskStartArgs([]string{"--model", "invalid", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "provider/model") {
 		t.Fatalf("invalid model was accepted: %v", err)
 	}
-	if _, err := parseTaskStartArgs([]string{"--permissions", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "review, ask, or developer") {
+	if _, err := parseTaskStartArgs([]string{"--permissions", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "review, ask, auto-review, or developer") {
 		t.Fatalf("invalid permission mode was accepted: %v", err)
 	}
 	if _, err := parseTaskStartArgs([]string{"--workspace", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "shared or worktree") {

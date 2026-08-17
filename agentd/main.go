@@ -48,7 +48,7 @@ Usage:
   hobot workspace delivery TASK_ID
   hobot workspace apply TASK_ID --yes
   hobot workspace cleanup TASK_ID --yes
-  hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
+  hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
   hobot task list [--all]
   hobot task show TASK_ID [--details]
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
@@ -61,7 +61,7 @@ Usage:
   hobot task restart TASK_ID [--] PROMPT
   hobot task rename TASK_ID NAME
   hobot task model TASK_ID PROVIDER/MODEL
-  hobot task permissions TASK_ID review|ask|developer
+  hobot task permissions TASK_ID review|ask|auto-review|developer
   hobot task sandbox TASK_ID review|workspace|system|off
   hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
@@ -1156,7 +1156,7 @@ func runTaskCLI(cfg config, args []string) error {
 		return nil
 	case "permissions":
 		if len(args) != 3 {
-			return fmt.Errorf("usage: hobot task permissions TASK_ID review|ask|developer")
+			return fmt.Errorf("usage: hobot task permissions TASK_ID review|ask|auto-review|developer")
 		}
 		mode, err := normalizePermissionMode(args[2])
 		if err != nil {
@@ -1248,7 +1248,7 @@ Usage:
   hobot task restart TASK_ID [--] PROMPT
   hobot task rename TASK_ID NAME
   hobot task model TASK_ID PROVIDER/MODEL
-  hobot task permissions TASK_ID review|ask|developer
+  hobot task permissions TASK_ID review|ask|auto-review|developer
   hobot task sandbox TASK_ID review|workspace|system|off
   hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
@@ -1272,14 +1272,14 @@ func printRequestedTaskHelp(args []string, output io.Writer) bool {
 		return false
 	}
 	usageByCommand := map[string]string{
-		"start": "hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT",
+		"start": "hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT",
 		"list":  "hobot task list [--all]", "show": "hobot task show TASK_ID [--details]",
 		"logs": "hobot task logs TASK_ID [--after SEQUENCE] [--follow]", "attach": "hobot task attach TASK_ID [--after SEQUENCE | --replay-all]",
 		"send": "hobot task send TASK_ID [--] PROMPT", "abort": "hobot task abort TASK_ID",
 		"respond": "hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE", "approvals": "hobot task approvals TASK_ID [--details]",
 		"resume": "hobot task resume TASK_ID [-- PROMPT]", "restart": "hobot task restart TASK_ID [--] PROMPT",
 		"rename": "hobot task rename TASK_ID NAME", "archive": "hobot task archive TASK_ID",
-		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|developer", "sandbox": "hobot task sandbox TASK_ID review|workspace|system|off", "network": "hobot task network TASK_ID shared|model-only|offline",
+		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|auto-review|developer", "sandbox": "hobot task sandbox TASK_ID review|workspace|system|off", "network": "hobot task network TASK_ID shared|model-only|offline",
 		"unarchive": "hobot task unarchive TASK_ID", "delete": "hobot task delete TASK_ID --yes", "stop": "hobot task stop TASK_ID",
 	}
 	commandUsage, ok := usageByCommand[command]
@@ -1406,7 +1406,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 	name := flags.String("name", "", "task name")
 	cwd := flags.String("cwd", "", "working directory")
 	model := flags.String("model", "", "agent model in provider/model form")
-	permissions := flags.String("permissions", defaultTaskPermissionMode, "permission mode: review, ask, or developer")
+	permissions := flags.String("permissions", defaultTaskPermissionMode, "permission mode: review, ask, auto-review, or developer")
 	workspace := flags.String("workspace", workspaceModeShared, "workspace mode: shared or worktree")
 	sandbox := flags.String("sandbox", "", "OS sandbox: review, workspace, system, or off")
 	network := flags.String("network", networkModeShared, "network boundary: shared, model-only, or offline")
@@ -1427,7 +1427,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 		promptArgs = promptArgs[1:]
 	}
 	if len(promptArgs) == 0 {
-		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT")
+		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT")
 	}
 	workingDirectory := *cwd
 	if workingDirectory == "" {

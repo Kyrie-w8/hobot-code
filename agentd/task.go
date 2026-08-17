@@ -2820,6 +2820,8 @@ func (manager *taskManager) setModel(params setTaskModelParams) (taskMetadata, e
 }
 
 func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
 	mode, err := normalizePermissionMode(params.Mode)
 	if err != nil {
 		return taskMetadata{}, err
@@ -2833,6 +2835,15 @@ func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (t
 		current.mu.Unlock()
 		return taskMetadata{}, fmt.Errorf("task must be idle or stopped before changing permissions")
 	}
+	sandboxMode := current.metadata.SandboxMode
+	deployment := current.metadata.Deployment != nil
+	current.mu.Unlock()
+	if mode == "auto-review" {
+		if _, _, err := manager.resolveTaskSandbox(sandboxMode, mode, deployment); err != nil {
+			return taskMetadata{}, err
+		}
+	}
+	current.mu.Lock()
 	previousMode := current.metadata.PermissionMode
 	previousUpdatedAt := current.metadata.UpdatedAt
 	current.metadata.PermissionMode = mode
