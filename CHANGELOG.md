@@ -12,6 +12,10 @@
 - Distinguish scheduled prompts from user-authored messages in Studio, keep schedule prompts out of default lists and support bundles, and block task archive or deletion while schedules still reference it.
 - Add strict schedule protocol validation, private-directory diagnostics, scoped Unix-socket authorization, Side Agent isolation, durable dispatch claims, bounded limits, and race-tested restart behavior.
 
+### Fixed
+
+- Route the public `hobot schedule` command through the board control service instead of passing it to the Pi conversation runtime.
+
 ## 0.27.7
 
 ### Changed

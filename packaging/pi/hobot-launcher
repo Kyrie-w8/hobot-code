@@ -752,7 +752,7 @@ fi
 
 umask "$original_umask"
 case "${1:-}" in
-  tui|daemon|deploy|task|bridge|doctor|diagnose|extensions|provider|model|workspace) exec "$hobot_runtime_root/agentd" "$@" ;;
+  tui|daemon|deploy|task|schedule|bridge|doctor|diagnose|extensions|provider|model|workspace) exec "$hobot_runtime_root/agentd" "$@" ;;
 esac
 if [ "${1:-}" = persistent ]; then
   handle_persistent_command "$@"

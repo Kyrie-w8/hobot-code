@@ -374,7 +374,7 @@ test("persistent tmux server never inherits model credentials", async () => {
   }
 });
 
-test("launcher routes daemon, deployment, task, bridge, diagnosis, extensions, and model commands after loading the user environment", async () => {
+test("launcher routes daemon, deployment, task, schedule, bridge, diagnosis, extensions, and model commands after loading the user environment", async () => {
   const fixture = await createLauncherFixture("hobot-agentd-route-");
   try {
     const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
@@ -384,6 +384,8 @@ test("launcher routes daemon, deployment, task, bridge, diagnosis, extensions, a
     assert.equal(deployment.stdout.trim(), "agentd=<deploy>\nagentd=<inspect>\nagentd=<--cwd>\nagentd=</root/models>");
     const task = await execFileAsync(fixture.launcher, ["task", "list"], { env: environment });
     assert.equal(task.stdout.trim(), "agentd=<task>\nagentd=<list>");
+    const schedule = await execFileAsync(fixture.launcher, ["schedule", "list", "--all"], { env: environment });
+    assert.equal(schedule.stdout.trim(), "agentd=<schedule>\nagentd=<list>\nagentd=<--all>");
     const bridge = await execFileAsync(fixture.launcher, ["bridge", "--stdio"], { env: environment });
     assert.equal(bridge.stdout.trim(), "agentd=<bridge>\nagentd=<--stdio>");
     const diagnose = await execFileAsync(fixture.launcher, ["diagnose", "--json"], { env: environment });
