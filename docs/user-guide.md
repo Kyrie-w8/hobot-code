@@ -959,6 +959,7 @@ Mac Studio 右上角的版本号会打开 **Version & updates**。该页面独�
 - **Studio for Mac** 从固定的 Hobot Code GitHub stable Release 检查新版本。只有版本化 ARM64 DMG、同名 SHA-256 文件和官方 Release 地址同时匹配时才显示下载按钮；点击后由默认浏览器直接下载对应 DMG。安装仍由 macOS 和 Gatekeeper 控制，更新 Studio 不会停止板端任务。
 - 本地开发版高于 GitHub 最新公开稳定版时会显示 **Newer than the public release**，并同时标明公开版本号；这表示当前没有可供升级的公开 DMG，不等同于该开发构建已经正式发布。
 - **Board service** 通过当前 SSH 连接调用板端事务更新。存在活动任务时只阻止板端按钮，不影响 Studio 更新。
+- 板卡明确因 GitHub 网络超时而无法检查版本时，Studio 会改由 Mac 验证官方 stable Release。若板端已经等于或高于公开版本，会显示真实状态；若确有新版但板卡无法下载，更新仍会阻止并说明网络交付问题，不会展示一个必然失败的安装按钮。
 - 两侧都有新版本时显示 **Update board, then Studio**。它先完成板端校验、更新和自动重连，再下载 Studio DMG；活动任务结束前该按钮不可用。
 
 Mac 应用目前不会在运行中自行覆盖 `/Applications/Hobot Code.app`。下载新 DMG 后，将新版拖入 Applications 并重新打开；未签名的本地开发构建不应被当作公开更新来源。只更新板端不会替换 Mac 应用，所以右上角仍可能显示旧 Studio 版本。

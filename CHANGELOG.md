@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.3
+
+### Fixed
+
+- Let Studio verify the official stable board release from the Mac when a connected board explicitly times out reaching GitHub. Current and development-ahead boards now receive a truthful version result, while a newer release that the board cannot download remains blocked instead of exposing a broken update action.
+
 ## 0.28.2
 
 ### Fixed

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bryant-w/hobot-code/sdk/go/hobot"
 )
 
 const (
@@ -171,6 +173,68 @@ func checkStudioUpdate(ctx context.Context, client *http.Client, endpoint, insta
 	result.ReleaseURL = releaseURL
 	result.downloadURL = downloadURL
 	return result, nil
+}
+
+func checkBoardUpdateFromRelease(ctx context.Context, client *http.Client, endpoint, installed string) (hobot.BoardUpdateCheck, error) {
+	installedVersion, ok := parseStudioVersion(installed)
+	if !ok {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("installed board version %q is invalid", installed)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return hobot.BoardUpdateCheck{}, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "Hobot-Code-Studio/"+currentStudioVersion())
+	response, err := client.Do(req)
+	if err != nil {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: release service returned HTTP %d", response.StatusCode)
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumReleaseBytes+1))
+	if err != nil {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: read release metadata: %w", err)
+	}
+	if len(payload) > maximumReleaseBytes {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: release metadata is too large")
+	}
+	var release githubRelease
+	if err := json.Unmarshal(payload, &release); err != nil {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: invalid release metadata: %w", err)
+	}
+	availableVersion, ok := parseStudioVersion(release.TagName)
+	if release.Draft || release.Prerelease || !ok || availableVersion.prerelease {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: latest release is not a valid stable version")
+	}
+	available := strings.TrimPrefix(release.TagName, "v")
+	archiveName := fmt.Sprintf("hobot-code-%s-linux-arm64.tar.gz", available)
+	checksumName := archiveName + ".sha256"
+	hasArchive, hasChecksum := false, false
+	for _, asset := range release.Assets {
+		if asset.Name != archiveName && asset.Name != checksumName {
+			continue
+		}
+		validURL := strings.HasPrefix(asset.BrowserDownloadURL, "https://github.com/bryant-w/hobot-code/releases/download/v"+available+"/")
+		if asset.Name == archiveName {
+			hasArchive = validURL
+		} else {
+			hasChecksum = validURL
+		}
+	}
+	if !hasArchive || !hasChecksum {
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("check board release from Studio: release %s is missing its ARM64 archive or checksum", available)
+	}
+	switch compareStudioVersions(availableVersion, installedVersion) {
+	case -1:
+		return hobot.BoardUpdateCheck{Status: "source-older", InstalledVersion: installed, AvailableVersion: available, Message: fmt.Sprintf("This board is newer than the latest public stable release (v%s). Studio checked because the board could not reach GitHub.", available)}, nil
+	case 0:
+		return hobot.BoardUpdateCheck{Status: "current", InstalledVersion: installed, AvailableVersion: available, Message: "This board matches the latest public stable release. Studio checked because the board could not reach GitHub."}, nil
+	default:
+		return hobot.BoardUpdateCheck{}, fmt.Errorf("Studio found Hobot Code %s, but this board cannot reach GitHub to download it", available)
+	}
 }
 
 func parseStudioVersion(value string) (studioVersion, bool) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -174,8 +175,28 @@ func (app *App) CheckBoardUpdate(boardID string) (hobot.BoardUpdateCheck, error)
 		base = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(base, boardUpdateCheckTimeout)
-	defer cancel()
-	return client.CheckBoardUpdate(ctx)
+	check, err := client.CheckBoardUpdate(ctx)
+	cancel()
+	if err == nil || !isBoardUpdateNetworkFailure(err) {
+		return check, err
+	}
+	infoContext, infoCancel := context.WithTimeout(base, requestTimeout)
+	info, infoErr := client.Ping(infoContext)
+	infoCancel()
+	if infoErr != nil {
+		return hobot.BoardUpdateCheck{}, err
+	}
+	fallbackContext, fallbackCancel := context.WithTimeout(base, studioUpdateTimeout)
+	defer fallbackCancel()
+	return checkBoardUpdateFromRelease(fallbackContext, http.DefaultClient, studioReleaseAPIURL, info.Version)
+}
+
+func isBoardUpdateNetworkFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "Unable to check for Hobot Code updates within 10 seconds") || errors.Is(err, context.DeadlineExceeded)
 }
 
 // InstallBoardUpdate closes every Studio bridge before invoking the board's
