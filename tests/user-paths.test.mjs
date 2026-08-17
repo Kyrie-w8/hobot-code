@@ -401,6 +401,30 @@ test("launcher routes daemon, deployment, task, schedule, bridge, diagnosis, ext
   }
 });
 
+test("launcher routes task-scoped schedules before touching read-only user configuration", async () => {
+  const fixture = await createLauncherFixture("hobot-scoped-schedule-route-");
+  const configRoot = join(fixture.home, ".config/hobot-code");
+  const agentRoot = join(configRoot, "agent");
+  try {
+    await mkdir(agentRoot, { recursive: true });
+    await chmod(agentRoot, 0o500);
+    await chmod(configRoot, 0o500);
+    const { stdout } = await execFileAsync(fixture.launcher, ["schedule", "list", "--all"], {
+      env: {
+        HOME: fixture.home,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOBOT_CODE_TASK_CONTROL_SOCKET: "/tmp/hobot-code-control/0123456789abcdef01234567/control.sock",
+        HOBOT_CODE_TASK_ID: "0123456789abcdef01234567",
+      },
+    });
+    assert.equal(stdout.trim(), "agentd=<schedule>\nagentd=<list>\nagentd=<--all>");
+  } finally {
+    await chmod(agentRoot, 0o700).catch(() => {});
+    await chmod(configRoot, 0o700).catch(() => {});
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("launcher persistent management is scoped to Hobot Code sessions", async () => {
   const fixture = await createLauncherFixture("hobot-persistent-manage-");
   try {

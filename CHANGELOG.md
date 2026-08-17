@@ -15,6 +15,7 @@
 ### Fixed
 
 - Route the public `hobot schedule` command through the board control service instead of passing it to the Pi conversation runtime.
+- Route Agent-owned schedule commands through their task-scoped control socket before the sandboxed launcher's read-only configuration checks.
 
 ## 0.27.7
 

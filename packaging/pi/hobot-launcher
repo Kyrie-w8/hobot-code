@@ -59,6 +59,13 @@ fi
 hobot_runtime_root="$hobot_system_root/usr/local/lib/hobot-code"
 hobot_install_lock="$hobot_system_root/usr/local/lib/hobot-code.install.lock"
 
+# A sandboxed main task receives only its private schedule-control socket. Route
+# it before touching the read-only canonical user configuration; agentd remains
+# responsible for validating the socket path, task identity, and authorization.
+if [ "${1:-}" = schedule ] && [ -n "${HOBOT_CODE_TASK_CONTROL_SOCKET:-}" ]; then
+  exec "$hobot_runtime_root/agentd" "$@"
+fi
+
 original_umask=$(umask)
 umask 077
 
