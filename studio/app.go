@@ -58,6 +58,7 @@ type BoardConnection struct {
 	Board         Board                    `json:"board"`
 	Connected     bool                     `json:"connected"`
 	Reconnected   bool                     `json:"reconnected,omitempty"`
+	NotInstalled  bool                     `json:"notInstalled,omitempty"`
 	Daemon        *hobot.DaemonInfo        `json:"daemon,omitempty"`
 	Capabilities  *hobot.Capabilities      `json:"capabilities,omitempty"`
 	Snapshot      *hobot.SystemSnapshot    `json:"snapshot,omitempty"`
@@ -95,6 +96,12 @@ type BoardUpdateResult struct {
 	InstalledVersion string          `json:"installedVersion"`
 	Message          string          `json:"message"`
 	Connection       BoardConnection `json:"connection"`
+}
+
+type BoardInstallResult struct {
+	Success    bool            `json:"success"`
+	Message    string          `json:"message"`
+	Connection BoardConnection `json:"connection"`
 }
 
 type taskWatcher struct {
@@ -288,10 +295,104 @@ func (app *App) reconnectBoardAfterUpdate(boardID string, maximumWait time.Durat
 	}
 }
 
+// InstallBoardService executes the remote installer over SSH on a target board.
+// It prefers streaming the local Linux ARM64 release package when available,
+// falling back to online download, and automatically probes the board upon completion.
+func (app *App) InstallBoardService(board Board) (BoardInstallResult, error) {
+	board.Name = strings.TrimSpace(board.Name)
+	if board.Port == 0 {
+		board.Port = 22
+	}
+	if board.User == "" {
+		board.User = "root"
+	}
+	client, err := hobot.NewClient(boardConfig(board))
+	if err != nil {
+		return BoardInstallResult{Success: false, Message: err.Error()}, err
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var installErr error
+	localArchive := findLocalLinuxArchive()
+	if localArchive != "" {
+		file, err := os.Open(localArchive)
+		if err == nil {
+			defer file.Close()
+			installErr = client.InstallBoardServiceFromArchive(ctx, file)
+		} else {
+			installErr = err
+		}
+	} else {
+		installErr = client.InstallBoardService(ctx, "")
+	}
+
+	if installErr != nil {
+		return BoardInstallResult{
+			Success: false,
+			Message: fmt.Sprintf("Installation failed: %v", installErr),
+		}, installErr
+	}
+
+	probe := app.ProbeBoard(board)
+	if !probe.Connected {
+		return BoardInstallResult{
+			Success:    false,
+			Message:    "Installation completed, but connecting to the board failed: " + probe.Error,
+			Connection: probe,
+		}, fmt.Errorf("connect after install failed: %s", probe.Error)
+	}
+
+	return BoardInstallResult{
+		Success:    true,
+		Message:    "Hobot Code was successfully installed and connected.",
+		Connection: probe,
+	}, nil
+}
+
+func findLocalLinuxArchive() string {
+	candidates := []string{
+		"dist/hobot-code-0.28.2-linux-arm64.tar.gz",
+		"../dist/hobot-code-0.28.2-linux-arm64.tar.gz",
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "hobot-code-0.28.2-linux-arm64.tar.gz"),
+			filepath.Join(exeDir, "..", "Resources", "hobot-code-0.28.2-linux-arm64.tar.gz"),
+			filepath.Join(exeDir, "..", "..", "dist", "hobot-code-0.28.2-linux-arm64.tar.gz"),
+		)
+	}
+	for _, path := range candidates {
+		if stat, err := os.Stat(path); err == nil && !stat.IsDir() && stat.Size() > 0 {
+			return path
+		}
+	}
+	for _, dir := range []string{"dist", "../dist"} {
+		matches, _ := filepath.Glob(filepath.Join(dir, "hobot-code-*-linux-arm64.tar.gz"))
+		if len(matches) > 0 {
+			return matches[0]
+		}
+	}
+	return ""
+}
+
+func isNotInstalledError(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "command not found") ||
+		strings.Contains(lower, "hobot: not found") ||
+		strings.Contains(lower, "no such file or directory") ||
+		strings.Contains(lower, "closed without a response") ||
+		strings.Contains(lower, "exit status 127")
+}
+
 // ProbeBoard verifies transport, protocol compatibility, and board identity
 // without persisting the candidate. The structured result lets Studio present
 // an actionable failure before a broken board entry reaches local storage.
 func (app *App) ProbeBoard(board Board) BoardConnection {
+
 	board.Name = strings.TrimSpace(board.Name)
 	if board.Port == 0 {
 		board.Port = 22
@@ -314,9 +415,16 @@ func (app *App) ProbeBoard(board Board) BoardConnection {
 	defer cancel()
 	info, err := client.Ping(ctx)
 	if err != nil {
-		result.Error = err.Error()
+		errStr := err.Error()
+		if isNotInstalledError(errStr) {
+			result.NotInstalled = true
+			result.Error = "Hobot Code is not installed on this board. You can install it automatically."
+		} else {
+			result.Error = errStr
+		}
 		return result
 	}
+
 	result.Daemon = &info
 	capabilities := info.Capabilities
 	result.Capabilities = &capabilities
@@ -440,8 +548,13 @@ func (app *App) ConnectBoard(boardID string) (BoardConnection, error) {
 	info, err := client.Ping(ctx)
 	if err != nil {
 		_ = client.Close()
+		errStr := err.Error()
+		if isNotInstalledError(errStr) {
+			err = fmt.Errorf("Hobot Code is not installed on %s. Click the Edit (pencil) icon to install it with one click.", board.Name)
+		}
 		return BoardConnection{Board: board, Error: err.Error()}, err
 	}
+
 	capabilities := info.Capabilities
 	var snapshot *hobot.SystemSnapshot
 	var snapshotErr error

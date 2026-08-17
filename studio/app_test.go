@@ -64,12 +64,12 @@ func TestRecordedHandshakeCompatibility(t *testing.T) {
 }
 
 func TestBoardConnectionSerializesReconnectState(t *testing.T) {
-	encoded, err := json.Marshal(BoardConnection{Connected: true, Reconnected: true})
+	encoded, err := json.Marshal(BoardConnection{Connected: true, Reconnected: true, NotInstalled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), `"reconnected":true`) {
-		t.Fatalf("reconnect state missing from Studio response: %s", encoded)
+	if !strings.Contains(string(encoded), `"reconnected":true`) || !strings.Contains(string(encoded), `"notInstalled":true`) {
+		t.Fatalf("state missing from Studio response: %s", encoded)
 	}
 }
 
@@ -81,6 +81,14 @@ func TestProbeBoardRejectsInvalidCandidateWithoutPersistingIt(t *testing.T) {
 	}
 	if boards := app.ListBoards(); len(boards) != 0 {
 		t.Fatalf("probe persisted a failed board: %+v", boards)
+	}
+}
+
+func TestInstallBoardServiceRejectsInvalidCandidate(t *testing.T) {
+	app := NewApp()
+	result, err := app.InstallBoardService(Board{Name: "Broken", Host: "-invalid", User: "root", Port: 22})
+	if err == nil || result.Success {
+		t.Fatalf("invalid candidate was accepted for install: %+v", result)
 	}
 }
 

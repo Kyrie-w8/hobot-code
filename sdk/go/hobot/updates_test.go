@@ -92,3 +92,35 @@ func TestBoardUpdateStatusDistinguishesCurrentAndNewerInstall(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallBoardServiceExecutesInstallScript(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "commands.log")
+	script := filepath.Join(dir, "ssh")
+	content := fmt.Sprintf(`#!/bin/sh
+for arg in "$@"; do printf '<%%s>\n' "$arg" >> %q; done
+printf 'installed\n'
+`, log)
+	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(Config{Host: "rdk.local", User: "root", SSHBinary: script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := client.InstallBoardService(ctx, ""); err != nil {
+		t.Fatalf("InstallBoardService failed: %v", err)
+	}
+	commands, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(commands)
+	if !strings.Contains(text, "hobot-install.sh | sh") {
+		t.Fatalf("install command missing install script: %s", text)
+	}
+	if err := client.InstallBoardService(ctx, "0.28.0; rm -rf /"); err == nil {
+		t.Fatal("invalid install version was accepted")
+	}
+}

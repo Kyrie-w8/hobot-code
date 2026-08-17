@@ -396,9 +396,17 @@ active_hobot_pids() {
 
 active_pids=$(active_hobot_pids)
 if [ -n "$active_pids" ]; then
-  printf 'Stop active Hobot Code processes before upgrading: %s\n' "$active_pids" >&2
-  exit 1
+  if [ "${HOBOT_CODE_FORCE_INSTALL:-0}" = 1 ]; then
+    for pid in $active_pids; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    sleep 1
+  else
+    printf 'Stop active Hobot Code processes before upgrading: %s\n' "$active_pids" >&2
+    exit 1
+  fi
 fi
+
 
 copy_missing_tree() {
   source_tree=$1
