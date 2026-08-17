@@ -134,7 +134,8 @@ export function resolveShellSafety(command, networkAction = "ask", options = {})
   const analysis = analyzeShellCommand(command);
   const recognizedNetwork = analysis.networkReasons.length > 0;
   const approvalAmbiguities = options.managedSandbox
-    ? analysis.ambiguousReasons.filter((reason) => !reason.startsWith("runs an unclassified external command:"))
+    ? analysis.ambiguousReasons.filter((reason) => !reason.startsWith("runs an unclassified external command:")
+      && reason !== "writes to a dynamic path that requires an OS sandbox boundary")
     : analysis.ambiguousReasons;
   const unclassifiedOnSharedNetwork = analysis.ambiguousReasons.length > 0
     && options.networkBoundary === "shared";

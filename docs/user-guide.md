@@ -539,15 +539,17 @@ Developer 不是“允许所有命令”。以下行为仍可能询问或被拒�
 - 工作区外写入和关键系统路径；
 - 软件安装、服务、内核或网络配置；
 - 终止进程和硬件操作；
-- MCP、未知工具、持久记忆、目标状态或权限状态变更。
+- 未知或动态执行、未分类的 MCP/插件，以及权限状态变更。
 
 #### Developer 的 Shell 风险判定
 
 Developer 会先解析 Shell 的执行结构，再按实际会执行的命令判定风险。`grep`、`rg`、`echo`、`printf` 的参数，以及 `hobot schedule create --prompt` 中保存给未来任务的文本，都只是数据；其中出现 `chmod`、`rm`、`ssh` 或 `kill` 不会触发审批。`chmod --help`、`rm --version` 等纯帮助或版本查询同样不触发审批。
 
-解析器会继续检查当前命令实际执行的子命令，包括未转义的 `$(...)`、反引号、`sh`/`bash -c` 的常量脚本、SSH 的远端命令，以及 `sudo`、`env`、`timeout`、`nohup` 等 wrapper。真正执行的 `chmod`/`chown`、删除、关键路径重定向、服务/软件包/内核/网络配置、凭据或持久权限扩大、危险信号和硬件写入仍会要求确认。
+常用的只读开发诊断会直接执行，包括 `top`、`ps`、`pidstat`、`iostat`、`mpstat`、`nvidia-smi` 查询、`lsblk`、`lscpu`、`readelf`、`objdump`、包状态查询、Conda 环境查询，以及 `docker`/`kubectl` 的只读检查。`openexplorer_remote_run` 使用同一套分类，因此受信构建机上的线程、GPU、编译器和进程状态检查也不会因为工具名遗漏而反复询问。`if`、`while`、`for` 等普通 Shell 控制结构不改变其中命令的风险结果。
 
-动态命令名、`eval`/`source`、未闭合引号或重定向始终会保守询问，而不是把文本猜成安全命令。运行在受管 OS sandbox 内时，普通未知项目可执行文件（例如 `./configure`、`./project-tool --status`）可直接运行；文件、设备和网络边界仍由 sandbox 强制执行。关闭 sandbox 后，这类未知外部程序会要求确认。若 `shared` 网络又被策略拒绝，未知程序仍会 fail-closed，避免把潜在外联误当成本地命令。
+解析器会继续检查当前命令实际执行的子命令，包括未转义的 `$(...)`、反引号、`sh`/`bash -c` 的常量脚本、SSH 的远端命令，以及 `sudo`、`env`、`timeout`、`nohup` 等 wrapper。真正执行的 `chmod`/`chown`、删除、关键路径或用户启动配置写入、服务/软件包/Conda 环境/内核/网络配置、日志清理、GPU 参数修改、危险信号、容器删除或 exec、Kubernetes 写操作和硬件写入仍会要求确认。
+
+动态命令名、`eval`/`source`、未闭合引号或重定向始终会保守询问，而不是把文本猜成安全命令。动态写入目标（例如 `>"$TARGET"`）在无 sandbox 的远端构建机上也会询问，因为无法预先证明最终路径安全；在受管 OS sandbox 内则由文件系统边界约束，不额外打断。运行在受管 sandbox 内时，普通未知项目可执行文件（例如 `./configure`、`./project-tool --status`）也可直接运行。关闭 sandbox 后，这类未知外部程序会要求确认。若 `shared` 网络又被策略拒绝，未知程序仍会 fail-closed，避免把潜在外联误当成本地命令。
 
 `offline` 和 `model-only` 均由 OS 网络边界限制工具出口：前者完全断网，后者只保留 agentd 的受管模型代理。两者不会把未知本地工具错误写成“网络被拒绝”；已识别的 `ssh`、`curl`、下载器和远程构建仍会显示与实际边界一致的阻断原因。
 

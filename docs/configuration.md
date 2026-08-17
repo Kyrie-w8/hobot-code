@@ -288,9 +288,9 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 `/permissions set <pattern> <action>` 将规则放到数组开头并原子写回。配置缺失或无效时使用内置保守默认值并显示警告。`deny` 工具从活跃工具集合移除，调用时仍会复核；旧版 schema 1 中可能修改系统的 `allow` 规则会降级为 `ask`。
 
-`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、普通外联、OpenExplorer 远端构建、板卡诊断、质量门、记忆、目标和 LSP。Developer 使用破坏性操作审批，即使会话以 root 运行，帮助查询、状态检查、构建、测试、普通 SSH 和工作区内编辑等操作也不会反复确认；文件删除、受保护路径修改、服务和软件包变更、设备或固件写入等已识别风险仍然确认。无法判断副作用的 MCP 和未知工具继续采用保守审批。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
+`/permissions preset developer` 可一次启用日常开发权限：允许 `read`、`ls`、`find`、`grep`、`write`、`edit`、`bash`、普通外联、OpenExplorer 远端构建、板卡诊断、质量门、记忆、目标和 LSP。Developer 使用风险操作审批，即使会话以 root 运行，帮助查询、`top`/`pidstat`/`nvidia-smi` 等状态检查、构建、测试、普通 SSH、受信 OpenExplorer 构建机诊断和工作区内编辑也不会反复确认；文件删除、受保护路径或用户启动配置修改、服务和软件包变更、进程终止、GPU/网卡设置、容器破坏操作、集群写操作、设备或固件写入等已识别风险仍然确认。无法判断副作用的动态执行、MCP 和未知工具继续采用保守审批。该操作原子替换当前规则，`/permissions status` 会分别展示各已注册工具的有效权限和原始规则；原始规则按顺序匹配，较后的条目可能已被通配规则遮蔽。
 
-`shared` 模式用虚拟 `network` 权限识别 `curl`、`wget`、SSH/SCP、远程 Git、软件包客户端、容器仓库和常见网络诊断命令；Ask 默认为 `ask`，Developer 默认为 `allow`。可用 `/permissions set network allow|ask|deny` 调整。`allow` 只跳过这层外联提示，下载并执行、系统修改等独立高风险规则仍会审批；该检测是启发式策略，自定义程序可能绕过。对受支持模型，`model-only` 改用内核网络命名空间和固定 Unix Socket 模型代理，工具无法访问通用网络；这比命令识别更强，但不是“模型看不到项目数据”，因为 Agent 上下文本来就会发送给所选模型。`offline` 切断全部网络。不支持注入自定义传输的协议不会被伪装成受保护状态。
+`shared` 模式用虚拟 `network` 权限识别 `curl`、`wget`、SSH/SCP、远程 Git、软件包客户端、容器仓库和常见网络诊断命令；Ask 默认为 `ask`，Developer 默认为 `allow`。可用 `/permissions set network allow|ask|deny` 调整。`allow` 只跳过这层外联提示，下载并执行、系统修改等独立高风险规则仍会审批；该检测是启发式策略，自定义程序可能绕过。受管 sandbox 内的未知项目程序和动态写路径由 OS 文件边界兜底；OpenExplorer 构建机没有这层板端文件边界，因此无法分类的程序或动态目标仍会询问。对受支持模型，`model-only` 改用内核网络命名空间和固定 Unix Socket 模型代理，工具无法访问通用网络；这比命令识别更强，但不是“模型看不到项目数据”，因为 Agent 上下文本来就会发送给所选模型。`offline` 切断全部网络。不支持注入自定义传输的协议不会被伪装成受保护状态。
 
 root 会话默认使用 `rootMode: "confirm"`，对 `bash`、`write`、`edit` 逐次审批。Developer 预设或 `/permissions root policy` 会改用策略判定，但不会关闭硬安全边界；`/permissions root confirm` 可恢复严格模式。普通审批只提供本次允许；只有能够用清晰安全边界表达的权限才提供任务级选项，例如「当前任务允许网络」和「当前任务信任该构建机」。新审批不再创建难以区分的「记住完全相同调用」规则；旧任务中已有的精确调用规则仍可读取，仅用于兼容 Resume。
 

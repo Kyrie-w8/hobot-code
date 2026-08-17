@@ -6,6 +6,8 @@
 
 - Keep a navigated conversation as one continuous event range and page forward as the reader scrolls down, instead of joining an old page directly to the latest scheduled output and silently skipping the messages between them.
 - Show a persistent **Latest** action while reading historical pages, while continuing to use **New output** for live messages that arrive when the reader is away from the current tail.
+- Let Developer mode run common read-only board and OpenExplorer diagnostics without approval, including process, GPU, storage, compiler, package, environment, container, and cluster inspection commands.
+- Keep confirmations for protected or persistent path writes, process and service changes, package and environment mutation, GPU or network reconfiguration, destructive container operations, cluster writes, and unbounded dynamic targets outside the managed OS sandbox.
 
 ## 0.28.4
 

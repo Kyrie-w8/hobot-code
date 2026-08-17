@@ -374,6 +374,72 @@ test("shell safety classifies executable positions without scanning data argumen
   }
 });
 
+test("Developer permits common read-only board and build-host diagnostics", () => {
+  const exactRemoteProbe = 'echo "=== thread states ==="; top -b -n1 -H -p 3159276 2>/dev/null | tail -8; echo "=== wchan ==="; cat /proc/3159276/wchan 2>/dev/null; echo; echo "=== syscall ==="; cat /proc/3159276/syscall 2>/dev/null; echo "=== open hbm files ==="; ls -la /proc/3159276/fd/ 2>/dev/null | grep -iE "hbm|hbo|\\.bc" | head -5';
+  const commands = [
+    exactRemoteProbe,
+    "top -b -n1 -H -p 3159276",
+    "pidstat -p 3159276 1 1; iostat -xz 1 1; mpstat -P ALL 1 1",
+    "nvidia-smi; nvidia-smi --query-gpu=index,name,memory.used --format=csv,noheader",
+    "lsblk -f; lscpu; lsusb; lspci -nn; dmidecode -t memory",
+    "readelf -h model.so; objdump -p model.so; nm -D model.so; size model.so",
+    "apt-cache policy cmake; dpkg-query -W cmake; rpmquery bash",
+    "conda env list; conda info; micromamba list; mamba search pytorch",
+    "ethtool eth0; sysctl kernel.pid_max; dmesg --level=err; journalctl -u hobot-agentd -n 20",
+    "docker ps; docker inspect builder; podman images; kubectl get pods; kubectl describe node rdk",
+    "nvcc --version; pkg-config --modversion opencv4; meson introspect build --targets",
+    "if kill -0 3159276; then top -b -n1 -p 3159276; else echo stopped; fi",
+    "for file in one.log two.log; do tail -1 \"$file\"; done",
+  ];
+  for (const command of commands) {
+    const analysis = analyzeShellCommand(command);
+    assert.deepEqual(analysis.destructiveReasons, [], command);
+    assert.deepEqual(analysis.ambiguousReasons, [], command);
+    assert.deepEqual(resolveShellSafety(command, "allow").approvalReasons, [], command);
+  }
+});
+
+test("Developer still asks for system, runtime, container, and cluster mutation", () => {
+  const cases = [
+    ["echo x >/opt/hobot/config", "writes to a protected system path"],
+    ["tee /var/log/hobot.log", "writes to a protected system path"],
+    ["install hobot /usr/local/bin/hobot", "modifies a protected system path"],
+    ["printf 'source /tmp/inject.sh\\n' >>~/.bashrc", "writes user credentials, startup, or persistent configuration"],
+    ["cp helper ~/.local/bin/helper", "writes user credentials, startup, or persistent configuration"],
+    ["sed -i 's/old/new/' ~/.bashrc", "writes user credentials, startup, or persistent configuration"],
+    ["sysctl kernel.core_pattern=core", "changes kernel runtime settings"],
+    ["dmesg --clear", "clears kernel logs"],
+    ["journalctl --vacuum-time=1d", "changes or removes system journal state"],
+    ["ethtool -K eth0 tso off", "changes network device settings"],
+    ["nvidia-smi --gpu-reset -i 0", "changes GPU runtime or persistence settings"],
+    ["sensors --set", "writes hardware monitoring limits"],
+    ["ip -details link set dev eth0 down", "changes network configuration"],
+    ["conda env remove -n production", "changes a managed language environment"],
+    ["meson install -C build", "installs build output into the system"],
+    ["docker exec builder rm -rf /workspace", "performs a privileged or destructive container operation"],
+    ["docker system prune -af", "performs a privileged or destructive container operation"],
+    ["docker --context production system prune -af", "performs a privileged or destructive container operation"],
+    ["podman volume rm cache", "performs a privileged or destructive container operation"],
+    ["kubectl delete pod api-0", "changes cluster state or executes inside a workload"],
+    ["kubectl exec api-0 -- rm -rf /data", "changes cluster state or executes inside a workload"],
+    ["kubectl --context production rollout restart deployment/api", "changes cluster state or executes inside a workload"],
+    ["kubectl config use-context production", "changes cluster state or executes inside a workload"],
+    ["systemctl set-property worker.service CPUQuota=50%", "changes system service configuration or process state"],
+    ["systemctl --host root@rdk restart hobot-agentd", "changes or stops a system service"],
+    ["git -C /workspace clean -fd", "performs a destructive or forceful Git operation"],
+    ["apt-get -o Dpkg::Options::=--force-confnew install cmake", "changes installed software or package metadata"],
+  ];
+  for (const [command, reason] of cases) {
+    const safety = resolveShellSafety(command, "allow");
+    assert.ok(safety.approvalReasons.includes(reason), `${command} should report ${reason}`);
+  }
+
+  for (const command of ['echo x >"$TARGET"', 'cp helper "$TARGET"', 'sed -i s/old/new/ "$TARGET"']) {
+    assert.ok(resolveShellSafety(command, "allow").approvalReasons.includes("writes to a dynamic path that requires an OS sandbox boundary"), command);
+    assert.deepEqual(resolveShellSafety(command, "allow", {managedSandbox: true}).approvalReasons, [], command);
+  }
+});
+
 test("shell safety recursively checks executable payloads and wrappers", () => {
   const cases = [
     [String.raw`echo "$(chmod 600 /tmp/board-test)"`, "changes file ownership or access permissions"],
