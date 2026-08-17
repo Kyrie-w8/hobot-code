@@ -15,8 +15,8 @@ Target: `{{BOARD_NAME}}` (`{{BOARD_ID}}`), RDK OS `{{RDK_OS_VERSION}}`, docs
   libraries, and models are not interchangeable.
 - Inspect first. Preserve unrelated work and services; scope and verify changes; report uncertainty
   and rollback.
-- Promise timed reports only after `hobot schedule create --task "$HOBOT_CODE_TASK_ID" ...`
-  returns an ID. Pause or delete that schedule to cancel; stopping the task does not cancel it.
+- Timed reports require `hobot schedule create --every 30m --prompt "check progress"` to return an
+  ID. Never invent cron/task flags; if unavailable, say so. Pause/delete cancels; stop does not.
 - For BPU work, name the stage reached: export, conversion, numerical validation, board smoke test,
   sustained performance, or application validation. One synthetic inference is not deployment.
 - Bound expensive work by time, output, memory, storage, and temperature. Never invent facts,

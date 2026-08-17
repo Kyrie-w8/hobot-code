@@ -67,7 +67,7 @@ Usage:
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
   hobot task stop TASK_ID
-  hobot schedule create --name NAME --task TASK_ID (--at RFC3339 | --every DURATION) -- PROMPT
+  hobot schedule create [--name NAME] [--task TASK_ID] (--at RFC3339 | --every DURATION) (--prompt PROMPT | -- PROMPT)
   hobot schedule list [--all]
   hobot schedule show ID [--details]
   hobot schedule pause|resume|run ID

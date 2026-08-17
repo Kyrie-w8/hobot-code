@@ -47,6 +47,32 @@ func addScheduleTarget(t *testing.T, cfg config, manager *taskManager) *task {
 	return addSettledSourceTask(t, manager, cfg)
 }
 
+func addScheduleBranchTarget(t *testing.T, cfg config, manager *taskManager, id, kind, parentID string) *task {
+	t.Helper()
+	dir := filepath.Join(cfg.TasksRoot, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	events := filepath.Join(dir, "events.jsonl")
+	stderr := filepath.Join(dir, "worker.stderr.log")
+	if err := os.WriteFile(events, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	current := &task{
+		manager: manager, dir: dir, events: events, stderr: stderr,
+		metadata:    taskMetadata{ID: id, Name: kind, Cwd: cfg.StateRoot, Status: statusStopped, CreatedAt: now, UpdatedAt: now, BranchKind: kind, ParentTaskID: parentID},
+		subscribers: make(map[uint64]chan taskEvent),
+	}
+	manager.mu.Lock()
+	manager.tasks[id] = current
+	manager.mu.Unlock()
+	return current
+}
+
 func TestScheduleCreateRedactsAndRejectsBranchTargets(t *testing.T) {
 	manager, schedules, cfg, _ := newScheduleTestManager(t)
 	target := addScheduleTarget(t, cfg, manager)
@@ -61,11 +87,17 @@ func TestScheduleCreateRedactsAndRejectsBranchTargets(t *testing.T) {
 	if err != nil || shown.Prompt != "report only the result" {
 		t.Fatalf("details did not reveal bounded prompt: %+v %v", shown, err)
 	}
-	target.mu.Lock()
-	target.metadata.BranchKind = "side"
-	target.mu.Unlock()
-	if _, err := schedules.create(createScheduleParams{TaskID: target.snapshot().ID, Every: "1m", Prompt: "no"}); err == nil || !strings.Contains(err.Error(), "main task") {
+	edited := addScheduleBranchTarget(t, cfg, manager, "111122223333444455556666", "edit", target.snapshot().ID)
+	if _, err := schedules.create(createScheduleParams{TaskID: edited.snapshot().ID, Every: "1m", Prompt: "edited main"}); err != nil {
+		t.Fatalf("edited main timeline was not schedule eligible: %v", err)
+	}
+	side := addScheduleBranchTarget(t, cfg, manager, "222233334444555566667777", "side", target.snapshot().ID)
+	if _, err := schedules.create(createScheduleParams{TaskID: side.snapshot().ID, Every: "1m", Prompt: "no"}); err == nil || !strings.Contains(err.Error(), "main task") {
 		t.Fatalf("side task schedule accepted: %v", err)
+	}
+	sideEdit := addScheduleBranchTarget(t, cfg, manager, "333344445555666677778888", "edit", side.snapshot().ID)
+	if _, err := schedules.create(createScheduleParams{TaskID: sideEdit.snapshot().ID, Every: "1m", Prompt: "no"}); err == nil || !strings.Contains(err.Error(), "main task") {
+		t.Fatalf("edited side task schedule accepted: %v", err)
 	}
 }
 

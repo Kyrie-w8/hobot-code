@@ -161,8 +161,8 @@ func (server *taskControlServer) dispatch(connection *net.UnixConn, req request)
 		return
 	}
 	metadata := server.current.snapshot()
-	if metadata.BranchKind != "" {
-		_ = writeJSON(connection, failure(req.ID, "forbidden", fmt.Errorf("side and edited tasks cannot manage schedules")))
+	if !server.current.manager.isScheduleMainTask(metadata) {
+		_ = writeJSON(connection, failure(req.ID, "forbidden", fmt.Errorf("only a main Agent timeline can manage schedules")))
 		return
 	}
 	manager := server.current.manager.schedules
@@ -265,7 +265,7 @@ func runTaskControlScheduleCLI(args []string) error {
 	if printRequestedScheduleHelp(args, os.Stdout) {
 		return nil
 	}
-	return runScheduleWithClient(taskControlClient{path: path}, args)
+	return runScheduleWithClient(taskControlClient{path: path}, args, taskID)
 }
 
 func (client taskControlClient) call(method string, params any) (json.RawMessage, error) {

@@ -1118,8 +1118,11 @@ Hobot Code 会对临时网关、限流和连接错误最多自动重试五次。
 终端等价命令如下：
 
 ```bash
-hobot schedule create --name "进度汇报" --task <task-id> --every 30m -- "检查当前任务，只有有新进展时汇报。"
-hobot schedule create --name "一次检查" --task <task-id> --at 2026-08-18T09:00:00+08:00 -- "检查模型转换结果并汇报。"
+# 在运行中的主 Agent 内，任务 ID 和名称均可自动确定
+hobot schedule create --every 30m --prompt "检查当前任务，只有有新进展时汇报。"
+
+# 在终端中管理其他任务时，显式指定任务 ID；名称可选
+hobot schedule create --name "一次检查" --task <task-id> --at 2026-08-18T09:00:00+08:00 --prompt "检查模型转换结果并汇报。"
 hobot schedule list --all
 hobot schedule show <schedule-id> --details
 hobot schedule pause <schedule-id>

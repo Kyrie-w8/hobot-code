@@ -482,7 +482,7 @@ func (manager *taskManager) sandboxCommand(metadata taskMetadata, agentArgs []st
 	args = append(args, "--ro-bind", filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"), filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"))
 	// Only this task's control directory is visible. The daemon root and other
 	// task control sockets remain masked, even for the same Unix uid.
-	if manager.cfg.TaskControlRoot != "" && metadata.BranchKind == "" {
+	if manager.cfg.TaskControlRoot != "" && manager.isScheduleMainTask(metadata) {
 		controlDir := filepath.Join(manager.cfg.TaskControlRoot, metadata.ID)
 		if !pathIsDirectory(controlDir) {
 			return "", nil, taskSandboxStatus{}, fmt.Errorf("task schedule control is unavailable")

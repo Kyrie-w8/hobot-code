@@ -24,6 +24,39 @@ func TestTaskAgentRoleAndActivityAreBounded(t *testing.T) {
 	}
 }
 
+func TestScheduleMainTaskFollowsEditedTimelineAncestry(t *testing.T) {
+	rootID := strings.Repeat("a", 24)
+	editID := strings.Repeat("b", 24)
+	nestedEditID := strings.Repeat("c", 24)
+	sideID := strings.Repeat("d", 24)
+	sideEditID := strings.Repeat("e", 24)
+	cycleID := strings.Repeat("f", 24)
+	manager := &taskManager{tasks: map[string]*task{
+		rootID:       {metadata: taskMetadata{ID: rootID}},
+		editID:       {metadata: taskMetadata{ID: editID, BranchKind: "edit", ParentTaskID: rootID}},
+		nestedEditID: {metadata: taskMetadata{ID: nestedEditID, BranchKind: "edit", ParentTaskID: editID}},
+		sideID:       {metadata: taskMetadata{ID: sideID, BranchKind: "side", ParentTaskID: rootID}},
+		sideEditID:   {metadata: taskMetadata{ID: sideEditID, BranchKind: "edit", ParentTaskID: sideID}},
+		cycleID:      {metadata: taskMetadata{ID: cycleID, BranchKind: "edit", ParentTaskID: cycleID}},
+	}}
+	for _, id := range []string{rootID, editID, nestedEditID} {
+		if !manager.isScheduleMainTask(manager.tasks[id].snapshot()) {
+			t.Fatalf("main timeline %s was not schedule eligible", id)
+		}
+	}
+	for _, metadata := range []taskMetadata{
+		manager.tasks[sideID].snapshot(),
+		manager.tasks[sideEditID].snapshot(),
+		manager.tasks[cycleID].snapshot(),
+		{ID: strings.Repeat("1", 24), BranchKind: "edit", ParentTaskID: strings.Repeat("2", 24)},
+		{ID: strings.Repeat("3", 24), BranchKind: "unknown"},
+	} {
+		if manager.isScheduleMainTask(metadata) {
+			t.Fatalf("non-main timeline was schedule eligible: %+v", metadata)
+		}
+	}
+}
+
 func TestTaskCurrentActivityTracksPublicLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
@@ -134,8 +167,47 @@ func TestLaunchedSideWorkerReceivesBoundCollaborationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "role=side\nparent=" + source.metadata.ID + "\nsource=" + source.metadata.ID + "\n"
+	want := "role=side\nparent=" + source.metadata.ID + "\nsource=" + source.metadata.ID + "\ntask=\ncontrol=\n"
 	if string(content) != want {
 		t.Fatalf("worker collaboration identity = %q, want %q", content, want)
+	}
+}
+
+func TestLaunchedEditedMainReceivesScheduleControlIdentity(t *testing.T) {
+	cfg := testConfig(t)
+	identityPath := filepath.Join(t.TempDir(), "worker-identity")
+	t.Setenv("HOBOT_CODE_TEST_AGENT_ENV_PATH", identityPath)
+	manager, err := newTaskManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := addSettledSourceTask(t, manager, cfg)
+	parentEvent := taskEvent{
+		Protocol: protocolVersion, Kind: "event", TaskID: source.metadata.ID, Sequence: 1,
+		Normalized: &normalizedEvent{Schema: eventSchemaVersion, Type: "user.message", Data: map[string]any{"text": "source prompt"}},
+	}
+	encoded, err := json.Marshal(parentEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source.events, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.fork(forkTaskParams{TaskID: source.metadata.ID, Kind: "edit", Sequence: 1, Prompt: "continue edited main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := manager.get(metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = current.stop() })
+	waitForStatus(t, current, statusIdle)
+	content, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "role=main\n") || !strings.Contains(string(content), "task="+metadata.ID+"\n") || !strings.Contains(string(content), "control=set\n") {
+		t.Fatalf("edited main worker did not receive schedule control identity: %q", content)
 	}
 }

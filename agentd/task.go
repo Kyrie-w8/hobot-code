@@ -1638,7 +1638,7 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		return fmt.Errorf("prepare private task session: %w", err)
 	}
 	controlSocket := ""
-	if metadata.BranchKind == "" {
+	if current.manager.isScheduleMainTask(metadata) {
 		controlSocket, err = current.startTaskControlSocket()
 		if err != nil {
 			return fmt.Errorf("start task schedule control: %w", err)
@@ -1797,6 +1797,37 @@ func taskAgentRole(metadata taskMetadata) string {
 		return "side"
 	}
 	return "main"
+}
+
+// An edited main timeline is still the user's main Agent. Walk edit ancestry
+// so an edit derived from a Side Agent cannot gain schedule control merely by
+// changing its immediate branch kind to "edit".
+func (manager *taskManager) isScheduleMainTask(metadata taskMetadata) bool {
+	seen := make(map[string]bool)
+	for depth := 0; depth < 128; depth++ {
+		if metadata.ID == "" || seen[metadata.ID] {
+			return false
+		}
+		seen[metadata.ID] = true
+		switch metadata.BranchKind {
+		case "":
+			return true
+		case "side":
+			return false
+		case "edit":
+			if metadata.ParentTaskID == "" {
+				return false
+			}
+			parent, err := manager.get(metadata.ParentTaskID)
+			if err != nil {
+				return false
+			}
+			metadata = parent.snapshot()
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func taskToolActivity(name string) string {

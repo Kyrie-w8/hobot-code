@@ -301,7 +301,7 @@ func (manager *scheduleManager) create(params createScheduleParams) (scheduleRec
 		return scheduleRecord{}, fmt.Errorf("target task does not exist")
 	}
 	metadata := current.snapshot()
-	if metadata.BranchKind != "" {
+	if !manager.tasks.isScheduleMainTask(metadata) {
 		return scheduleRecord{}, fmt.Errorf("schedules can only target a main task")
 	}
 	if metadata.ArchivedAt != nil {
@@ -563,7 +563,7 @@ func (manager *scheduleManager) advance(id string, now time.Time) {
 		return
 	}
 	metadata := current.snapshot()
-	if metadata.BranchKind != "" || metadata.ArchivedAt != nil {
+	if !manager.tasks.isScheduleMainTask(metadata) || metadata.ArchivedAt != nil {
 		manager.failLocked(id, "The target must be an available main task before this schedule can run.", now)
 		manager.mu.Unlock()
 		return

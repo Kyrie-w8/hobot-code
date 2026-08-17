@@ -5,7 +5,9 @@ if [ -n "${HOBOT_CODE_TEST_AGENT_ENV_PATH:-}" ]; then
   printf '%s\n' \
     "role=${HOBOT_CODE_AGENT_ROLE:-}" \
     "parent=${HOBOT_CODE_PARENT_TASK_ID:-}" \
-    "source=${HOBOT_CODE_SOURCE_TASK_ID:-}" > "$HOBOT_CODE_TEST_AGENT_ENV_PATH"
+    "source=${HOBOT_CODE_SOURCE_TASK_ID:-}" \
+    "task=${HOBOT_CODE_TASK_ID:-}" \
+    "control=${HOBOT_CODE_TASK_CONTROL_SOCKET:+set}" > "$HOBOT_CODE_TEST_AGENT_ENV_PATH"
 fi
 
 if [ "${1:-}" = "--offline" ] && [ "${2:-}" = "--list-models" ]; then

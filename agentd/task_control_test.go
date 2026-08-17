@@ -49,6 +49,40 @@ func TestTaskControlSocketRejectsSideTaskEvenWithAValidPeer(t *testing.T) {
 	}
 }
 
+func TestTaskControlSocketAllowsEditedMainButRejectsEditedSide(t *testing.T) {
+	manager, schedules, cfg, _ := newScheduleTestManager(t)
+	root := addScheduleTarget(t, cfg, manager)
+	edited := addScheduleBranchTarget(t, cfg, manager, "111122223333444455556666", "edit", root.snapshot().ID)
+	edited.mu.Lock()
+	edited.command = &exec.Cmd{}
+	edited.mu.Unlock()
+	path, err := edited.startTaskControlSocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(edited.stopTaskControlSocket)
+	if _, err := (taskControlClient{path: path}).call("schedule.create", createScheduleParams{Prompt: "check", Every: "1m"}); err != nil {
+		t.Fatalf("edited main task schedule control failed: %v", err)
+	}
+	if len(schedules.list(true)) != 1 {
+		t.Fatalf("edited main task did not create its schedule: %+v", schedules.list(true))
+	}
+
+	side := addScheduleBranchTarget(t, cfg, manager, "222233334444555566667777", "side", root.snapshot().ID)
+	sideEdit := addScheduleBranchTarget(t, cfg, manager, "333344445555666677778888", "edit", side.snapshot().ID)
+	sideEdit.mu.Lock()
+	sideEdit.command = &exec.Cmd{}
+	sideEdit.mu.Unlock()
+	sidePath, err := sideEdit.startTaskControlSocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sideEdit.stopTaskControlSocket)
+	if _, err := (taskControlClient{path: sidePath}).call("schedule.list", listScheduleParams{}); err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("edited side task schedule control was accepted: %v", err)
+	}
+}
+
 func TestRemoveEmptyTaskControlDirectoryFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	id := "0123456789abcdef01234567"
