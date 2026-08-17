@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, resolveShellSafety, sanitizedChildEnv, unboundedRemoteScanReasons } from "../extensions/rdk/runtime-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, processControlShellReasons, resolveShellSafety, sanitizedChildEnv, unboundedRemoteScanReasons } from "../extensions/rdk/runtime-safety.mjs";
 
 import {
   DEFAULT_LSP_CONFIG,
@@ -311,6 +311,42 @@ test("remote scans over shared storage require an explicit timeout", () => {
   const bounded = 'timeout 10s ssh openexplorer-builder "find /mnt/data/bin.wang -maxdepth 4 -name qwen3.yml 2>/dev/null | head -5"';
   assert.deepEqual(unboundedRemoteScanReasons(bounded), []);
   assert.deepEqual(unboundedRemoteScanReasons("ssh openexplorer-builder 'hostname'"), []);
+});
+
+test("process control policy distinguishes observation from mutation", () => {
+  for (const command of [
+    "kill -0 1234",
+    "kill -s 0 1234",
+    "kill --signal 0 1234",
+    "kill --signal=0 1234",
+    "kill -n 0 1234",
+    "kill -0 -- -1234",
+    "pkill -0 worker",
+    "killall -s 0 worker",
+    "kill -l 9",
+    "/bin/kill --help",
+  ]) {
+    assert.deepEqual(processControlShellReasons(command), [], `expected observation-only process command: ${command}`);
+  }
+
+  for (const command of [
+    "kill 1234",
+    "kill -TERM 1234",
+    "kill -9 1234",
+    "kill -s TERM 1234",
+    "kill -s \"$signal\" 1234",
+    "kill -0 -9 1234",
+    "kill --signal=0 --signal=TERM 1234",
+    "pkill -f worker",
+    "killall worker",
+    "kill -0 1234; kill 5678",
+    'kill -0 "$(command kill 5678)"',
+  ]) {
+    assert.deepEqual(processControlShellReasons(command), ["terminates running processes"], `expected mutating process command: ${command}`);
+  }
+
+  const statusProbe = 'tail -40 /home/bin.wang/adapt_runs/qwen3_4b_20260817/w8a8_qlg/pipeline.log; echo "===PID==="; kill -0 $(cat /home/bin.wang/adapt_runs/qwen3_4b_20260817/w8a8_qlg/pipeline.pid) 2>/dev/null && echo "RUNNING" || echo "STOPPED"';
+  assert.deepEqual(resolveShellSafety(statusProbe, "allow").approvalReasons, []);
 });
 
 test("resolved path checks fail closed on symbolic link cycles", async () => {

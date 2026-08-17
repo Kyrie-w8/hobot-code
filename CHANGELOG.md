@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.27.5
+
+### Fixed
+
+- Classify process-control commands by their effective operation instead of their executable name: literal signal-zero probes and signal-list/help queries are observation-only in Developer mode, while terminating, dynamic, mixed, and ambiguous forms remain approval-gated.
+
 ## 0.27.4
 
 ### Fixed

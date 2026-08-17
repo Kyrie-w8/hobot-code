@@ -100,6 +100,73 @@ export async function inspectResolvedPath(cwd, requestedPath) {
   };
 }
 
+const PROCESS_CONTROL_COMMAND = /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|()]+\/)?(?:kill|killall|pkill)\b/gi;
+
+function leadingShellWords(value, limit = 64) {
+  const words = [];
+  let index = 0;
+  while (index < value.length && words.length < limit) {
+    while (/\s/.test(value[index] ?? "")) index += 1;
+    if (index >= value.length || /[;&|()\n]/.test(value[index])) break;
+    let word = "";
+    let quote = "";
+    while (index < value.length) {
+      const char = value[index];
+      if (!quote && /[\s;&|()\n]/.test(char)) break;
+      index += 1;
+      if (quote) {
+        if (char === quote) quote = "";
+        else if (char === "\\" && quote === '"' && index < value.length) word += value[index++];
+        else word += char;
+      } else if (char === "'" || char === '"') {
+        quote = char;
+      } else if (char === "\\" && index < value.length) {
+        word += value[index++];
+      } else {
+        word += char;
+      }
+    }
+    words.push(word);
+  }
+  return words;
+}
+
+function processControlIsObservation(argumentText) {
+  const words = leadingShellWords(argumentText);
+  const first = words[0] ?? "";
+  if (["-l", "-L", "--list", "--help", "--version"].includes(first)) return true;
+  let observedSignal = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--") break;
+    if (word === "-s" || word === "--signal" || word === "-n") {
+      const signal = words[++index];
+      if (signal !== "0") return false;
+      observedSignal = true;
+      continue;
+    }
+    if (word === "-0" || word === "--signal=0") {
+      observedSignal = true;
+      continue;
+    }
+    // Only a small, explicit signal-zero grammar is observation-only. Any
+    // other option may select a real signal or change process-control
+    // semantics, so ambiguous forms stay behind approval.
+    if (word.startsWith("-")) return false;
+  }
+  return observedSignal;
+}
+
+export function processControlShellReasons(command) {
+  const value = String(command ?? "");
+  for (const match of value.matchAll(PROCESS_CONTROL_COMMAND)) {
+    if (!processControlIsObservation(value.slice((match.index ?? 0) + match[0].length))) {
+      return ["terminates running processes"];
+    }
+  }
+  return [];
+}
+
 export function destructiveShellReasons(command) {
   const value = String(command ?? "");
   const checks = [
@@ -111,7 +178,6 @@ export function destructiveShellReasons(command) {
     [/\btee(?:\s+-a)?\s+(?:\s*['\"]?)\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "writes to a protected system path"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?systemctl\s+(?:disable|halt|mask|poweroff|reboot|stop)\b/i, "changes or stops a system service"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:halt|poweroff|reboot|shutdown)\b/i, "stops or reboots the board"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:kill|killall|pkill)\b/i, "terminates running processes"],
     [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:apt(?:-get)?|dnf|yum)\s+(?:autoremove|purge|remove)\b/i, "removes installed software"],
   ];
   const highRiskChecks = [
@@ -143,7 +209,8 @@ export function destructiveShellReasons(command) {
   ];
   return [...new Set([...checks, ...highRiskChecks]
     .filter(([pattern]) => pattern.test(value))
-    .map(([_pattern, reason]) => reason))];
+    .map(([_pattern, reason]) => reason)
+    .concat(processControlShellReasons(value)))];
 }
 
 export function networkShellReasons(command) {
