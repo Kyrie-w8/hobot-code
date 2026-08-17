@@ -61,7 +61,7 @@ export type Connection = {
 };
 export type BoardUpdateCheck = {status: 'current' | 'available' | 'source-older'; installedVersion?: string; availableVersion: string; message: string};
 export type BoardUpdateResult = {changed: boolean; previousVersion: string; installedVersion: string; message: string; connection: Connection};
-export type StudioUpdateCheck = {status: 'current' | 'available' | 'unsupported'; installedVersion: string; availableVersion?: string; message: string; releaseUrl?: string};
+export type StudioUpdateCheck = {status: 'current' | 'ahead' | 'available' | 'unsupported'; installedVersion: string; availableVersion?: string; message: string; releaseUrl?: string};
 
 export type ThermalZone = {name: string; celsius: number};
 export type BPUCoreInfo = {index: number; name: string; utilizationPercent: number; currentFrequencyHz?: number; minimumFrequencyHz?: number; maximumFrequencyHz?: number};

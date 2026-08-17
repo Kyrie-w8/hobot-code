@@ -1069,7 +1069,12 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(workflow, /test "\$\{GITHUB_REF_NAME\}" = "v\$\{version\}"/);
   assert.match(workflow, /environment: production/);
   assert.match(workflow, /MACOS_CERTIFICATE_BASE64/);
+  assert.match(workflow, /MACOS_CERTIFICATE_PASSWORD/);
+  assert.match(workflow, /MACOS_SIGNING_IDENTITY/);
   assert.match(workflow, /APPLE_NOTARY_KEY_BASE64/);
+  assert.match(workflow, /APPLE_NOTARY_KEY_ID/);
+  assert.match(workflow, /APPLE_NOTARY_ISSUER_ID/);
+  assert.match(workflow, /macOS release credentials are incomplete/);
   assert.match(workflow, /HOBOT_CODE_REQUIRE_SIGNED_RELEASE: "1"/);
   assert.match(workflow, /--draft/);
   assert.match(workflow, /gh release download "v\$version"/);

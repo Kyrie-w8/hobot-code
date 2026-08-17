@@ -40,7 +40,7 @@ func TestCheckStudioUpdateHandlesCurrentPrereleaseAndUnsupportedTarget(t *testin
 	client := releaseClient(t, "0.27.0", true, true)
 
 	current, err := checkStudioUpdate(context.Background(), client, "https://api.example.test/latest", "0.27.0", "darwin", "arm64")
-	if err != nil || current.Status != "current" || current.AvailableVersion != "" {
+	if err != nil || current.Status != "current" || current.AvailableVersion != "0.27.0" {
 		t.Fatalf("current release result = %+v, err = %v", current, err)
 	}
 	upgrade, err := checkStudioUpdate(context.Background(), client, "https://api.example.test/latest", "0.27.0-beta.1", "darwin", "arm64")
@@ -50,6 +50,21 @@ func TestCheckStudioUpdateHandlesCurrentPrereleaseAndUnsupportedTarget(t *testin
 	unsupported, err := checkStudioUpdate(context.Background(), client, "https://api.example.test/latest", "0.27.0", "linux", "arm64")
 	if err != nil || unsupported.Status != "unsupported" {
 		t.Fatalf("unsupported target result = %+v, err = %v", unsupported, err)
+	}
+}
+
+func TestCheckStudioUpdateDistinguishesBuildAheadOfPublicRelease(t *testing.T) {
+	client := releaseClient(t, "0.21.0", true, true)
+
+	check, err := checkStudioUpdate(context.Background(), client, "https://api.example.test/latest", "0.28.0", "darwin", "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check.Status != "ahead" || check.AvailableVersion != "0.21.0" {
+		t.Fatalf("unexpected ahead result: %+v", check)
+	}
+	if !strings.Contains(check.Message, "newer than the latest public stable release") {
+		t.Fatalf("ahead result is not actionable: %q", check.Message)
 	}
 }
 

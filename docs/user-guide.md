@@ -957,6 +957,7 @@ hobot update --version <version> --allow-downgrade
 Mac Studio 右上角的版本号会打开 **Version & updates**。该页面独立检查两个发行面：
 
 - **Studio for Mac** 从固定的 Hobot Code GitHub stable Release 检查新版本。只有版本化 ARM64 DMG、同名 SHA-256 文件和官方 Release 地址同时匹配时才显示下载按钮；点击后由默认浏览器直接下载对应 DMG。安装仍由 macOS 和 Gatekeeper 控制，更新 Studio 不会停止板端任务。
+- 本地开发版高于 GitHub 最新公开稳定版时会显示 **Newer than the public release**，并同时标明公开版本号；这表示当前没有可供升级的公开 DMG，不等同于该开发构建已经正式发布。
 - **Board service** 通过当前 SSH 连接调用板端事务更新。存在活动任务时只阻止板端按钮，不影响 Studio 更新。
 - 两侧都有新版本时显示 **Update board, then Studio**。它先完成板端校验、更新和自动重连，再下载 Studio DMG；活动任务结束前该按钮不可用。
 

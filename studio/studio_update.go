@@ -129,9 +129,17 @@ func checkStudioUpdate(ctx context.Context, client *http.Client, endpoint, insta
 		return result, fmt.Errorf("check Studio update: release version %q is invalid", release.TagName)
 	}
 	availableText := strings.TrimPrefix(release.TagName, "v")
-	if compareStudioVersions(available, installedVersion) <= 0 {
+	comparison := compareStudioVersions(available, installedVersion)
+	if comparison < 0 {
+		result.Status = "ahead"
+		result.AvailableVersion = availableText
+		result.Message = fmt.Sprintf("This Studio is newer than the latest public stable release (v%s).", availableText)
+		return result, nil
+	}
+	if comparison == 0 {
 		result.Status = "current"
-		result.Message = "Studio is up to date."
+		result.AvailableVersion = availableText
+		result.Message = "Studio matches the latest public stable release."
 		return result, nil
 	}
 	result.AvailableVersion = availableText

@@ -69,5 +69,7 @@ test('update center keeps Studio and board updates independent', async () => {
   assert.match(dialog, /Studio updates do not stop them/);
   assert.match(dialog, /Update board, then Studio/);
   assert.match(dialog, /activeTasks > 0/);
+  assert.match(dialog, /studioCheck\?\.status === 'ahead'/);
+  assert.match(dialog, /Newer than the public release/);
   assert.doesNotMatch(dialog, /api\.openExternalURL\(studioCheck\.releaseUrl/);
 });

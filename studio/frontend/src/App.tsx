@@ -1815,7 +1815,7 @@ function AboutDialog({appVersion, connection, onInstall, onClose}: {appVersion: 
     }
   };
 
-  const studioTone = studioFailure ? 'failed' : studioCheck?.status === 'available' ? 'available' : studioCheck ? 'current' : 'checking';
+  const studioTone = studioFailure ? 'failed' : studioCheck?.status === 'available' ? 'available' : studioCheck?.status === 'ahead' ? 'ahead' : studioCheck ? 'current' : 'checking';
   const boardTone = boardFailure ? 'failed' : boardCheck?.status === 'available' ? 'available' : boardCheck ? 'current' : 'checking';
   const bothAvailable = studioCheck?.status === 'available' && boardCheck?.status === 'available';
   const busy = checkingStudio || checkingBoard || openingStudio || installingBoard;
@@ -1824,7 +1824,7 @@ function AboutDialog({appVersion, connection, onInstall, onClose}: {appVersion: 
     <div className="about-mark">H</div>
     <section className="update-section">
       <div className="update-section-heading"><span><strong>Studio for Mac</strong><small>Installed v{appVersion || 'unknown'}</small></span>{studioCheck?.availableVersion && <code>v{studioCheck.availableVersion}</code>}</div>
-      <div className={`board-update-state ${studioTone}`}>{checkingStudio || openingStudio ? <LoaderCircle size={17} className="spin" /> : studioFailure ? <AlertTriangle size={17} /> : studioCheck?.status === 'available' ? <Download size={17} /> : <Check size={17} />}<span><strong>{openingStudio ? 'Opening signed release' : checkingStudio ? 'Checking Studio updates' : studioFailure ? 'Studio update unavailable' : studioCheck?.status === 'available' ? 'A Studio update is ready' : studioCheck ? 'Studio is up to date' : 'Not checked'}</strong><small>{studioFailure || studioSuccess || studioCheck?.message || 'Checks the official stable release without changing the board.'}</small></span></div>
+      <div className={`board-update-state ${studioTone}`}>{checkingStudio || openingStudio ? <LoaderCircle size={17} className="spin" /> : studioFailure ? <AlertTriangle size={17} /> : studioCheck?.status === 'available' ? <Download size={17} /> : studioCheck?.status === 'ahead' ? <Info size={17} /> : <Check size={17} />}<span><strong>{openingStudio ? 'Opening signed release' : checkingStudio ? 'Checking Studio updates' : studioFailure ? 'Studio update unavailable' : studioCheck?.status === 'available' ? 'A Studio update is ready' : studioCheck?.status === 'ahead' ? 'Newer than the public release' : studioCheck ? 'Studio is up to date' : 'Not checked'}</strong><small>{studioFailure || studioSuccess || studioCheck?.message || 'Checks the official stable release without changing the board.'}</small></span></div>
       <div className="update-actions">{studioCheck?.status === 'available' && <button className="primary-button" disabled={busy} onClick={() => void openStudioUpdate()}>{openingStudio ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}Download v{studioCheck.availableVersion}</button>}<button className="secondary-button" disabled={busy} onClick={() => void checkStudio()}><RefreshCw size={14} className={checkingStudio ? 'spin' : ''} />Check Studio</button></div>
     </section>
     <section className="update-section">

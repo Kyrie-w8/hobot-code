@@ -95,6 +95,27 @@ jobs:
           test "${GITHUB_REF_NAME}" = "v${version}"
           node scripts/validate-version.mjs
 
+      - name: Validate macOS release credentials
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          missing=()
+          [ -n "$MACOS_CERTIFICATE_BASE64" ] || missing+=(MACOS_CERTIFICATE_BASE64)
+          [ -n "$MACOS_CERTIFICATE_PASSWORD" ] || missing+=(MACOS_CERTIFICATE_PASSWORD)
+          [ -n "$MACOS_SIGNING_IDENTITY" ] || missing+=(MACOS_SIGNING_IDENTITY)
+          [ -n "$APPLE_NOTARY_KEY_BASE64" ] || missing+=(APPLE_NOTARY_KEY_BASE64)
+          [ -n "$APPLE_NOTARY_KEY_ID" ] || missing+=(APPLE_NOTARY_KEY_ID)
+          [ -n "$APPLE_NOTARY_ISSUER_ID" ] || missing+=(APPLE_NOTARY_ISSUER_ID)
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error title=macOS release credentials are incomplete::Configure these production environment secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
       - name: Import Developer ID certificate
         env:
           MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}

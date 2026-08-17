@@ -852,6 +852,7 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .board-update-state { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--chrome); color: var(--text-muted); }
 .board-update-state.available { border-color: rgba(101, 191, 167, 0.28); background: rgba(101, 191, 167, 0.07); color: var(--accent-strong); }
 .board-update-state.current { border-color: rgba(120, 189, 136, 0.24); background: rgba(120, 189, 136, 0.06); color: var(--green); }
+.board-update-state.ahead { border-color: rgba(104, 162, 210, 0.25); background: rgba(104, 162, 210, 0.07); color: var(--blue); }
 .board-update-state.failed { border-color: rgba(220, 125, 120, 0.27); background: rgba(220, 125, 120, 0.07); color: var(--red); }
 .board-update-state.checking { color: var(--blue); }
 .board-update-state > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.2
+
+### Fixed
+
+- Distinguish a locally installed Studio build that is newer than GitHub's latest public stable release from a genuinely current public release, so development builds no longer misleadingly report that they are up to date.
+- Fail macOS release jobs early with one actionable list of missing Developer ID signing and Apple notarization secrets instead of an opaque certificate-import failure.
+
 ## 0.28.1
 
 ### Fixed
