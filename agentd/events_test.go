@@ -24,6 +24,16 @@ func TestAssistantMessageFailureIsNormalizedAndBounded(t *testing.T) {
 	}
 }
 
+func TestScheduledUserPromptPreservesOnlyBoundedOriginMetadata(t *testing.T) {
+	normalized := normalizeWorkerEvent(json.RawMessage(`{"type":"hobot_user_prompt","message":"check","source":"schedule","scheduleId":"0123456789abcdef01234567","private":"discard"}`))
+	if normalized == nil || normalized.Type != "user.message" || normalized.Data["source"] != "schedule" || normalized.Data["scheduleId"] != "0123456789abcdef01234567" {
+		t.Fatalf("scheduled prompt origin was not preserved: %+v", normalized)
+	}
+	if _, present := normalized.Data["private"]; present {
+		t.Fatalf("unexpected prompt metadata was retained: %+v", normalized.Data)
+	}
+}
+
 func TestSchemaFourAddsStableItemSemanticsAndBoundedToolDetails(t *testing.T) {
 	command := strings.Repeat("x", maximumEventPreviewText+512)
 	normalized := normalizeWorkerEvent(json.RawMessage(`{"type":"tool_execution_start","toolCallId":"tool-1","toolName":"bash","args":{"command":"` + command + `","cwd":"/root/project"}}`))

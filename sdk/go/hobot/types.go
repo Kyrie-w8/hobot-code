@@ -586,6 +586,37 @@ type TaskPage struct {
 	NextCursor string `json:"nextCursor,omitempty"`
 }
 
+// Schedule is a board-owned recurring prompt. Prompt content is intentionally
+// omitted unless the caller explicitly requests schedule details.
+type Schedule struct {
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	TaskID           string     `json:"taskId"`
+	Prompt           string     `json:"prompt,omitempty"`
+	At               *time.Time `json:"at,omitempty"`
+	Every            string     `json:"every,omitempty"`
+	Enabled          bool       `json:"enabled"`
+	Status           string     `json:"status"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+	NextRun          *time.Time `json:"nextRun,omitempty"`
+	LastRun          *time.Time `json:"lastRun,omitempty"`
+	RunCount         int        `json:"runCount"`
+	LastResult       string     `json:"lastResult,omitempty"`
+	Pending          bool       `json:"pending,omitempty"`
+	InFlight         bool       `json:"inFlight,omitempty"`
+	DispatchState    string     `json:"dispatchState,omitempty"`
+	DispatchSequence uint64     `json:"dispatchSequence,omitempty"`
+}
+
+type CreateScheduleRequest struct {
+	Name   string `json:"name"`
+	TaskID string `json:"taskId"`
+	Prompt string `json:"prompt"`
+	At     string `json:"at,omitempty"`
+	Every  string `json:"every,omitempty"`
+}
+
 type EventPage struct {
 	Events           []Event `json:"events"`
 	NextAfter        uint64  `json:"nextAfter,omitempty"`

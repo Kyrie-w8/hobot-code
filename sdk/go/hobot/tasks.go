@@ -8,6 +8,16 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	maximumSDKScheduleCount  = 100
+	maximumSDKScheduleName   = 96
+	maximumSDKSchedulePrompt = 16 * 1024
+	maximumSDKScheduleResult = 240
 )
 
 func (client *Client) Ping(ctx context.Context) (DaemonInfo, error) {
@@ -120,6 +130,171 @@ func (client *Client) Task(ctx context.Context, taskID string) (Task, error) {
 	var task Task
 	err := client.Call(ctx, "task.get", map[string]any{"taskId": taskID}, &task)
 	return task, err
+}
+
+func (client *Client) CreateSchedule(ctx context.Context, request CreateScheduleRequest) (Schedule, error) {
+	var schedule Schedule
+	if err := validateCreateScheduleRequest(request); err != nil {
+		return schedule, err
+	}
+	err := client.Call(ctx, "schedule.create", request, &schedule)
+	if err == nil {
+		err = validateSchedule(schedule)
+	}
+	return schedule, err
+}
+
+func (client *Client) Schedules(ctx context.Context, includeAll bool) ([]Schedule, error) {
+	var schedules []Schedule
+	err := client.Call(ctx, "schedule.list", map[string]bool{"all": includeAll}, &schedules)
+	if err == nil {
+		err = validateSchedules(schedules)
+	}
+	return schedules, err
+}
+
+func (client *Client) Schedule(ctx context.Context, id string, details bool) (Schedule, error) {
+	var schedule Schedule
+	if !sdkTaskIDPattern.MatchString(id) {
+		return schedule, fmt.Errorf("schedule ID is invalid")
+	}
+	err := client.Call(ctx, "schedule.show", map[string]any{"id": id, "details": details}, &schedule)
+	if err == nil {
+		err = validateSchedule(schedule)
+	}
+	return schedule, err
+}
+
+func (client *Client) PauseSchedule(ctx context.Context, id string) (Schedule, error) {
+	var schedule Schedule
+	if !sdkTaskIDPattern.MatchString(id) {
+		return schedule, fmt.Errorf("schedule ID is invalid")
+	}
+	err := client.Call(ctx, "schedule.pause", map[string]string{"id": id}, &schedule)
+	if err == nil {
+		err = validateSchedule(schedule)
+	}
+	return schedule, err
+}
+
+func (client *Client) ResumeSchedule(ctx context.Context, id string) (Schedule, error) {
+	var schedule Schedule
+	if !sdkTaskIDPattern.MatchString(id) {
+		return schedule, fmt.Errorf("schedule ID is invalid")
+	}
+	err := client.Call(ctx, "schedule.resume", map[string]string{"id": id}, &schedule)
+	if err == nil {
+		err = validateSchedule(schedule)
+	}
+	return schedule, err
+}
+
+func (client *Client) DeleteSchedule(ctx context.Context, id string) error {
+	if !sdkTaskIDPattern.MatchString(id) {
+		return fmt.Errorf("schedule ID is invalid")
+	}
+	return client.Call(ctx, "schedule.delete", map[string]string{"id": id}, nil)
+}
+
+func (client *Client) RunSchedule(ctx context.Context, id string) (Schedule, error) {
+	var schedule Schedule
+	if !sdkTaskIDPattern.MatchString(id) {
+		return schedule, fmt.Errorf("schedule ID is invalid")
+	}
+	err := client.Call(ctx, "schedule.run-now", map[string]string{"id": id}, &schedule)
+	if err == nil {
+		err = validateSchedule(schedule)
+	}
+	return schedule, err
+}
+
+func validateCreateScheduleRequest(request CreateScheduleRequest) error {
+	name := strings.TrimSpace(request.Name)
+	if !sdkTaskIDPattern.MatchString(request.TaskID) || len(request.Prompt) == 0 || len(request.Prompt) > maximumSDKSchedulePrompt || !utf8.ValidString(request.Prompt) {
+		return fmt.Errorf("schedule task ID or prompt is invalid")
+	}
+	if len(name) > maximumSDKScheduleName || !utf8.ValidString(name) || strings.ContainsAny(name, "\r\n") {
+		return fmt.Errorf("schedule name is invalid")
+	}
+	if (strings.TrimSpace(request.At) == "") == (strings.TrimSpace(request.Every) == "") {
+		return fmt.Errorf("provide exactly one schedule cadence")
+	}
+	return nil
+}
+
+func validateSchedules(schedules []Schedule) error {
+	if len(schedules) > maximumSDKScheduleCount {
+		return fmt.Errorf("board returned too many schedules")
+	}
+	seen := make(map[string]bool, len(schedules))
+	for _, schedule := range schedules {
+		if err := validateSchedule(schedule); err != nil {
+			return fmt.Errorf("board returned invalid schedule: %w", err)
+		}
+		if seen[schedule.ID] {
+			return fmt.Errorf("board returned duplicate schedule ID")
+		}
+		seen[schedule.ID] = true
+	}
+	return nil
+}
+
+func validateSchedule(schedule Schedule) error {
+	if !sdkTaskIDPattern.MatchString(schedule.ID) || !sdkTaskIDPattern.MatchString(schedule.TaskID) {
+		return fmt.Errorf("invalid schedule identity")
+	}
+	if len(schedule.Name) == 0 || len(schedule.Name) > maximumSDKScheduleName || !utf8.ValidString(schedule.Name) || strings.ContainsAny(schedule.Name, "\r\n") {
+		return fmt.Errorf("invalid schedule name")
+	}
+	if len(schedule.Prompt) > maximumSDKSchedulePrompt || !utf8.ValidString(schedule.Prompt) || len(schedule.LastResult) > maximumSDKScheduleResult || !utf8.ValidString(schedule.LastResult) {
+		return fmt.Errorf("invalid schedule text")
+	}
+	if (schedule.At != nil) == (schedule.Every != "") || schedule.CreatedAt.IsZero() || schedule.UpdatedAt.IsZero() || schedule.RunCount < 0 {
+		return fmt.Errorf("invalid schedule metadata")
+	}
+	if schedule.At != nil && schedule.At.IsZero() || schedule.NextRun != nil && schedule.NextRun.IsZero() || schedule.LastRun != nil && schedule.LastRun.IsZero() {
+		return fmt.Errorf("invalid schedule time")
+	}
+	if schedule.Every != "" {
+		duration, err := time.ParseDuration(schedule.Every)
+		if err != nil || duration < time.Minute || duration > 30*24*time.Hour {
+			return fmt.Errorf("invalid schedule interval")
+		}
+	}
+	if !oneOfScheduleValue(schedule.Status, "active", "paused", "completed", "failed") || !oneOfScheduleValue(schedule.DispatchState, "", "claimed", "dispatched", "completed", "failed", "stopped", "uncertain") {
+		return fmt.Errorf("invalid schedule state")
+	}
+	if schedule.Pending && (!schedule.Enabled || schedule.Status != "active") || schedule.InFlight && !schedule.Enabled && schedule.Status != "completed" && schedule.Status != "paused" {
+		return fmt.Errorf("inconsistent schedule state")
+	}
+	switch schedule.Status {
+	case "active":
+		if !schedule.Enabled || schedule.NextRun == nil {
+			return fmt.Errorf("invalid active schedule")
+		}
+	case "paused":
+		if schedule.Enabled || schedule.Pending {
+			return fmt.Errorf("invalid paused schedule")
+		}
+	case "completed":
+		if schedule.At == nil || schedule.Enabled || schedule.Pending {
+			return fmt.Errorf("invalid completed schedule")
+		}
+	case "failed":
+		if schedule.Enabled || schedule.Pending || schedule.InFlight {
+			return fmt.Errorf("invalid failed schedule")
+		}
+	}
+	return nil
+}
+
+func oneOfScheduleValue(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func (client *Client) StartTask(ctx context.Context, request StartTaskRequest) (Task, error) {

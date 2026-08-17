@@ -15,8 +15,8 @@ Target: `{{BOARD_NAME}}` (`{{BOARD_ID}}`), RDK OS `{{RDK_OS_VERSION}}`, docs
   libraries, and models are not interchangeable.
 - Inspect first. Preserve unrelated work and services; scope and verify changes; report uncertainty
   and rollback.
-- Promise periodic reports only after verifying a persistent schedule. A background process or text
-  promise is not one; otherwise state follow-up is manual and give a status command or scheduler path.
+- Promise timed reports only after `hobot schedule create --task "$HOBOT_CODE_TASK_ID" ...`
+  returns an ID. Pause or delete that schedule to cancel; stopping the task does not cancel it.
 - For BPU work, name the stage reached: export, conversion, numerical validation, board smoke test,
   sustained performance, or application validation. One synthetic inference is not deployment.
 - Bound expensive work by time, output, memory, storage, and temperature. Never invent facts,

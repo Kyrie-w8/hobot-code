@@ -8,6 +8,10 @@
 
 每个连接只提交一个请求。普通调用收到一个响应后结束；订阅调用先收到响应，再持续收到事件。请求最大 2 MiB，响应最大 8 MiB，Prompt 最大 256 KiB。未知版本、方法、字段或超限数据均拒绝。
 
+计划调度是 `agentd` 的唯一权威，不由 Studio、CLI 或 cron 在客户端计时。计划状态保存在独立私有文件中，临时文件 fsync 后原子替换；读取拒绝符号链接、非当前用户所有、宽松权限、超限、未知字段、重复 ID 或无效状态组合。到期 occurrence 必须在推进 `nextRun` 并写入 durable claim 后才可派发；板端重启时已 claim 的轮次标为不确定且不自动重放，错过的 recurring occurrence 最多合并一次。
+
+运行中的 Pi worker 不会获得主 socket。每轮启动时 `agentd` 只在短路径私有目录创建当前 task 专属 `0600` Unix socket，并以 `HOBOT_CODE_TASK_CONTROL_SOCKET` 与 `HOBOT_CODE_TASK_ID` 注入。该 socket 校验 peer UID，只允许 `schedule.*`，并强制目标为该普通主任务；sandbox 只读挂载该任务目录，不能看到 daemon socket 或其他任务控制目录。worker 退出后 socket 即关闭。外部 CLI、SDK 和 Studio 始终使用主 socket。
+
 请求：
 
 ```json
@@ -75,6 +79,12 @@
 | `workspace.writes` | `{}` | 列出当前用户正在修改工作区的 Agent 轮次 |
 | `workspace.cleanup` | `{taskId}` | 显式清理无对话引用、无未提交内容、无新提交的受管 worktree |
 | `daemon.shutdown` | `{force?: boolean}` | 请求服务停止；有活跃任务时必须显式 `force` |
+| `schedule.create` | `{name?, taskId, prompt, at? | every?}` | 在已有普通主任务上创建一次性或固定间隔的持久计划；`at` 必须为带时区的未来 RFC3339，`every` 为 1 分钟至 30 天 |
+| `schedule.list` | `{all?}` | 返回脱敏计划列表，永不包含 Prompt |
+| `schedule.show` | `{id, details?}` | 返回一个计划；仅 `details:true` 返回 Prompt |
+| `schedule.pause` / `schedule.resume` | `{id}` | 暂停或恢复未来触发；已完成的一次性计划不可恢复 |
+| `schedule.run-now` | `{id}` | 请求一轮立即执行；忙碌任务只保留一个待执行 occurrence |
+| `schedule.delete` | `{id}` | 删除未来计划，不中断已经开始的本轮 |
 | `task.start` | `{name?, cwd, prompt, images?, approve?, model?, permissionMode?, workspaceMode?, sandboxMode?, networkMode?}` | 新任务元数据；`workspaceMode` 为 `shared` 或 `worktree`；`sandboxMode` 为 `review`、`workspace`、`system` 或 `off`；`networkMode` 为 `shared`、`model-only` 或 `offline`；无 worker 槽时返回 `queued` 任务 |
 | `task.list` | `{}` | 未归档任务元数据，按创建时间倒序 |
 | `task.page` | `{cursor?, limit?, includeArchived?}` | 有界任务分页与下一游标 |

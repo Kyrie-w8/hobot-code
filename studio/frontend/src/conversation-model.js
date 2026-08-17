@@ -62,7 +62,9 @@ export function buildConversation(events) {
             mimeType: typeof item.mimeType === 'string' ? item.mimeType : 'image',
           }))
           : [];
-        items.push({kind: 'user', key: `user-${event.sequence}`, sequence: event.sequence, time: event.time, text, attachments});
+        const source = data.source === 'schedule' ? 'schedule' : 'user';
+        const scheduleId = source === 'schedule' && typeof data.scheduleId === 'string' ? data.scheduleId : '';
+        items.push({kind: 'user', key: `user-${event.sequence}`, sequence: event.sequence, time: event.time, text, attachments, source, scheduleId});
       }
       continue;
     }

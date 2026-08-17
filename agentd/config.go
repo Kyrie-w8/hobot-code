@@ -32,6 +32,8 @@ type config struct {
 	WorktreesRoot         string
 	AttachCursorRoot      string
 	SupportRoot           string
+	SchedulesRoot         string
+	TaskControlRoot       string
 	QualificationPath     string
 	SessionDir            string
 	SocketPath            string
@@ -144,6 +146,10 @@ func loadConfig() (config, error) {
 	if len(modelEgressSocket) > 100 {
 		return config{}, fmt.Errorf("model egress socket path is too long: %s", modelEgressSocket)
 	}
+	taskControlRoot := filepath.Join(socketRoot, "task-control")
+	if len(filepath.Join(taskControlRoot, strings.Repeat("0", 24), "c.sock")) > 100 {
+		taskControlRoot = filepath.Join("/tmp", fmt.Sprintf("hobot-code-control-%d", os.Getuid()))
+	}
 	droboticsBaseURL, err := normalizeModelEgressBaseURL(os.Getenv("ANTHROPIC_BASE_URL"))
 	if err != nil {
 		return config{}, err
@@ -186,6 +192,8 @@ func loadConfig() (config, error) {
 		WorktreesRoot:         filepath.Join(agentdRoot, "worktrees"),
 		AttachCursorRoot:      filepath.Join(agentdRoot, "attach-cursors"),
 		SupportRoot:           filepath.Join(agentdRoot, "support"),
+		SchedulesRoot:         filepath.Join(agentdRoot, "schedules"),
+		TaskControlRoot:       filepath.Clean(taskControlRoot),
 		QualificationPath:     filepath.Join(agentdRoot, "model-qualification.json"),
 		SessionDir:            filepath.Clean(sessionDir),
 		SocketPath:            filepath.Clean(socketPath),
@@ -291,7 +299,7 @@ func preparePaths(cfg config) error {
 	if err := prepareUserPaths(cfg); err != nil {
 		return err
 	}
-	paths := []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.WorktreesRoot, cfg.AttachCursorRoot, cfg.SupportRoot, cfg.SessionDir, gatewayCredentialDirectory(cfg), filepath.Dir(cfg.SocketPath)}
+	paths := []string{cfg.StateRoot, cfg.AgentdRoot, cfg.TasksRoot, cfg.WorktreesRoot, cfg.AttachCursorRoot, cfg.SupportRoot, cfg.SchedulesRoot, cfg.SessionDir, cfg.TaskControlRoot, gatewayCredentialDirectory(cfg), filepath.Dir(cfg.SocketPath)}
 	if cfg.ModelEgressRoot != "" {
 		paths = append(paths, cfg.ModelEgressRoot)
 	}

@@ -150,6 +150,8 @@ func diagnosticPrivateTargets(cfg config) []diagnosticPrivateTarget {
 		{name: "state-directory", path: cfg.StateRoot, directory: true},
 		{name: "runtime-directory", path: cfg.AgentdRoot, directory: true},
 		{name: "task-directory", path: cfg.TasksRoot, directory: true},
+		{name: "schedule-directory", path: cfg.SchedulesRoot, directory: true},
+		{name: "task-control-directory", path: cfg.TaskControlRoot, directory: true},
 		{name: "worktree-directory", path: cfg.WorktreesRoot, directory: true},
 		{name: "attach-cursor-directory", path: cfg.AttachCursorRoot, directory: true},
 		{name: "support-directory", path: cfg.SupportRoot, directory: true},

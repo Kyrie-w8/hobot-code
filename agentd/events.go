@@ -99,7 +99,7 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 		}
 		normalizedType = "user.message"
 		data["text"] = message
-		copyEventFields(data, event, "attachments")
+		copyEventFields(data, event, "attachments", "source", "scheduleId")
 	case "hobot_task_queued":
 		normalizedType = "task.queued"
 		copyEventFields(data, event, "queuedAt", "operation")

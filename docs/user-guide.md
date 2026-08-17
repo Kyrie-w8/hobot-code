@@ -1107,9 +1107,28 @@ Hobot Code 会对临时网关、限流和连接错误最多自动重试五次。
 
 ### 20.15 Agent 说会定时汇报，是否真的会执行
 
-当前版本没有持久定时任务调度器。Agent 说“每 30 分钟汇报一次”只是文本承诺，不会在对话结束后自动唤醒，也不会创建后台计划。`hobot persistent`、`hobot task` 和 Studio 后台任务只能让已经启动的进程继续运行，不能按时间重新触发一轮 Agent。
+从支持 `schedules.v1` 的板端版本起，只有成功创建板端计划后，周期汇报才会实际发生。计划由 `agentd` 持久保存，支持一次性 RFC3339 时间（必须含时区）或 1 分钟至 30 天的固定间隔；每块板最多 100 个计划。Studio 右上角的时钟入口可查看、创建、暂停、立即运行或删除计划。旧板端会隐藏入口并提示升级。
 
-需要定时检查时，暂时使用系统 `cron`、`systemd timer` 或外部 CI 调用明确的 `hobot task` 命令，并单独管理权限和日志。未来的产品级调度应由板端持久保存计划、下次运行时间、上下文目标、停止条件和审批策略，Studio 只负责创建与查看，不能仅依赖模型口头承诺。
+计划始终绑定一个已有的普通主任务，复用该任务当前的 Pi session、模型、权限、sandbox、网络和工作目录。Side Agent 与编辑分支不能作为目标。任务正处于运行、等待审批、启动、停止或排队时，多个到期事件只合并为一轮，空闲后再执行；断电或重启错过的时间也最多合并一次，不会补跑一串历史任务。计划在安全落盘 claim 后才派发，因此不会因为重启无声重放旧工具调用。
+
+停止任务只停止当前一轮，不会取消下一次计划；使用 **Pause** 或 **Delete** 才会停止未来触发。删除或归档仍被关联的任务会被拒绝，需先删除关联计划。计划列表和默认详情不会返回 Prompt；显式 `--details` 才显示。支持包、错误和日志不包含计划 Prompt。
+
+恢复一个间隔计划时会保留暂停前的下次时间；若它已经到期，板端只合并为一轮立即待执行，不会补跑多个遗漏间隔。
+
+终端等价命令如下：
+
+```bash
+hobot schedule create --name "进度汇报" --task <task-id> --every 30m -- "检查当前任务，只有有新进展时汇报。"
+hobot schedule create --name "一次检查" --task <task-id> --at 2026-08-18T09:00:00+08:00 -- "检查模型转换结果并汇报。"
+hobot schedule list --all
+hobot schedule show <schedule-id> --details
+hobot schedule pause <schedule-id>
+hobot schedule resume <schedule-id>
+hobot schedule run <schedule-id>
+hobot schedule delete <schedule-id> --yes
+```
+
+Agent 不应仅口头承诺周期汇报：需要该能力时应先创建计划并确认返回的计划 ID；可在其任务 worker 内使用同一组 `hobot schedule` 命令管理自身计划，但不能管理其他任务。
 
 ## 21. CLI 命令参考
 

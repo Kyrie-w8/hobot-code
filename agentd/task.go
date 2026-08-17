@@ -120,6 +120,7 @@ type task struct {
 	openToolCalls         map[string]struct{}
 	openAnonymousTools    int
 	terminalCaptureUnsafe bool
+	control               *taskControlServer
 }
 
 type taskManager struct {
@@ -132,17 +133,20 @@ type taskManager struct {
 	modelsOnce          sync.Once
 	models              map[string]modelOption
 	modelListErr        error
+	schedules           *scheduleManager
 }
 
 type queuedLaunch struct {
-	Schema      int            `json:"schema"`
-	State       string         `json:"state"`
-	Operation   string         `json:"operation"`
-	Prompt      string         `json:"prompt"`
-	Images      []imageContent `json:"images,omitempty"`
-	Approve     bool           `json:"approve,omitempty"`
-	SessionFile string         `json:"sessionFile,omitempty"`
-	QueuedAt    time.Time      `json:"queuedAt"`
+	Schema       int            `json:"schema"`
+	State        string         `json:"state"`
+	Operation    string         `json:"operation"`
+	Prompt       string         `json:"prompt"`
+	Images       []imageContent `json:"images,omitempty"`
+	Approve      bool           `json:"approve,omitempty"`
+	SessionFile  string         `json:"sessionFile,omitempty"`
+	PromptSource string         `json:"promptSource,omitempty"`
+	ScheduleID   string         `json:"scheduleId,omitempty"`
+	QueuedAt     time.Time      `json:"queuedAt"`
 }
 
 type startTaskParams struct {
@@ -173,9 +177,16 @@ type forkTaskParams struct {
 }
 
 type resumeTaskParams struct {
-	TaskID string         `json:"taskId"`
-	Prompt string         `json:"prompt,omitempty"`
-	Images []imageContent `json:"images,omitempty"`
+	TaskID       string         `json:"taskId"`
+	Prompt       string         `json:"prompt,omitempty"`
+	Images       []imageContent `json:"images,omitempty"`
+	PromptSource string         `json:"-"`
+	ScheduleID   string         `json:"-"`
+}
+
+type promptEventOrigin struct {
+	Source     string
+	ScheduleID string
 }
 
 type imageContent struct {
@@ -674,6 +685,16 @@ func readQueuedLaunch(path, sessionRoot string) (queuedLaunch, error) {
 	if queued.Prompt == "" && len(queued.Images) > 0 {
 		return queuedLaunch{}, fmt.Errorf("queued images require a prompt")
 	}
+	if queued.PromptSource != "" && queued.PromptSource != "schedule" {
+		return queuedLaunch{}, fmt.Errorf("queued prompt source is invalid")
+	}
+	if queued.PromptSource == "schedule" {
+		if !taskIDPattern.MatchString(queued.ScheduleID) {
+			return queuedLaunch{}, fmt.Errorf("queued schedule ID is invalid")
+		}
+	} else if queued.ScheduleID != "" {
+		return queuedLaunch{}, fmt.Errorf("queued schedule ID requires a scheduled prompt")
+	}
 	if (queued.Operation == "fork" || queued.Operation == "resume") && queued.SessionFile == "" {
 		return queuedLaunch{}, fmt.Errorf("queued %s session is missing", queued.Operation)
 	}
@@ -797,7 +818,8 @@ func (manager *taskManager) scheduleQueued() {
 			"type": "hobot_task_dequeued", "queuedAt": queued.QueuedAt, "operation": queued.Operation,
 		})
 		current.recordEvent(raw)
-		if err := current.launch(queued.Prompt, queued.Images, queued.Approve, queued.SessionFile, promptRecorded); err != nil {
+		origin := promptEventOrigin{Source: queued.PromptSource, ScheduleID: queued.ScheduleID}
+		if err := current.launch(queued.Prompt, queued.Images, queued.Approve, queued.SessionFile, promptRecorded, origin); err != nil {
 			_ = os.Remove(current.queuePath())
 			if errors.Is(err, errTaskLaunchCancelled) {
 				current.setTerminal(statusStopped, "")
@@ -818,11 +840,13 @@ func (current *task) recordQueuedPrompt(queued queuedLaunch) {
 	for _, image := range queued.Images {
 		attachments = append(attachments, map[string]string{"name": image.Name, "mimeType": image.MimeType})
 	}
-	promptEvent, _ := json.Marshal(map[string]any{
+	promptEvent := map[string]any{
 		"type": "hobot_user_prompt", "message": queued.Prompt, "attachments": attachments,
 		"queuedAt": queued.QueuedAt,
-	})
-	current.recordEvent(promptEvent)
+	}
+	addPromptEventOrigin(promptEvent, promptEventOrigin{Source: queued.PromptSource, ScheduleID: queued.ScheduleID})
+	raw, _ := json.Marshal(promptEvent)
+	current.recordEvent(raw)
 }
 
 func (current *task) queuedPromptRecorded(queued queuedLaunch) bool {
@@ -853,6 +877,14 @@ func (current *task) queuedPromptRecorded(queued queuedLaunch) bool {
 		}
 	}
 	return false
+}
+
+func addPromptEventOrigin(event map[string]any, origin promptEventOrigin) {
+	if origin.Source != "schedule" || !taskIDPattern.MatchString(origin.ScheduleID) {
+		return
+	}
+	event["source"] = "schedule"
+	event["scheduleId"] = origin.ScheduleID
 }
 
 func newTaskID() (string, error) {
@@ -1590,7 +1622,7 @@ func mapEditPromptToParent(current, parent *task, sequence, parentForkSequence u
 	return parentPrompts[selected].sequence, nil
 }
 
-func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string, promptRecorded bool) error {
+func (current *task) launch(prompt string, images []imageContent, approve bool, sessionFile string, promptRecorded bool, origins ...promptEventOrigin) error {
 	metadata := current.snapshot()
 	if err := current.manager.validateNetworkModel(metadata.NetworkMode, metadata.Model); err != nil {
 		return err
@@ -1605,6 +1637,19 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	if err != nil {
 		return fmt.Errorf("prepare private task session: %w", err)
 	}
+	controlSocket := ""
+	if metadata.BranchKind == "" {
+		controlSocket, err = current.startTaskControlSocket()
+		if err != nil {
+			return fmt.Errorf("start task schedule control: %w", err)
+		}
+	}
+	keepControlSocket := false
+	defer func() {
+		if !keepControlSocket {
+			current.stopTaskControlSocket()
+		}
+	}()
 	taskAgentDir, err := current.prepareTaskAgentConfiguration(metadata.NetworkMode)
 	if err != nil {
 		return fmt.Errorf("prepare private task agent configuration: %w", err)
@@ -1639,6 +1684,12 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		"HOBOT_CODE_SANDBOX_BACKEND="+sandbox.Backend,
 		"HOBOT_CODE_NETWORK_MODE="+metadata.NetworkMode,
 	)
+	if controlSocket != "" {
+		commandEnvironment = append(commandEnvironment,
+			"HOBOT_CODE_TASK_ID="+metadata.ID,
+			"HOBOT_CODE_TASK_CONTROL_SOCKET="+controlSocket,
+		)
+	}
 	if _, skillsRoot, skillsErr := configuredOpenExplorerSkillPaths(); skillsErr != nil {
 		return fmt.Errorf("prepare OpenExplorer LLM Skill runtime: %w", skillsErr)
 	} else if skillsRoot != "" {
@@ -1717,6 +1768,7 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		current.consumeStderr(stderr)
 	}()
 	go current.wait()
+	keepControlSocket = controlSocket != ""
 	stateCommand, _ := json.Marshal(map[string]any{"id": "agentd-state", "type": "get_state"})
 	if err := current.writeWorkerCommand(stateCommand); err != nil {
 		_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
@@ -1729,7 +1781,7 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 		startCommand, _ := json.Marshal(map[string]any{
 			"id": "agentd-start", "type": "prompt", "message": prompt, "images": images,
 		})
-		if err := current.sendCommandWithPromptEvent(startCommand, !promptRecorded); err != nil {
+		if err := current.sendCommandWithPromptEvent(startCommand, !promptRecorded, origins...); err != nil {
 			_ = terminateProcessGroup(command.Process.Pid, syscall.SIGKILL)
 			if current.snapshot().Status == statusStopping || current.snapshot().Status == statusStopped {
 				return errTaskLaunchCancelled
@@ -1963,6 +2015,7 @@ func (writer *boundedLogWriter) Write(value []byte) (int, error) {
 }
 
 func (current *task) wait() {
+	defer current.stopTaskControlSocket()
 	current.mu.Lock()
 	command := current.command
 	workerDone := current.workerDone
@@ -2227,7 +2280,7 @@ func (current *task) sendCommand(command json.RawMessage) error {
 	return current.sendCommandWithPromptEvent(command, true)
 }
 
-func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordPrompt bool) error {
+func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordPrompt bool, origins ...promptEventOrigin) error {
 	if len(command) == 0 || len(command) > maxRequestBytes || !json.Valid(command) {
 		return fmt.Errorf("worker command must be valid JSON no larger than %d bytes", maxRequestBytes)
 	}
@@ -2301,8 +2354,12 @@ func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordP
 			for _, image := range header.Images {
 				attachments = append(attachments, map[string]string{"name": image.Name, "mimeType": image.MimeType})
 			}
-			promptEvent, _ := json.Marshal(map[string]any{"type": "hobot_user_prompt", "message": header.Message, "attachments": attachments})
-			current.recordEvent(promptEvent)
+			promptEvent := map[string]any{"type": "hobot_user_prompt", "message": header.Message, "attachments": attachments}
+			if len(origins) > 0 {
+				addPromptEventOrigin(promptEvent, origins[0])
+			}
+			raw, _ := json.Marshal(promptEvent)
+			current.recordEvent(raw)
 		}
 		current.applyTurnWorkspaceEvidence(turn, true, captureTurnWorkspaceEvidence(promptCwd))
 		workerCommand := map[string]any{}
@@ -2962,6 +3019,9 @@ func (manager *taskManager) rename(params renameTaskParams) (taskMetadata, error
 }
 
 func (manager *taskManager) archive(params archiveTaskParams) (taskMetadata, error) {
+	if params.Archive && manager.schedules != nil && manager.schedules.blocksTaskLifecycle(params.TaskID) {
+		return taskMetadata{}, fmt.Errorf("delete associated schedules before archiving this task")
+	}
 	current, err := manager.get(params.TaskID)
 	if err != nil {
 		return taskMetadata{}, err
@@ -2988,6 +3048,9 @@ func (manager *taskManager) archive(params archiveTaskParams) (taskMetadata, err
 func (manager *taskManager) delete(id string) error {
 	manager.startMu.Lock()
 	defer manager.startMu.Unlock()
+	if manager.schedules != nil && manager.schedules.blocksTaskLifecycle(id) {
+		return fmt.Errorf("delete associated schedules before deleting this task")
+	}
 	current, err := manager.get(id)
 	if err != nil {
 		return err
@@ -3005,6 +3068,9 @@ func (manager *taskManager) delete(id string) error {
 	if err := validateTaskDirectory(manager.cfg.TasksRoot, current.dir, id); err != nil {
 		return err
 	}
+	if err := removeEmptyTaskControlDirectory(manager.cfg.TaskControlRoot, id); err != nil {
+		return err
+	}
 	manager.mu.Lock()
 	delete(manager.tasks, id)
 	manager.mu.Unlock()
@@ -3015,6 +3081,34 @@ func (manager *taskManager) delete(id string) error {
 		return err
 	}
 	_ = os.RemoveAll(filepath.Join(manager.cfg.SessionDir, id))
+	return nil
+}
+
+func removeEmptyTaskControlDirectory(root, id string) error {
+	root = filepath.Clean(root)
+	if !filepath.IsAbs(root) || !taskIDPattern.MatchString(id) {
+		return fmt.Errorf("refusing to remove an invalid task control directory")
+	}
+	dir := filepath.Join(root, id)
+	if filepath.Dir(dir) != root {
+		return fmt.Errorf("refusing to remove an invalid task control directory")
+	}
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("task control directory is not a real directory: %s", dir)
+	}
+	if owner, ok := fileOwner(info); ok && owner != os.Getuid() {
+		return fmt.Errorf("task control directory has an unexpected owner")
+	}
+	if err := os.Remove(dir); err != nil {
+		return fmt.Errorf("task control directory is not empty: %w", err)
+	}
 	return nil
 }
 
@@ -3065,7 +3159,7 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 		current.mu.Lock()
 		current.metadata.ResumeCount++
 		current.mu.Unlock()
-		queued := queuedLaunch{Operation: "resume", Prompt: params.Prompt, Images: params.Images, Approve: metadata.Approved, SessionFile: sessionFile, QueuedAt: time.Now().UTC()}
+		queued := queuedLaunch{Operation: "resume", Prompt: params.Prompt, Images: params.Images, Approve: metadata.Approved, SessionFile: sessionFile, PromptSource: params.PromptSource, ScheduleID: params.ScheduleID, QueuedAt: time.Now().UTC()}
 		if err := current.queue(queued); err != nil {
 			return taskMetadata{}, err
 		}
@@ -3087,7 +3181,8 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 		current.setTerminal(statusFailed, "persist resumed task: "+err.Error())
 		return current.snapshot(), err
 	}
-	if err := current.launch(params.Prompt, params.Images, metadata.Approved, sessionFile, false); err != nil {
+	origin := promptEventOrigin{Source: params.PromptSource, ScheduleID: params.ScheduleID}
+	if err := current.launch(params.Prompt, params.Images, metadata.Approved, sessionFile, false, origin); err != nil {
 		if errors.Is(err, errTaskLaunchCancelled) {
 			current.setTerminal(statusStopped, "")
 			return current.snapshot(), nil

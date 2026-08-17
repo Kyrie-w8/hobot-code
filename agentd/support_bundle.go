@@ -316,6 +316,8 @@ func (server *daemonServer) supportChecks(snapshot systemSnapshot, tasks []suppo
 		boardSupportCheck(snapshot),
 		pathCheck("state-directory", server.cfg.StateRoot, true, true, true, false),
 		pathCheck("task-directory", server.cfg.TasksRoot, true, true, true, false),
+		pathCheck("schedule-directory", server.cfg.SchedulesRoot, true, true, true, false),
+		pathCheck("task-control-directory", server.cfg.TaskControlRoot, true, true, true, false),
 		pathCheck("session-directory", server.cfg.SessionDir, true, true, true, false),
 		pathCheck("support-directory", server.cfg.SupportRoot, true, true, true, false),
 		pathCheck("agent-binary", server.cfg.AgentBinary, false, false, false, true),

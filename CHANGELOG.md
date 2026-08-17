@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.0
+
+### Added
+
+- Add board-owned one-shot and recurring schedules for existing main tasks, with CLI, Go SDK, Studio management, task-scoped Agent self-management, pause, resume, run-now, deletion, and private persistent state.
+- Reuse the task's current session, model, permissions, sandbox, network, and workspace while coalescing missed or busy intervals into one run and refusing automatic replay after an uncertain crash window.
+
+### Changed
+
+- Distinguish scheduled prompts from user-authored messages in Studio, keep schedule prompts out of default lists and support bundles, and block task archive or deletion while schedules still reference it.
+- Add strict schedule protocol validation, private-directory diagnostics, scoped Unix-socket authorization, Side Agent isolation, durable dispatch claims, bounded limits, and race-tested restart behavior.
+
 ## 0.27.7
 
 ### Changed

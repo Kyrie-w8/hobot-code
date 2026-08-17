@@ -66,10 +66,25 @@ Usage:
   hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
   hobot task delete TASK_ID --yes
-  hobot task stop TASK_ID`)
+  hobot task stop TASK_ID
+  hobot schedule create --name NAME --task TASK_ID (--at RFC3339 | --every DURATION) -- PROMPT
+  hobot schedule list [--all]
+  hobot schedule show ID [--details]
+  hobot schedule pause|resume|run ID
+  hobot schedule delete ID --yes`)
 }
 
 func main() {
+	// A worker can only use its private task control socket. This must happen
+	// before credential isolation and configuration loading, both of which may
+	// otherwise try to reach the daemon socket hidden by its sandbox.
+	if len(os.Args) >= 2 && os.Args[1] == "schedule" && os.Getenv("HOBOT_CODE_TASK_CONTROL_SOCKET") != "" {
+		if err := runTaskControlScheduleCLI(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	credentials, credentialErr := ambientGatewayCredentials(os.Environ())
 	credentialPayload, encodeErr := encodeGatewayCredentialBundle(credentials)
 	if credentialErr != nil || encodeErr != nil {
@@ -125,6 +140,8 @@ func run(args []string) error {
 		return runDaemonCLI(cfg, args[1:])
 	case "task":
 		return runTaskCLI(cfg, args[1:])
+	case "schedule":
+		return runScheduleCLI(cfg, args[1:])
 	case "workspace":
 		return runWorkspaceCLI(cfg, args[1:])
 	case "deploy":

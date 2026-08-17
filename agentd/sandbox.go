@@ -480,6 +480,15 @@ func (manager *taskManager) sandboxCommand(metadata taskMetadata, agentArgs []st
 	// replacements remain visible to the long-running worker.
 	args = append(args, "--bind", filepath.Join(manager.cfg.SessionDir, metadata.ID), filepath.Join(manager.cfg.SessionDir, metadata.ID))
 	args = append(args, "--ro-bind", filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"), filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"))
+	// Only this task's control directory is visible. The daemon root and other
+	// task control sockets remain masked, even for the same Unix uid.
+	if manager.cfg.TaskControlRoot != "" && metadata.BranchKind == "" {
+		controlDir := filepath.Join(manager.cfg.TaskControlRoot, metadata.ID)
+		if !pathIsDirectory(controlDir) {
+			return "", nil, taskSandboxStatus{}, fmt.Errorf("task schedule control is unavailable")
+		}
+		args = append(args, "--ro-bind", controlDir, controlDir)
+	}
 	if metadata.NetworkMode == networkModeShared && gatewayCredentialPayload(manager.cfg) != "" {
 		if err := ensurePrivateDir(gatewayCredentialDirectory(manager.cfg)); err != nil {
 			return "", nil, taskSandboxStatus{}, fmt.Errorf("prepare sandbox credential mount: %w", err)

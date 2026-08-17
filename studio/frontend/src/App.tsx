@@ -3,11 +3,11 @@ import type {FormEvent, ReactNode, UIEvent} from 'react';
 import ReactMarkdown from 'react-markdown';
 import 'katex/dist/katex.min.css';
 import {
-  Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, Check, ChevronDown,
+  Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, CalendarClock, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
   Download, FileDiff, Gauge, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
-  Square, SquareTerminal, Trash2, Wrench, X, XCircle,
+  Play, Square, SquareTerminal, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
@@ -38,7 +38,7 @@ import {includedModelSummary, includedProviderGroups} from './provider-catalog.j
 import {applyTheme, readThemePreference, resolveTheme, saveThemePreference} from './appearance-theme.js';
 import type {ThemePreference} from './appearance-theme.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -95,6 +95,7 @@ function App() {
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showExtensions, setShowExtensions] = useState(false);
+	const [showSchedules, setShowSchedules] = useState(false);
   const [showProviders, setShowProviders] = useState(false);
   const [supportBundle, setSupportBundle] = useState<SupportBundle | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
@@ -1275,6 +1276,7 @@ function App() {
         </div>
         <button className="version-button" title="Version and updates" onClick={() => setShowAbout(true)}>{appVersion ? `v${appVersion}` : <LoaderCircle size={12} className="spin" />}</button>
         {connection?.capabilities?.capabilities.includes('extensions.catalog.v1') && <button className="icon-button" title="Capabilities" disabled={connectionState !== 'online'} onClick={() => setShowExtensions(true)}><Box size={16} /></button>}
+		{connection?.capabilities?.capabilities.includes('schedules.v1') && <button className="icon-button" title="Schedules" disabled={connectionState !== 'online'} onClick={() => setShowSchedules(true)}><CalendarClock size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('providers.manage.v1') && <button className="icon-button" title="Model providers" disabled={connectionState !== 'online'} onClick={() => setShowProviders(true)}><KeyRound size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1') && <button className={`icon-button diagnostic-status ${diagnostics?.status ?? ''}`} title="Board readiness" disabled={connectionState !== 'online'} onClick={() => void openDiagnostics()}>{diagnosticsLoading ? <LoaderCircle size={16} className="spin" /> : <Activity size={16} />}</button>}
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
@@ -1332,7 +1334,7 @@ function App() {
               {conversation.map((item) => item.kind === 'user'
                 ? <UserMessage key={item.key} item={item} onEdit={editMessage} />
                 : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
-              {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)}))}} />}
+              {optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)})), source: 'user', scheduleId: ''}} />}
               {selectedTask.status === 'queued' ? <div className="agent-progress immediate"><ListTodo size={14} /><span>Waiting for a board Agent slot</span><small>{selectedTask.queuedAt ? relativeTime(selectedTask.queuedAt) : 'queued'}</small></div> : ['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
               {selectedTaskRecovery && <TaskRecoveryCard presentation={selectedTaskRecovery} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} canDiagnose={Boolean(connection?.capabilities?.capabilities.includes('support.bundle.v1'))} busy={busy || checkingModel} onAction={() => {if (selectedTaskRecovery.recovery === 'check-model') {void checkModelHealth(); return;} if (selectedTaskRecovery.recovery === 'diagnose') {void saveSupportBundle(); return;} setComposer(selectedTaskRecovery.action?.prompt ?? ''); window.requestAnimationFrame(() => composerRef.current?.focus());}} />}
             </div>
@@ -1384,6 +1386,7 @@ function App() {
 	  {showWorkspace && boardId && <WorkspaceDialog boardId={boardId} initialPath={selectedTask?.projectCwd ?? selectedTask?.cwd ?? ''} onClose={() => setShowWorkspace(false)} onChoose={(path) => {setShowWorkspace(false); openNewTask(path);}} />}
       {showAbout && <AboutDialog appVersion={appVersion} connection={connection} onInstall={async () => {if (!connection) throw new Error('Connect a board before updating.'); const result = await api.installBoardUpdate(connection.board.id); await connect(result.connection.board); return result;}} onClose={() => setShowAbout(false)} />}
       {showExtensions && connection && <ExtensionCenterDialog boardId={connection.board.id} boardName={connection.board.name} boardTarget={snapshot?.boardId || connection.compatibility?.boardId || ''} taskId={selectedTask?.id.startsWith('draft:') ? '' : selectedTask?.id ?? ''} taskName={selectedTask?.name ?? ''} onClose={() => setShowExtensions(false)} />}
+		{showSchedules && connection && <ScheduleDialog boardId={connection.board.id} tasks={tasks.filter((task) => !task.branchKind && !task.id.startsWith('draft:'))} selectedTaskId={selectedTask?.branchKind ? '' : selectedTask?.id} onClose={() => setShowSchedules(false)} />}
       {showProviders && connection && <ProviderDialog boardId={connection.board.id} boardName={connection.board.name} models={models} onChanged={async (result) => {setNotice(result.message); if (result.applied) {const nextModels = await api.models(connection.board.id); setModels(nextModels);}}} onClose={() => setShowProviders(false)} />}
       {supportBundle && <SupportDiagnosticsDialog bundle={supportBundle} onClose={() => setSupportBundle(null)} />}
       {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} failure={diagnosticsError} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
@@ -1397,7 +1400,8 @@ function App() {
 }
 
 function UserMessage({item, onEdit}: {item: UserConversationItem; onEdit?: (item: UserConversationItem) => void}) {
-  return <article className="user-message">{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
+  const scheduled = item.source === 'schedule';
+  return <article className={`user-message${scheduled ? ' scheduled-message' : ''}`}>{scheduled && <div className="scheduled-message-label" title={item.scheduleId ? `Schedule ${item.scheduleId}` : 'Scheduled task'}><CalendarClock size={13} />Scheduled</div>}{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && !scheduled && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
 }
 
 function AssistantTurn({item, running, canCheckModel, checkingModel, onCheckModel, onRetry}: {item: AssistantConversationItem; running: boolean; canCheckModel: boolean; checkingModel: boolean; onCheckModel: () => void; onRetry: () => void}) {
@@ -2034,6 +2038,37 @@ function extensionSourceIcon(status: string) {
   return <AlertTriangle size={11} />;
 }
 
+function ScheduleDialog({boardId, tasks, selectedTaskId, onClose}: {boardId: string; tasks: Task[]; selectedTaskId?: string; onClose: () => void}) {
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [loading, setLoading] = useState(true);
+	const [mutating, setMutating] = useState(false);
+  const [error, setError] = useState('');
+  const [taskId, setTaskId] = useState(selectedTaskId && tasks.some((task) => task.id === selectedTaskId) ? selectedTaskId : tasks[0]?.id ?? '');
+  const [name, setName] = useState('');
+  const [prompt, setPrompt] = useState('');
+	const [cadence, setCadence] = useState<'every' | 'once'>('every');
+  const [every, setEvery] = useState('30m');
+	const [at, setAt] = useState('');
+	const [deleteTarget, setDeleteTarget] = useState<Schedule | null>(null);
+  const load = useCallback(async () => { setLoading(true); try { setSchedules(await api.schedules(boardId, true)); setError(''); } catch (reason) { setError(friendlyError(String(reason))); } finally { setLoading(false); } }, [boardId]);
+  useEffect(() => { void load(); }, [load]);
+	useEffect(() => { const listener = (event: KeyboardEvent) => { if (event.key === 'Escape' && !mutating) onClose(); }; window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener); }, [mutating, onClose]);
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    if (!taskId || !prompt.trim()) { setError('Choose a main task and enter the scheduled prompt.'); return; }
+    const atRFC3339 = cadence === 'once' ? localDateTimeRFC3339(at) : '';
+    if (cadence === 'once' && (!atRFC3339 || new Date(atRFC3339).getTime() <= Date.now())) { setError('Choose a future local date and time.'); return; }
+    setMutating(true);
+    try { await api.createSchedule(boardId, {name: name.trim(), taskId, prompt: prompt.trim(), ...(cadence === 'once' ? {at: atRFC3339} : {every})}); setPrompt(''); setName(''); await load(); } catch (reason) { setError(friendlyError(String(reason))); } finally { setMutating(false); }
+  }
+  async function mutate(action: 'pause' | 'resume' | 'run' | 'delete', id: string) {
+    setMutating(true);
+    try { if (action === 'pause') await api.pauseSchedule(boardId, id); else if (action === 'resume') await api.resumeSchedule(boardId, id); else if (action === 'run') await api.runSchedule(boardId, id); else await api.deleteSchedule(boardId, id); setDeleteTarget(null); await load(); } catch (reason) { setError(friendlyError(String(reason))); } finally { setMutating(false); }
+  }
+  const disabled = loading || mutating;
+  return <div className="modal-backdrop"><section className="modal schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-title"><div className="modal-header"><div><span className="modal-eyebrow">Board-owned automation</span><h2 id="schedule-title">Schedules</h2></div><div className="modal-header-actions"><button className="icon-button" title="Refresh schedules" disabled={disabled} onClick={() => void load()}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="icon-button" title="Close" disabled={mutating} onClick={onClose}><X size={18} /></button></div></div><div className="schedule-content"><form className="schedule-form" onSubmit={create}><label>Task<select value={taskId} disabled={disabled} onChange={(event) => setTaskId(event.target.value)}>{tasks.map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}</select></label><label>Schedule<select value={cadence} disabled={disabled} onChange={(event) => setCadence(event.target.value as 'every' | 'once')}><option value="every">Repeat</option><option value="once">Once</option></select></label>{cadence === 'every' ? <label className="schedule-wide">Every<select value={every} disabled={disabled} onChange={(event) => setEvery(event.target.value)}><option value="5m">5 minutes</option><option value="30m">30 minutes</option><option value="1h">1 hour</option><option value="24h">Daily</option></select></label> : <label className="schedule-wide">At<input type="datetime-local" value={at} disabled={disabled} onChange={(event) => setAt(event.target.value)} required /></label>}<label className="schedule-wide">Name<input value={name} disabled={disabled} onChange={(event) => setName(event.target.value)} placeholder="Optional" maxLength={96} /></label><label className="schedule-wide">Prompt<textarea value={prompt} disabled={disabled} onChange={(event) => setPrompt(event.target.value)} placeholder="What should this task do?" rows={3} maxLength={16384} /></label><button className="primary-button schedule-wide" disabled={disabled || !taskId || !prompt.trim()}>{mutating ? <LoaderCircle size={15} className="spin" /> : <CalendarClock size={15} />}Create schedule</button></form>{error && <div className="schedule-error"><AlertTriangle size={15} />{error}</div>}<div className="schedule-list">{!loading && schedules.length === 0 && <div className="schedule-empty">No schedules on this board.</div>}{schedules.map((schedule) => { const task = tasks.find((candidate) => candidate.id === schedule.taskId); return <article className="schedule-row" key={schedule.id}><div><strong>{schedule.name}</strong><span>{schedule.status} · {task?.name ?? schedule.taskId}</span><small>{schedule.nextRun ? `Next ${formatTime(schedule.nextRun)}` : 'No future run'}{schedule.lastRun ? ` · Last ${formatTime(schedule.lastRun)}` : ''}</small>{schedule.lastResult && <small>{schedule.lastResult}</small>}</div><div className="schedule-actions">{schedule.enabled ? <button className="secondary-button" disabled={disabled} onClick={() => void mutate('pause', schedule.id)}>Pause</button> : schedule.status === 'paused' ? <button className="secondary-button" disabled={disabled} onClick={() => void mutate('resume', schedule.id)}>Resume</button> : null}{schedule.enabled && <button className="icon-button" disabled={disabled} title="Run now" onClick={() => void mutate('run', schedule.id)}><Play size={15} /></button>}<button className="icon-button destructive" disabled={disabled} title="Delete schedule" onClick={() => setDeleteTarget(schedule)}><Trash2 size={15} /></button></div></article>;})}</div>{deleteTarget && <div className="inline-confirm schedule-delete-confirm" role="alert"><AlertTriangle size={16} /><span><strong>Delete {deleteTarget.name}?</strong><small>Future runs stop. A run already started on the board continues.</small></span><button className="secondary-button" disabled={disabled} onClick={() => setDeleteTarget(null)}>Cancel</button><button className="danger-button" disabled={disabled} onClick={() => void mutate('delete', deleteTarget.id)}>{mutating && <LoaderCircle size={13} className="spin" />}Delete</button></div>}</div><div className="schedule-footer">Schedules reuse the selected task's current model, permissions, sandbox, network, and workspace. Stopping a task does not cancel its schedule.</div></section></div>;
+}
+
 function DeploymentDialog({boardId, cwd, snapshot, models, busy, onClose, onStart}: {boardId: string; cwd: string; snapshot: SystemSnapshot; models: ModelOption[]; busy: boolean; onClose: () => void; onStart: (request: StartDeploymentRequest) => void}) {
   const [inspection, setInspection] = useState<DeploymentInspection | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2177,6 +2212,15 @@ function ResourceBar({label, value, detail, percent, available = false, tone = '
   return <div className={`resource-bar ${tone} ${available ? 'available' : ''}`}><div><span>{label}</span><strong>{value}</strong></div>{detail && <small>{detail}</small>}{percent !== undefined && <div className="resource-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(bounded)}><i style={{width: `${bounded}%`}} /></div>}</div>;
 }
 function formatTime(value: string) { return new Date(value).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); }
+function localDateTimeRFC3339(value: string) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return '';
+  const pad = (number: number) => String(number).padStart(2, '0');
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const absolute = Math.abs(offset);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
+}
 function hardwareResourceLabel(value: string) { if (value === 'bpu') return 'BPU'; if (value === 'media-pipeline') return 'Media pipeline'; if (value.startsWith('camera-video')) return value.replace('camera-', '/dev/'); return value; }
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 60) return 'now'; if (seconds < 3600) return `${Math.floor(seconds / 60)}m`; if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`; return `${Math.floor(seconds / 86_400)}d`; }
 export default App;

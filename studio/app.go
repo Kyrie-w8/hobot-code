@@ -675,6 +675,66 @@ func (app *App) GetTask(boardID, taskID string) (hobot.Task, error) {
 	return client.Task(ctx, taskID)
 }
 
+func (app *App) ListSchedules(boardID string, includeAll bool) ([]hobot.Schedule, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.Schedules(ctx, includeAll)
+}
+
+func (app *App) CreateSchedule(boardID string, request hobot.CreateScheduleRequest) (hobot.Schedule, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Schedule{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.CreateSchedule(ctx, request)
+}
+
+func (app *App) PauseSchedule(boardID, id string) (hobot.Schedule, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Schedule{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.PauseSchedule(ctx, id)
+}
+
+func (app *App) ResumeSchedule(boardID, id string) (hobot.Schedule, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Schedule{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.ResumeSchedule(ctx, id)
+}
+
+func (app *App) RunSchedule(boardID, id string) (hobot.Schedule, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Schedule{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.RunSchedule(ctx, id)
+}
+
+func (app *App) DeleteSchedule(boardID, id string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.DeleteSchedule(ctx, id)
+}
+
 func (app *App) GetEvents(boardID, taskID string, after uint64, limit int) (hobot.EventPage, error) {
 	client, err := app.client(boardID)
 	if err != nil {

@@ -202,6 +202,28 @@ export type TaskEvent = {
 };
 
 export type TaskPage = { tasks: Task[]; nextCursor?: string };
+
+export type Schedule = {
+  id: string;
+  name: string;
+  taskId: string;
+  prompt?: string;
+  at?: string;
+  every?: string;
+  enabled: boolean;
+  status: 'active' | 'paused' | 'completed' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  nextRun?: string;
+  lastRun?: string;
+  runCount: number;
+  lastResult?: string;
+  pending?: boolean;
+  inFlight?: boolean;
+  dispatchState?: string;
+};
+
+export type CreateScheduleRequest = {name: string; taskId: string; prompt: string; at?: string; every?: string};
 export type EventPage = {
   events: TaskEvent[];
   nextAfter?: number;

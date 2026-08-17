@@ -201,3 +201,22 @@ func TestDiagnosticsUtilityNamesMatchPublicIdentifierContract(t *testing.T) {
 		t.Fatalf("canonical utility checks are missing: %v", want)
 	}
 }
+
+func TestScheduleRuntimeDirectoriesAreCoveredByPrivateDiagnostics(t *testing.T) {
+	cfg := testConfig(t)
+	want := map[string]string{
+		"schedule-directory":     filepath.Clean(cfg.SchedulesRoot),
+		"task-control-directory": filepath.Clean(cfg.TaskControlRoot),
+	}
+	for _, target := range diagnosticPrivateTargets(cfg) {
+		if path, ok := want[target.name]; ok {
+			if target.path != path || !target.directory {
+				t.Fatalf("unexpected schedule diagnostic target: %+v", target)
+			}
+			delete(want, target.name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("schedule diagnostic targets are missing: %v", want)
+	}
+}

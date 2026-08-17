@@ -33,7 +33,7 @@ func testConfig(t *testing.T) config {
 		StateRoot: root, AgentdRoot: filepath.Join(root, "agentd"),
 		TasksRoot: filepath.Join(root, "agentd", "tasks"), WorktreesRoot: filepath.Join(root, "agentd", "worktrees"),
 		AttachCursorRoot: filepath.Join(root, "agentd", "attach-cursors"),
-		SupportRoot:      filepath.Join(root, "agentd", "support"), SessionDir: filepath.Join(root, "sessions"),
+		SupportRoot:      filepath.Join(root, "agentd", "support"), SchedulesRoot: filepath.Join(root, "agentd", "schedules"), TaskControlRoot: filepath.Join(socketRoot, "control"), SessionDir: filepath.Join(root, "sessions"),
 		SocketPath: filepath.Join(socketRoot, "agentd.sock"), PIDPath: filepath.Join(root, "agentd", "agentd.pid"),
 		LogPath: filepath.Join(root, "agentd", "agentd.log"), AgentBinary: worker,
 		ExtensionCatalog: sourceExtensionCatalog(t),

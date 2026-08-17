@@ -71,6 +71,15 @@ test('conversation separates turns at each persisted user message', () => {
   assert.deepEqual(result.map((item) => item.kind), ['assistant', 'user', 'assistant']);
 });
 
+test('scheduled prompts preserve their origin instead of impersonating user input', () => {
+  const result = buildConversation([
+    event(1, 'user.message', {text: 'Check deployment health', source: 'schedule', scheduleId: '0123456789abcdef01234567'}),
+    event(2, 'task.idle'),
+  ]);
+  assert.equal(result[0].source, 'schedule');
+  assert.equal(result[0].scheduleId, '0123456789abcdef01234567');
+});
+
 test('lifecycle noise alone does not create conversation items', () => {
   assert.deepEqual(buildConversation([event(1, 'task.running'), event(2, 'task.idle')]), []);
 });

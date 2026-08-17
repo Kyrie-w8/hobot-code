@@ -3,6 +3,7 @@ import type {TaskEvent} from './types';
 export type UserConversationItem = {
   kind: 'user'; key: string; sequence: number; time: string; text: string;
   attachments: Array<{name?: string; mimeType: string; preview?: string}>;
+  source: 'user' | 'schedule'; scheduleId: string;
 };
 export type ToolActivity = {
   id: string; name: string; status: string; isError: boolean;

@@ -39,6 +39,7 @@ var protocolCapabilities = []string{
 	"tasks.fork",
 	"tasks.fork.deferred-prompt.v1",
 	"tasks.collaboration.v1",
+	"schedules.v1",
 	"tasks.models",
 	"tasks.permissions",
 	"tasks.sandbox.v1",

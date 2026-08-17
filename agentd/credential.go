@@ -31,6 +31,8 @@ var taskCoordinationEnvironment = map[string]bool{
 	"HOBOT_CODE_SIDE_COLLABORATION_FILE": true,
 	"HOBOT_CODE_SIDE_PARENT_SESSION":     true,
 	"HOBOT_CODE_SOURCE_TASK_ID":          true,
+	"HOBOT_CODE_TASK_ID":                 true,
+	"HOBOT_CODE_TASK_CONTROL_SOCKET":     true,
 }
 
 type gatewayCredentialBundle struct {

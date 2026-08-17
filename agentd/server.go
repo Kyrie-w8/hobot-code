@@ -17,6 +17,7 @@ import (
 type daemonServer struct {
 	cfg           config
 	manager       *taskManager
+	schedules     *scheduleManager
 	health        *modelHealthService
 	verify        *modelConformanceService
 	qualification *modelQualificationStore
@@ -61,13 +62,20 @@ func newDaemonServer(cfg config) (*daemonServer, error) {
 		egress.shutdown()
 		return nil, err
 	}
-	extensions, err := loadExtensionCatalog(cfg.ExtensionCatalog, version)
+	schedules, err := newScheduleManager(cfg, manager)
 	if err != nil {
 		egress.shutdown()
 		return nil, err
 	}
+	manager.schedules = schedules
+	extensions, err := loadExtensionCatalog(cfg.ExtensionCatalog, version)
+	if err != nil {
+		schedules.shutdown()
+		egress.shutdown()
+		return nil, err
+	}
 	return &daemonServer{
-		cfg: cfg, manager: manager, health: newModelHealthService(cfg.gatewayToken), verify: newModelConformanceService(cfg.gatewayToken), qualification: newModelQualificationStore(cfg), rdkMatrix: newModelRDKMatrixStore(cfg), sandbox: sandboxCapabilityStatus(cfg), build: currentBuildIdentity(), extensions: extensions, egress: egress, started: time.Now().UTC(), stop: make(chan struct{}),
+		cfg: cfg, manager: manager, schedules: schedules, health: newModelHealthService(cfg.gatewayToken), verify: newModelConformanceService(cfg.gatewayToken), qualification: newModelQualificationStore(cfg), rdkMatrix: newModelRDKMatrixStore(cfg), sandbox: sandboxCapabilityStatus(cfg), build: currentBuildIdentity(), extensions: extensions, egress: egress, started: time.Now().UTC(), stop: make(chan struct{}),
 	}, nil
 }
 
@@ -169,6 +177,7 @@ func (server *daemonServer) serve() error {
 
 func (server *daemonServer) shutdown() {
 	server.stopOnce.Do(func() {
+		server.schedules.shutdown()
 		server.manager.interruptAll()
 		server.egress.shutdown()
 		close(server.stop)
@@ -545,6 +554,78 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		}
 		_ = writeJSON(connection, success(req.ID, map[string]bool{"stopping": true}))
 		go server.shutdown()
+	case "schedule.create":
+		var params createScheduleParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.schedules.create(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "schedule_create_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "schedule.list":
+		var params listScheduleParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, server.schedules.list(params.All)))
+	case "schedule.show":
+		var params scheduleIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.schedules.show(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "schedule_not_found", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "schedule.pause", "schedule.resume":
+		var params scheduleIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		var result scheduleRecord
+		var err error
+		if req.Method == "schedule.pause" {
+			result, err = server.schedules.pause(params.ID)
+		} else {
+			result, err = server.schedules.resume(params.ID)
+		}
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "schedule_update_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "schedule.delete":
+		var params scheduleIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		if err := server.schedules.delete(params.ID); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "schedule_delete_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, map[string]bool{"deleted": true}))
+	case "schedule.run", "schedule.run-now":
+		var params scheduleIDParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		result, err := server.schedules.runNow(params.ID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "schedule_run_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
 	case "task.start":
 		var params startTaskParams
 		if err := decodeParams(req.Params, &params); err != nil {
