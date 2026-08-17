@@ -338,6 +338,22 @@ function processControlIsObservation(args) {
   return observedSignal;
 }
 
+function swapControlIsObservation(name, values) {
+  if (name !== "swapon") return false;
+  if (values.length === 0) return true;
+  const flags = new Set(["-s", "--summary", "--show", "--bytes", "--noheadings", "--raw", "--output-all", "--pairs", "--json", "-v", "--verbose"]);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (value === "-o" || value === "--output") {
+      if (!values[++index]) return false;
+      continue;
+    }
+    if (flags.has(value) || value.startsWith("--show=") || value.startsWith("--output=")) continue;
+    return false;
+  }
+  return true;
+}
+
 function isHelpOrVersion(args) {
   return args.length > 0 && args.every((arg) => HELP_FLAGS.has(arg));
 }
@@ -664,7 +680,7 @@ export function analyzeShellCommand(command) {
           }
         }
         if (name === "kubectl" && kubectlMutation(values)) pushUnique(result.destructiveReasons, ["changes cluster state or executes inside a workload"]);
-        if (["umount", "swapon", "swapoff"].includes(name) || (name === "mount" && values.length > 0)) pushUnique(result.destructiveReasons, ["changes mounted filesystems or swap"]);
+        if (["umount", "swapoff"].includes(name) || (name === "swapon" && !swapControlIsObservation(name, values)) || (name === "mount" && values.length > 0)) pushUnique(result.destructiveReasons, ["changes mounted filesystems or swap"]);
         if (["insmod", "modprobe", "rmmod"].includes(name)) pushUnique(result.destructiveReasons, ["changes loaded kernel modules"]);
         if (name === "sysctl" && (hasOption(args, "-w", "--write") || values.some((value) => /^[^=\s]+=/.test(value)))) pushUnique(result.destructiveReasons, ["changes kernel runtime settings"]);
         if (USER_ADMIN_COMMANDS.has(name)) pushUnique(result.destructiveReasons, ["changes users, groups, or authentication"]);

@@ -284,6 +284,9 @@ test("resolved path checks reject symlink escapes and destructive commands", asy
     assert.deepEqual(destructiveShellReasons(readOnlyStatus), []);
     const readOnlyMountProbe = 'touch /root/.local/state/hobot-code/test_write 2>&1 && echo "WRITABLE" || echo "READONLY"; mount | grep -E " / " | head -2';
     assert.deepEqual(destructiveShellReasons(readOnlyMountProbe), []);
+    const readOnlySwapProbe = 'free -g | head -2; echo "---swap---"; swapon -s 2>/dev/null || echo "no swap"; echo "---load---"; uptime';
+    assert.deepEqual(resolveShellSafety(readOnlySwapProbe, "allow").approvalReasons, []);
+    assert.deepEqual(destructiveShellReasons("swapon --show --bytes --output NAME,TYPE,SIZE,USED"), []);
     for (const command of [
       "mount /dev/sda1 /mnt",
       "mount -o remount,rw /",
