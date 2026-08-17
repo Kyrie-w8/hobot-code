@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.1
+
+### Fixed
+
+- Replace whole-string shell keyword matching with executable-position analysis for Developer approvals. Schedule prompts, grep patterns, and echoed text no longer trigger false `chmod`/`rm`/network risk prompts, while command substitutions, interpreter scripts, SSH payloads, wrappers, dynamic execution, destructive operations, and protected state remain guarded.
+- Preserve the actual `shared`, `model-only`, or `offline` runtime boundary in permission diagnostics and enforce tool egress consistently with the OS sandbox.
+
 ## 0.28.0
 
 ### Added

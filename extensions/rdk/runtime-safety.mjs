@@ -1,6 +1,8 @@
 import { lstat, readlink, realpath } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
+import { analyzeShellCommand } from "./shell-command-safety.mjs";
+
 const SECRET_ENV_NAME = /(?:^|_)(?:API_?KEY|AUTH|CREDENTIALS?|COOKIE|PASS(?:WORD|WD)?|PRIVATE_?KEY|SECRET|SESSION_?TOKEN|TOKEN)(?:_|$)/i;
 const DYNAMIC_LOADER_ENV_NAME = /^(?:DYLD_|LD_)/;
 const INJECTION_ENV_NAMES = new Set([
@@ -108,175 +110,61 @@ export async function inspectResolvedPath(cwd, requestedPath) {
   };
 }
 
-const PROCESS_CONTROL_COMMAND = /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|()]+\/)?(?:kill|killall|pkill)\b/gi;
-
-function leadingShellWords(value, limit = 64) {
-  const words = [];
-  let index = 0;
-  while (index < value.length && words.length < limit) {
-    while (/\s/.test(value[index] ?? "")) index += 1;
-    if (index >= value.length || /[;&|()\n]/.test(value[index])) break;
-    let word = "";
-    let quote = "";
-    while (index < value.length) {
-      const char = value[index];
-      if (!quote && /[\s;&|()\n]/.test(char)) break;
-      index += 1;
-      if (quote) {
-        if (char === quote) quote = "";
-        else if (char === "\\" && quote === '"' && index < value.length) word += value[index++];
-        else word += char;
-      } else if (char === "'" || char === '"') {
-        quote = char;
-      } else if (char === "\\" && index < value.length) {
-        word += value[index++];
-      } else {
-        word += char;
-      }
-    }
-    words.push(word);
-  }
-  return words;
-}
-
-function processControlIsObservation(argumentText) {
-  const words = leadingShellWords(argumentText);
-  const first = words[0] ?? "";
-  if (["-l", "-L", "--list", "--help", "--version"].includes(first)) return true;
-  let observedSignal = false;
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "--") break;
-    if (word === "-s" || word === "--signal" || word === "-n") {
-      const signal = words[++index];
-      if (signal !== "0") return false;
-      observedSignal = true;
-      continue;
-    }
-    if (word === "-0" || word === "--signal=0") {
-      observedSignal = true;
-      continue;
-    }
-    // Only a small, explicit signal-zero grammar is observation-only. Any
-    // other option may select a real signal or change process-control
-    // semantics, so ambiguous forms stay behind approval.
-    if (word.startsWith("-")) return false;
-  }
-  return observedSignal;
-}
-
 export function processControlShellReasons(command) {
-  const value = String(command ?? "");
-  for (const match of value.matchAll(PROCESS_CONTROL_COMMAND)) {
-    if (!processControlIsObservation(value.slice((match.index ?? 0) + match[0].length))) {
-      return ["terminates running processes"];
-    }
-  }
-  return [];
+  return analyzeShellCommand(command).destructiveReasons
+    .filter((reason) => reason === "terminates running processes");
 }
 
 export function destructiveShellReasons(command) {
-  const value = String(command ?? "");
-  const checks = [
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:(?:\/[^\s;|]+\/)?busybox\s+)?(?:\/[^\s;|]+\/)?(?:rm|rmdir|unlink|shred|truncate|wipefs)\b/i, "removes or destroys files"],
-    [/\bfind\b[\s\S]*\s-delete\b/i, "deletes files through find"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:mkfs(?:\.[a-z0-9]+)?|fdisk|sfdisk|parted)\b/i, "changes a filesystem or partition table"],
-    [/\bdd\b[\s\S]*\bof\s*=\s*\/dev\//i, "writes directly to a block or device node"],
-    [/(?:>|>>)(?:\s*['\"]?)\/(?:(?:boot|etc|proc|sys|usr|var\/lib)(?:\/|\b)|dev\/(?!null(?=(?:['\"])?(?:\s|[;&|)]|$))))/i, "writes to a protected system path"],
-    [/\btee(?:\s+-a)?\s+(?:\s*['\"]?)\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "writes to a protected system path"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?systemctl\s+(?:disable|halt|mask|poweroff|reboot|stop)\b/i, "changes or stops a system service"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:halt|poweroff|reboot|shutdown)\b/i, "stops or reboots the board"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:apt(?:-get)?|dnf|yum)\s+(?:autoremove|purge|remove)\b/i, "removes installed software"],
-  ];
-  const highRiskChecks = [
-    [/(?:\brm\b|\brmdir\b|\bmv\b|\bln\b)[^\n]*(?:\/root|\/home\/[^/\s]+)\/\.local\/state\/hobot-code(?:\/|\b)/i, "removes or replaces Hobot Code persistent task and conversation state"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?git\s+(?:clean\b|reset\s+--hard\b|push\b[^\n]*(?:--force(?:-with-lease)?\b|-f\b)|branch\s+(?:-D\b|--delete\s+--force\b))/i, "performs a destructive or forceful Git operation"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:cp|mv|install|ln|mkdir|touch)\b[^;&|\n]*(?:\s|=)['"]?\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "modifies a protected system path"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:sed\s+[^;&|\n]*(?:-i\b|--in-place\b)|perl\s+[^;&|\n]*-[^;&|\n]*i\b)[^;&|\n]*\/(?:boot|dev|etc|proc|sys|usr|var\/lib)(?:\/|\b)/i, "edits a protected system path in place"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:chmod|chown|chgrp|setfacl)\b/i, "changes file ownership or access permissions"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?systemctl\s+(?:daemon-reload|disable|enable|halt|isolate|mask|poweroff|preset|reboot|reload|restart|start|stop|unmask)\b/i, "changes or stops a system service"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?service\s+\S+\s+(?:start|stop|restart|reload|force-reload)\b/i, "changes or stops a system service"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:apt(?:-get)?|dnf|yum|zypper|pacman)\s+(?:autoremove|dist-upgrade|full-upgrade|install|purge|remove|update|upgrade)\b/i, "changes installed software or package metadata"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:dpkg\s+(?:-i|--install|-r|--remove|-P|--purge)\b|rpm\s+(?:-[A-Za-z]*[eFiU]|--erase|--freshen|--install|--upgrade)\b)/i, "changes installed software"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:make|ninja)\s+(?:[^;&|\n]+\s+)?install\b/i, "installs build output into the system"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?cmake\s+--install\b/i, "installs build output into the system"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:pip3?|npm|pnpm|yarn|gem)\b[^;&|\n]*\b(?:install|add)\b[^;&|\n]*(?:--global\b|-g\b)/i, "installs a global language package"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:docker|podman)\s+(?:container\s+)?(?:rm|kill|stop|run\b[^;&|\n]*(?:--privileged\b|--pid\s*=\s*host\b|-v\s*\/(?:\s|:)|--volume\s*=\s*\/(?:\s|:)))/i, "performs a privileged or destructive container operation"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:umount|swapon|swapoff)\b/i, "changes mounted filesystems or swap"],
-    // Bare `mount` lists current mounts. Arguments can select or change a
-    // mount, so keep every non-bare invocation behind confirmation.
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?mount\b\s+(?![|;&)\n])/i, "changes mounted filesystems or swap"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:insmod|modprobe|rmmod)\b/i, "changes loaded kernel modules"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?sysctl\s+(?:-w|--write)\b/i, "changes kernel runtime settings"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:useradd|userdel|usermod|groupadd|groupdel|groupmod|passwd|chpasswd|visudo)\b/i, "changes users, groups, or authentication"],
-    [/(?:>|>>)(?:\s*['"]?)\/(?:root|home\/[^/\s]+)\/(?:\.ssh|\.config\/hobot-code)(?:\/|\b)/i, "writes credentials or Hobot Code configuration"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:iptables|ip6tables|nft)\b/i, "changes firewall or packet-filter state"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?ip\s+(?:address|addr|link|route|rule)\s+(?:add|append|change|delete|del|flush|replace|set)\b/i, "changes network configuration"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:i2cset|gpioset|devmem|cansend|flash_erase|nandwrite|fw_setenv|efibootmgr)\b/i, "writes to board hardware or firmware state"],
-    [/(?:^|[;&|()\n]\s*|\s)(?:curl|wget)\b[^\n]*(?:\||\|&)\s*(?:sudo\s+)?(?:ba|z|k)?sh\b/i, "downloads and executes remote content"],
-  ];
-  return [...new Set([...checks, ...highRiskChecks]
-    .filter(([pattern]) => pattern.test(value))
-    .map(([_pattern, reason]) => reason)
-    .concat(processControlShellReasons(value)))];
+  return analyzeShellCommand(command).destructiveReasons;
 }
 
 export function networkShellReasons(command) {
-  const value = String(command ?? "");
-  const networkChecks = [
-    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:curl|wget|ssh|scp|sftp|ftp|telnet|nc|ncat|netcat|socat|ping|traceroute|tracepath|dig|host|nslookup|ssh-keyscan)\b/i,
-    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?git\s+(?:clone|fetch|pull|push|ls-remote|submodule\s+(?:add|update))\b/i,
-    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:apt(?:-get)?|dnf|yum|zypper|pacman)\s+(?:download|install|refresh|update|upgrade|dist-upgrade|full-upgrade)\b/i,
-    /(?:^|[;&|()\n]\s*|\s)(?:\/[^\s;|]+\/)?(?:pip3?|npm|npx|pnpm|yarn|bun|cargo|go|gem)\s+(?:add|ci|dlx|fetch|get|install|publish|update)\b/i,
-    /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?(?:docker|podman)\s+(?:build|login|pull|push|run)\b/i,
-    /(?:^|[;&|()\n]\s*|\s)(?:\/[^\s;|]+\/)?(?:gh|glab|kubectl)\b/i,
-    /\/dev\/(?:tcp|udp)\//i,
-  ];
-  return networkChecks.some((pattern) => pattern.test(value))
-    ? ["uses a recognized outbound network client while the OS sandbox shares host networking"]
-    : [];
+  return analyzeShellCommand(command).networkReasons;
 }
 
 // A remote find over shared/FUSE storage can wait indefinitely for metadata.
 // Require an explicit timeout before the shell process is started so the Agent
 // remains cancellable and the UI can return to the composer on slow mounts.
 export function unboundedRemoteScanReasons(command) {
-  const value = String(command ?? "");
-  const hasSSH = /(?:^|[;&|()\n]\s*|\s)(?:sudo\s+)?(?:\/[^\s;|]+\/)?ssh\b/i.test(value);
-  const hasFind = /(?:^|[\s"';&|()\n])(?:command\s+)?(?:\/[^\s;|]+\/)?find\b/i.test(value);
-  const hasSharedRoot = /\/(?:mnt\/data|cache|home)(?:\/|\b)/i.test(value);
-  const hasTimeout = /(?:^|[;&|()\n]\s*)(?:timeout|gtimeout)\s+(?:-k\s+\S+\s+)?\d+(?:\.\d+)?[smhd]?\b/i.test(value)
-    || /\b(?:timeout|gtimeout)\s*=/i.test(value);
-  if (hasSSH && hasFind && hasSharedRoot && !hasTimeout) {
-    return ["remote recursive scan has no timeout and targets shared storage"];
-  }
-  return [];
+  return analyzeShellCommand(command).remoteScanReasons;
 }
 
-export function resolveShellSafety(command, networkAction = "ask") {
-  const destructiveReasons = destructiveShellReasons(command);
-  const networkReasons = networkShellReasons(command);
-  if (networkReasons.length > 0 && networkAction === "deny") {
+export function resolveShellSafety(command, networkAction = "ask", options = {}) {
+  const analysis = analyzeShellCommand(command);
+  const recognizedNetwork = analysis.networkReasons.length > 0;
+  const approvalAmbiguities = options.managedSandbox
+    ? analysis.ambiguousReasons.filter((reason) => !reason.startsWith("runs an unclassified external command:"))
+    : analysis.ambiguousReasons;
+  const unclassifiedOnSharedNetwork = analysis.ambiguousReasons.length > 0
+    && options.networkBoundary === "shared";
+  // A denied shared-network policy blocks unknown egress candidates. Under a
+  // restricted OS network namespace, unknown project executables can run with
+  // the sandbox boundary enforcing network isolation instead.
+  if ((recognizedNetwork || unclassifiedOnSharedNetwork) && networkAction === "deny") {
     return {
       blocked: true,
-      approvalReasons: destructiveReasons,
-      recognizedNetwork: true,
+      approvalReasons: analysis.destructiveReasons,
+      recognizedNetwork,
       rememberNetworkCall: false,
+      ...(recognizedNetwork ? {} : { blockedReason: "unclassified-egress" }),
     };
   }
   return {
     blocked: false,
     approvalReasons: [
-      ...destructiveReasons,
-      ...(networkReasons.length > 0 && networkAction === "ask" ? networkReasons : []),
+      ...analysis.destructiveReasons,
+      ...approvalAmbiguities,
+      ...(recognizedNetwork && networkAction === "ask" ? analysis.networkReasons : []),
     ],
-    recognizedNetwork: networkReasons.length > 0,
-    rememberNetworkCall: destructiveReasons.length === 0
-      && networkReasons.length > 0
+    recognizedNetwork,
+    rememberNetworkCall: analysis.destructiveReasons.length === 0
+      && approvalAmbiguities.length === 0
+      && recognizedNetwork
       && networkAction === "ask",
   };
 }
 
 export function effectiveNetworkAction(configuredAction, networkMode) {
-  return networkMode === "offline" ? "deny" : configuredAction;
+  return networkMode === "shared" ? configuredAction : "deny";
 }

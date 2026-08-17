@@ -535,7 +535,17 @@ Developer 不是“允许所有命令”。以下行为仍可能询问或被拒�
 - 工作区外写入和关键系统路径；
 - 软件安装、服务、内核或网络配置；
 - 终止进程和硬件操作；
-- MCP、未知工具、持久记忆或目标状态变更。
+- MCP、未知工具、持久记忆、目标状态或权限状态变更。
+
+#### Developer 的 Shell 风险判定
+
+Developer 会先解析 Shell 的执行结构，再按实际会执行的命令判定风险。`grep`、`rg`、`echo`、`printf` 的参数，以及 `hobot schedule create --prompt` 中保存给未来任务的文本，都只是数据；其中出现 `chmod`、`rm`、`ssh` 或 `kill` 不会触发审批。`chmod --help`、`rm --version` 等纯帮助或版本查询同样不触发审批。
+
+解析器会继续检查当前命令实际执行的子命令，包括未转义的 `$(...)`、反引号、`sh`/`bash -c` 的常量脚本、SSH 的远端命令，以及 `sudo`、`env`、`timeout`、`nohup` 等 wrapper。真正执行的 `chmod`/`chown`、删除、关键路径重定向、服务/软件包/内核/网络配置、凭据或持久权限扩大、危险信号和硬件写入仍会要求确认。
+
+动态命令名、`eval`/`source`、未闭合引号或重定向始终会保守询问，而不是把文本猜成安全命令。运行在受管 OS sandbox 内时，普通未知项目可执行文件（例如 `./configure`、`./project-tool --status`）可直接运行；文件、设备和网络边界仍由 sandbox 强制执行。关闭 sandbox 后，这类未知外部程序会要求确认。若 `shared` 网络又被策略拒绝，未知程序仍会 fail-closed，避免把潜在外联误当成本地命令。
+
+`offline` 和 `model-only` 均由 OS 网络边界限制工具出口：前者完全断网，后者只保留 agentd 的受管模型代理。两者不会把未知本地工具错误写成“网络被拒绝”；已识别的 `ssh`、`curl`、下载器和远程构建仍会显示与实际边界一致的阻断原因。
 
 root 会话默认对 `bash`、`write`、`edit` 逐次确认。需要让普通操作遵循策略而不是 root 全部确认，可在 TUI 使用：
 
@@ -1038,7 +1048,10 @@ Hobot Code 的 sandbox 用于减少误操作和限制 Agent 进程树的写入�
 - `writes to a protected system path`：命令可能写工作区外或关键路径；
 - `permission policy requires confirmation`：该工具规则仍是 ask；
 - root mutation 提示：root 仍处于逐次确认模式；
-- destructive/network/hardware：命中硬安全检查。
+- destructive/network/hardware：实际 executable 命中硬安全检查；
+- `runs an unclassified external command`、`shell command name is dynamic` 或 `cannot be classified safely`：命令语义无法安全确认。
+
+不要仅因命令文本中出现 `chmod`、`rm`、`ssh` 或 `kill` 就判断为策略异常。查看 **Target** 和 **Reason**：审批理由对应的是解析后真正会执行的命令，而不是 `grep` 模式、日志文本或 `hobot schedule --prompt` 保存的数据。
 
 root 用户可执行 `/permissions root policy` 和 `/permissions preset developer`。Developer 默认允许普通外联，但不会关闭破坏性、系统路径和硬件保护；未知 MCP 仍保守询问。
 

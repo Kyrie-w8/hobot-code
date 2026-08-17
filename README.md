@@ -105,7 +105,7 @@ sudo ./install.sh  # root 直接登录时使用 ./install.sh
 
 Studio 添加板卡时会先验证 SSH、协议、能力与实际板型，成功后才保存；错误地址不会污染板卡列表。已保存板卡可直接编辑或删除，删除连接不会停止板端任务。版本页分别提供 Studio 下载和板端事务升级；两侧都有新版时可以先升级板端并重连，再打开 Studio 下载。执行板端升级时仍由板端拒绝活跃 Agent、Studio bridge、并发安装和隐式降级，桌面端不能绕过这些保护。
 
-输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 放行非 root 会话的日常 Shell 与工作区编辑。板卡以 root 连接时，变更工具仍要求确认。审批时可选择仅放行一次、仅在当前任务记住这一次完全相同的工具调用，或拒绝；危险 Shell 不提供记忆授权。工作区外写入和受保护系统路径仍需要单独处理。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
+输入框底部的权限菜单为当前任务独立选择三档板端策略：**Review only** 禁止变更，**Ask for changes** 在变更前确认，**Developer** 让日常 Shell 与工作区编辑按实际风险运行。root 会话先使用 `/permissions root policy` 和 `/permissions preset developer` 切换为风险判定；删除、系统路径、权限/凭据、服务/软件包、网络/内核、硬件和语义无法安全分类的命令仍会询问。审批可选择仅放行一次；对可识别的网络访问还可授予当前任务的网络能力，对经过探测的 OpenExplorer 构建机可授予当前任务信任。Shell 分类只检查 executable 位置，`grep`/`echo` 文本和 `hobot schedule --prompt` 数据不会污染风险判断。工作区外写入和受保护系统路径仍需要单独处理。权限模式切换仅允许在 Ready 或任务停止后进行。目标用户必须已经存在并拥有可解析的 home 目录。
 
 桌面端在当前模型明确声明支持图像输入时，允许在新任务和后续消息中附加 JPEG、PNG、WebP 或 GIF 图片；模型能力未知时按纯文本处理。大图会在 Mac 本地缩放压缩，每条消息最多 4 张、编码前合计不超过 1 MiB；图片通过既有 SSH/RPC 通道直接写入板端会话，不创建公开上传地址，事件日志只保留文件名和 MIME 摘要。Studio 和 agentd 会分别校验同一套[模型能力契约](docs/model-capabilities.md)，客户端不能绕过。PDF、Word 等文档附件尚未开放，也不会被静默当作纯文本发送。
 
@@ -360,7 +360,7 @@ hobot extensions --json
 Hobot Code 使用板端 OS sandbox 限制默认 Agent 的文件、设备和 capability，但它不是用来执行任意不可信代码的完整虚拟机：
 
 - 内置 `write`、`edit` 禁止直接修改 `/boot`、`/dev`、`/etc`、`/proc`、`/sys`、`/usr` 和 `/var/lib`。
-- 内置工具的工作区外写入、识别出的高风险 Shell 和外联客户端需要交互确认；root 下 Ask 模式逐次审批变更工具，Developer 模式按实际风险审批，但不能绕过受保护路径和破坏性操作边界。
+- 内置工具的工作区外写入、识别出的高风险 Shell 和外联客户端需要交互确认；root 下 Ask 模式逐次审批变更工具，Developer 模式按结构化 Shell 风险判定审批，但不能绕过受保护路径和破坏性操作边界。未转义命令替换、解释器脚本、SSH 远端命令和 wrapper 会递归检查；普通参数文本不会被误判为命令。
 - `shared` 网络下，Ask 模式会确认可识别的外联命令，Developer 模式默认放行普通 SSH、下载和远程构建，但下载执行、系统修改、删除和硬件写入等破坏性操作仍需确认。内置 D-Robotics 模型和受支持的 Hobot 受管 Anthropic/OpenAI 模型可用 `--network model-only` 保留固定模型出口并强制切断工具通用网络；本地模型可用 `offline` 完全断网。Google、Pi 登录和自管 Provider 当前仍需 `shared`。
 - 默认权限允许模型检索记忆，但每次模型写入记忆都要求确认；用户可以修改该策略。
 - 第三方扩展和 Skills 以当前用户权限运行，安装前必须审查来源与代码。

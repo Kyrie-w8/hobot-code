@@ -216,7 +216,10 @@ function sandboxRuntimeStatus() {
   const mode = String(process.env.HOBOT_CODE_SANDBOX_MODE ?? "off").trim() || "off";
   const backend = String(process.env.HOBOT_CODE_SANDBOX_BACKEND ?? "none").trim() || "none";
   const scope = String(process.env.HOBOT_CODE_SANDBOX_SCOPE ?? (process.env.HOBOT_CODE_BACKGROUND_TASK ? "background" : "unmanaged")).trim();
-  const network = String(process.env.HOBOT_CODE_NETWORK_MODE ?? "shared").trim() === "offline" ? "offline" : "shared";
+  const requestedNetwork = String(process.env.HOBOT_CODE_NETWORK_MODE ?? "shared").trim();
+  const network = ["shared", "model-only", "offline"].includes(requestedNetwork)
+    ? requestedNetwork
+    : "shared";
   return {
     scope,
     mode,
@@ -1805,34 +1808,41 @@ export default function rdkExtension(pi: ExtensionAPI) {
           reason: `${unboundedScanReasons.join("; ")}. Add an explicit timeout (for example: timeout 10s find ...), narrow the search root, or use openexplorer_remote_run with its bounded timeout.`,
         };
       }
-      const offlineNetwork = sandboxRuntimeStatus().network === "offline";
+      const sandbox = sandboxRuntimeStatus();
       const shellSafety = resolveShellSafety(
         command,
-        effectiveNetworkAction(resolveToolCallAction(permissionPolicy, "network", event.input), offlineNetwork ? "offline" : "shared"),
+        effectiveNetworkAction(resolveToolCallAction(permissionPolicy, "network", event.input), sandbox.network),
+        { networkBoundary: sandbox.network, managedSandbox: sandbox.managed },
       );
       if (shellSafety.blocked) {
-        return { block: true, reason: offlineNetwork
-          ? "network access is disabled by the task's OS network boundary"
-          : `network access is denied by ${permissionPolicyPath()}` };
+        return { block: true, reason: shellSafety.blockedReason === "unclassified-egress"
+          ? `an unclassified command cannot run while network access is denied by ${permissionPolicyPath()}`
+          : sandbox.network === "offline"
+            ? "network access is disabled by the task's OS network boundary"
+            : sandbox.network === "model-only"
+              ? "tool network access is disabled; this task permits only the managed model proxy"
+              : `network access is denied by ${permissionPolicyPath()}` };
       }
       approvalReasons.push(...shellSafety.approvalReasons);
       canAllowTaskNetwork = shellSafety.rememberNetworkCall;
     }
 
     if (event.toolName === "openexplorer_remote_run" || (event.toolName === "openexplorer_build_host" && event.input.action === "probe")) {
-      const offlineNetwork = sandboxRuntimeStatus().network === "offline";
+      const sandbox = sandboxRuntimeStatus();
       const requestedTarget = event.input.target
         ? normalizeBuildHostTarget(event.input.target)
         : await loadSelectedBuildHost();
       const trustedBuildHost = await isBuildHostTrusted(requestedTarget);
       const networkAction = effectiveNetworkAction(
         resolveToolCallAction(permissionPolicy, "network", event.input),
-        offlineNetwork ? "offline" : "shared",
+        sandbox.network,
       );
       if (networkAction === "deny") {
-        return { block: true, reason: offlineNetwork
+        return { block: true, reason: sandbox.network === "offline"
           ? "network access is disabled by the task's OS network boundary"
-          : `network access is denied by ${permissionPolicyPath()}` };
+          : sandbox.network === "model-only"
+            ? "tool network access is disabled; this task permits only the managed model proxy"
+            : `network access is denied by ${permissionPolicyPath()}` };
       }
       if (event.toolName === "openexplorer_remote_run") {
         const remoteSafety = resolveShellSafety(String(event.input.command ?? ""), networkAction);
@@ -2104,7 +2114,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           `Policy: ${permissionPolicyPath()}`,
           `Root mode: ${permissionPolicy.rootMode}`,
           `Default: ${permissionPolicy.default}`,
-          `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}; network shared)`,
+          `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}; network ${sandboxRuntimeStatus().network})`,
           `Recognized network commands: ${resolveToolAction(permissionPolicy, "network")}`,
           permissionPolicyError ? `Fallback: ${permissionPolicyError}` : undefined,
           `Hidden tools: ${hidden.length > 0 ? hidden.join(", ") : "none"}`,
@@ -2579,7 +2589,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         `Hooks: ${hookConfig.enabled ? `${hookConfig.hooks.length} enabled (${hookConfig.failurePolicy})` : "off"}`,
         `LSP processes: ${((lspManager?.status().running as unknown[] | undefined) ?? []).length}`,
         `Legacy sessions: ${resolve(resolveUserPaths().stateRoot, "legacy-sessions")}`,
-        `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}) | network shared`,
+        `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}) | network ${sandboxRuntimeStatus().network}`,
         `D-Robotics credential: ${gatewayCredential ? "configured" : "missing"} | removed from tool environment${sandboxRuntimeStatus().managed ? " | hobot.env masked" : ""}`,
 		`Managed provider credentials: ${managedProviderCredentialStatus.configured} configured, ${managedProviderCredentialStatus.missing} missing | removed from tool environment${sandboxRuntimeStatus().managed ? " | hobot.env masked" : ""}`,
 		"Pi login and self-managed provider credentials: Pi or provider-dependent isolation",
