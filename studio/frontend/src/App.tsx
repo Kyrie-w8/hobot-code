@@ -1282,7 +1282,7 @@ function App() {
 		{connection?.capabilities?.capabilities.includes('schedules.v1') && <button className="icon-button" title="Schedules" disabled={connectionState !== 'online'} onClick={() => setShowSchedules(true)}><CalendarClock size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('providers.manage.v1') && <button className="icon-button" title="Model providers" disabled={connectionState !== 'online'} onClick={() => setShowProviders(true)}><KeyRound size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1') && <button className={`icon-button diagnostic-status ${diagnostics?.status ?? ''}`} title="Board readiness" disabled={connectionState !== 'online'} onClick={() => void openDiagnostics()}>{diagnosticsLoading ? <LoaderCircle size={16} className="spin" /> : <Activity size={16} />}</button>}
-        {connectionState === 'online' && <button className="icon-button" title="BPU Benchmark & Model Inspector" onClick={() => setShowBPUBenchmark(true)}><Zap size={16} /></button>}
+        {connectionState === 'online' && <button className="icon-button" title="BPU Benchmark & Model Inspector" onClick={() => setShowBPUBenchmark(true)}><Gauge size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
@@ -2487,14 +2487,12 @@ function BPUBenchmarkDialog({
       <section className="modal bpu-modal" role="dialog" aria-modal="true" aria-labelledby="bpu-title">
         <div className="modal-header">
           <div>
-            <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-              <span className="modal-eyebrow">D-Robotics Hardware Acceleration</span>
-              <span className="bpu-badge"><Cpu size={13} />{snapshot?.board || 'RDK'} · {bpuCoreCount}x BPU</span>
-            </div>
+            <span className="modal-eyebrow">D-Robotics Hardware Acceleration · {snapshot?.board || 'RDK'} · {bpuCoreCount}x BPU</span>
             <h2 id="bpu-title">BPU Benchmark & Model Inspector</h2>
           </div>
           <button className="icon-button" title="Close" disabled={benchmarking} onClick={onClose}><X size={18} /></button>
         </div>
+
 
         <div className="bpu-layout">
           {/* Left Sidebar: Configurations */}
@@ -2582,12 +2580,12 @@ function BPUBenchmarkDialog({
               <button
                 type="button"
                 className="primary-button"
-                style={{width: '100%', height: '38px', gap: '8px', fontSize: '13px', fontWeight: 600}}
+                style={{width: '100%', minHeight: '38px', gap: '8px'}}
                 disabled={!effectivePath || benchmarking || inspecting}
                 onClick={() => void runBenchmark()}
               >
-                {benchmarking ? <LoaderCircle size={16} className="spin" /> : <Zap size={16} />}
-                {benchmarking ? 'Benchmarking...' : 'Run BPU Benchmark'}
+                {benchmarking ? <LoaderCircle size={16} className="spin" /> : <Gauge size={16} />}
+                {benchmarking ? 'Benchmarking...' : '⚡ Run BPU Benchmark'}
               </button>
             </div>
           </div>
@@ -2606,9 +2604,19 @@ function BPUBenchmarkDialog({
                 <span>{inspectError}</span>
               </div>
             )}
+            {benchmarking && (
+              <div className="bpu-running-banner">
+                <LoaderCircle size={20} className="spin" />
+                <div>
+                  <strong>Executing BPU Hardware Benchmark on {snapshot?.board || 'RDK SoC'}...</strong>
+                  <span>Running {frameCount} frames ({threadCount} thread{threadCount > 1 ? 's' : ''}) on {coreId === 0 ? 'All / Auto Cores' : `Core ${coreId - 1}`}</span>
+                </div>
+              </div>
+            )}
 
             {/* Top Metric Cards */}
             {currentResult && (
+
               <div className="bpu-hero-grid">
                 <div className="bpu-metric-card accent">
                   <span className="bpu-metric-label">Inference Throughput</span>
@@ -2656,12 +2664,13 @@ function BPUBenchmarkDialog({
                       <dl className="tensor-props">
                         <dt>Shape:</dt><dd>{t.validShape}</dd>
                         <dt>Format:</dt><dd>{t.tensorType}</dd>
-                        <dt>Layout:</dt><dd>{t.tensorLayout}</dd>
+                        {t.tensorLayout && <><dt>Layout:</dt><dd>{t.tensorLayout}</dd></>}
                         {t.inputSource && <><dt>Source:</dt><dd>{t.inputSource}</dd></>}
                         {t.alignedBytes > 0 && <><dt>Buffer:</dt><dd>{(t.alignedBytes / 1024).toFixed(1)} KB</dd></>}
                       </dl>
                     </div>
                   ))}
+
 
                   {/* Output Tensors */}
                   {modelInfo.outputs.map((t) => (

@@ -227,6 +227,15 @@ func ParseBPUBenchmarkResult(raw string, req BPUBenchmarkRequest) (BPUBenchmarkR
 		res.FrameCount = 200
 	}
 
+	base := req.ModelPath
+	if idx := strings.LastIndex(base, "/"); idx != -1 {
+		base = base[idx+1:]
+	}
+	base = strings.TrimSuffix(base, ".bin")
+	base = strings.TrimSuffix(base, ".hbm")
+	base = strings.TrimSuffix(base, ".onnx")
+	res.ModelName = base
+
 	if match := reFrameRate.FindStringSubmatch(raw); len(match) > 1 {
 		if v, err := strconv.ParseFloat(match[1], 64); err == nil {
 			res.FPS = v
@@ -257,6 +266,13 @@ func ParseBPUBenchmarkResult(raw string, req BPUBenchmarkRequest) (BPUBenchmarkR
 			res.MaxLatencyMs = v
 		}
 	}
+	if res.MinLatencyMs == 0 {
+		res.MinLatencyMs = res.AverageLatencyMs
+	}
+	if res.MaxLatencyMs == 0 {
+		res.MaxLatencyMs = res.AverageLatencyMs
+	}
+
 	if match := reProgramRunTime.FindStringSubmatch(raw); len(match) > 1 {
 		if v, err := strconv.ParseFloat(match[1], 64); err == nil {
 			res.ProgramRunTimeMs = v
@@ -312,12 +328,13 @@ func (client *Client) RunBPUBenchmark(ctx context.Context, req BPUBenchmarkReque
 
 	outputBytes, err := client.runBoardCommand(ctx, cmd, nil)
 	output := string(outputBytes)
-	if err != nil && !strings.Contains(output, "FPS:") && !strings.Contains(output, "Frame rate is:") {
+	if err != nil && !reFrameRate.MatchString(output) && !reFallbackFPS.MatchString(output) && !strings.Contains(output, "FPS") {
 		return BPUBenchmarkResult{}, fmt.Errorf("hrt_model_exec perf failed: %w (output: %s)", err, output)
 	}
 
 	return ParseBPUBenchmarkResult(output, req)
 }
+
 
 // ListBPUModels finds .bin, .hbm and .onnx model files under the given directory.
 func (client *Client) ListBPUModels(ctx context.Context, cwd string) ([]string, error) {
