@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.9
+
+### Fixed
+
+- Keep the task-control socket read side open while waiting for an approval-model decision. This fixes Pi/Bun closing the Unix socket before the board-side reviewer response could be read.
+
 ## 0.28.8
 
 ### Fixed

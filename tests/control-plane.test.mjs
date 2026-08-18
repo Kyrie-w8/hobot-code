@@ -89,6 +89,12 @@ test("approval model decisions remain exact-action scoped", async () => {
   assert.equal(result.scope.action, actionFingerprint("write", input));
 });
 
+test("approval model task control keeps the response side open", async () => {
+  const source = await readFile(new URL("../extensions/rdk/permission-reviewer.mjs", import.meta.url), "utf8");
+  assert.match(source, /socket\.on\("connect", \(\) => socket\.write\(envelope\)\)/u);
+  assert.doesNotMatch(source, /socket\.end\(envelope\)/u);
+});
+
 test("approval model can review network remote system hardware MCP and persistent tools", async () => {
   const reviewed = [];
   const reviewer = createPermissionReviewer({ review: async (request) => {

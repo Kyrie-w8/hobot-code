@@ -88,7 +88,10 @@ export function requestPermissionModelReview(request, { env = process.env, timeo
       socket.destroy();
       if (error) reject(error); else resolve(value);
     };
-    socket.on("connect", () => socket.end(envelope));
+    // Pi's Bun runtime may treat end(payload) as a full close for Unix
+    // sockets. A newline terminates the request, so keep the read side open
+    // until agentd returns the decision and finish() destroys the socket.
+    socket.on("connect", () => socket.write(envelope));
     socket.on("data", (chunk) => {
       received = Buffer.concat([received, chunk]);
       if (received.length > MAX_RESPONSE_BYTES) return finish(new Error("approval model response is too large"));
