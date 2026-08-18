@@ -2596,27 +2596,50 @@ function BPUBenchmarkDialog({
               </div>
 
               {discoveredModels.length > 0 ? (
-                <div className="bpu-model-list">
-                  {discoveredModels.map((m) => (
+                <>
+                  <div className="bpu-model-list">
+                    {discoveredModels.map((m) => {
+                      const name = m.split('/').pop() || m;
+                      const isOfficial = /mobilenetv2_224x224/i.test(name);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
+                          onClick={() => setSelectedModel(m)}
+                        >
+                          <Package size={14} />
+                          <span title={m}>{name}</span>
+                          {isOfficial && <span className="bpu-official-tag">Official</span>}
+                        </button>
+                      );
+                    })}
                     <button
-                      key={m}
                       type="button"
-                      className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
-                      onClick={() => setSelectedModel(m)}
+                      className={`bpu-model-item ${selectedModel === 'custom' ? 'selected' : ''}`}
+                      onClick={() => setSelectedModel('custom')}
                     >
-                      <Package size={14} />
-                      <span title={m}>{m.split('/').pop() || m}</span>
+                      <Folder size={14} />
+                      <span>Custom Path...</span>
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    className={`bpu-model-item ${selectedModel === 'custom' ? 'selected' : ''}`}
-                    onClick={() => setSelectedModel('custom')}
-                  >
-                    <Folder size={14} />
-                    <span>Custom Path...</span>
-                  </button>
-                </div>
+                  </div>
+
+                  {!discoveredModels.some((m) => /mobilenetv2_224x224/i.test(m)) && (
+                    <div className="bpu-download-banner">
+                      <span>💡 尚未安装官方基准模型</span>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        style={{padding: '2px 8px', fontSize: '11px', whiteSpace: 'nowrap'}}
+                        disabled={downloadingSample || uploadingModel}
+                        onClick={() => void handleDownloadSample()}
+                      >
+                        {downloadingSample ? <LoaderCircle size={12} className="spin" /> : <Download size={12} />}
+                        {downloadingSample ? '下载中' : '📥 获取官方示例'}
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <div className="bpu-empty-card">
                   <Package size={28} style={{color: 'var(--text-dim)', opacity: 0.6}} />
@@ -2653,6 +2676,7 @@ function BPUBenchmarkDialog({
                   </button>
                 </div>
               )}
+
 
               {selectedModel === 'custom' && (
                 <div style={{marginTop: '6px'}}>

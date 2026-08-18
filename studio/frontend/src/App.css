@@ -1384,6 +1384,34 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   font-size: var(--font-size-caption);
   font-weight: 600;
 }
+.bpu-official-tag {
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(215, 180, 107, 0.18);
+  color: var(--amber);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.bpu-download-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(101, 191, 167, 0.08);
+  border: 1px dashed rgba(101, 191, 167, 0.3);
+  font-size: var(--font-size-caption);
+}
+.bpu-download-banner span {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
 
 
 @media (max-width: 1100px) {
