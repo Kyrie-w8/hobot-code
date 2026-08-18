@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+
 	"errors"
 	"fmt"
 	"net/http"
@@ -788,6 +790,72 @@ func (app *App) GetDeploymentStatus(boardID, taskID string) (hobot.DeploymentSta
 	defer cancel()
 	return client.DeploymentStatus(ctx, taskID)
 }
+
+func (app *App) InspectBPUModel(boardID, modelPath string) (hobot.BPUModelInfo, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.BPUModelInfo{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 30*time.Second)
+	defer cancel()
+	return client.InspectBPUModel(ctx, modelPath)
+}
+
+func (app *App) RunBPUBenchmark(boardID string, req hobot.BPUBenchmarkRequest) (hobot.BPUBenchmarkResult, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.BPUBenchmarkResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 2*time.Minute)
+	defer cancel()
+	return client.RunBPUBenchmark(ctx, req)
+}
+
+func (app *App) ListWorkspaceBPUModels(boardID, cwd string) ([]string, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.ListBPUModels(ctx, cwd)
+}
+
+func (app *App) DownloadSampleBPUModel(boardID, soc string) (string, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 2*time.Minute)
+	defer cancel()
+	return client.DownloadSampleBPUModel(ctx, soc)
+}
+
+func (app *App) UploadBPUModel(boardID, filename string, base64Data string) (string, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return "", err
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64 model data: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 3*time.Minute)
+	defer cancel()
+	return client.UploadBPUModel(ctx, filename, data)
+}
+
+func (app *App) DeleteBPUModel(boardID, modelPath string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 30*time.Second)
+	defer cancel()
+	return client.DeleteBPUModel(ctx, modelPath)
+}
+
+
 
 func (app *App) RefreshTasks(boardID string, includeArchived bool) (hobot.TaskPage, error) {
 	client, err := app.client(boardID)
