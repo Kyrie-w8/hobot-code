@@ -1179,20 +1179,21 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.5;
   transition: all 0.15s ease;
   flex-shrink: 0;
 }
-.bpu-model-item:hover .bpu-model-delete {
-  opacity: 0.7;
+.bpu-model-item:hover .bpu-model-delete:not(.system-protected) {
+  opacity: 0.85;
 }
-.bpu-model-delete:hover {
+.bpu-model-delete:not(.system-protected):hover {
   opacity: 1 !important;
   color: var(--red);
   background: rgba(224, 108, 117, 0.15);
 }
 .bpu-form-row {
   display: grid;
+
 
   grid-template-columns: 1fr 1fr;
   gap: 8px;

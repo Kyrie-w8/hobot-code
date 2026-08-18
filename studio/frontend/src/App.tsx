@@ -6,10 +6,10 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, CalendarClock, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, FileDiff, Gauge, HardDrive, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
+  Download, FileDiff, Gauge, HardDrive, Info, KeyRound, Lock, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
   Play, Square, SquareTerminal, Trash2, Upload, Wrench, X, XCircle, Zap,
-
 } from 'lucide-react';
+
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldCancelTurnShortcut, shouldSubmitComposer, terminalStatuses, turnCancellationMode} from './composer-policy.js';
@@ -2652,10 +2652,19 @@ function BPUBenchmarkDialog({
                           <Package size={14} />
                           <span title={m}>{name}</span>
                           {isOfficial && <span className="bpu-official-tag">Official</span>}
-                          {!isSystemProtected && (
+                          {isSystemProtected ? (
+                            <span
+                              className="bpu-model-delete system-protected"
+                              title="系统预装示例模型（只读）"
+                              style={{opacity: 0.35, cursor: 'not-allowed'}}
+                              onClick={(e) => { e.stopPropagation(); }}
+                            >
+                              <Lock size={12} />
+                            </span>
+                          ) : (
                             <span
                               className="bpu-model-delete"
-                              title={`Delete ${name} from board`}
+                              title={`从开发板删除 ${name}`}
                               onClick={(e) => requestDeleteModel(e, m)}
                             >
                               {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
@@ -2663,6 +2672,7 @@ function BPUBenchmarkDialog({
                           )}
                         </button>
                       );
+
 
                     })}
                     <button
