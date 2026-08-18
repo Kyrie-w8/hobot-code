@@ -6,8 +6,9 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, CalendarClock, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, FileDiff, Gauge, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
-  Play, Square, SquareTerminal, Trash2, Wrench, X, XCircle, Zap,
+  Download, FileDiff, Gauge, HardDrive, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
+  Play, Square, SquareTerminal, Trash2, Upload, Wrench, X, XCircle, Zap,
+
 } from 'lucide-react';
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
@@ -2406,24 +2407,76 @@ function BPUBenchmarkDialog({
   const [currentResult, setCurrentResult] = useState<BPUBenchmarkResult | null>(null);
   const [history, setHistory] = useState<BPUBenchmarkResult[]>([]);
 
+  const [downloadingSample, setDownloadingSample] = useState(false);
+  const [uploadingModel, setUploadingModel] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const effectivePath = (selectedModel === 'custom' ? customModelPath : selectedModel).trim();
+
+  const loadModels = useCallback((targetModelToSelect?: string) => {
+    return api.listWorkspaceBPUModels(boardId, cwd).then((models) => {
+      setDiscoveredModels(models);
+      if (targetModelToSelect && (models.includes(targetModelToSelect) || targetModelToSelect === 'custom')) {
+        setSelectedModel(targetModelToSelect);
+      } else if (models.length > 0) {
+        setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
+      } else {
+        setSelectedModel('');
+      }
+    }).catch(() => {
+      setDiscoveredModels([]);
+      setSelectedModel('');
+    });
+  }, [boardId, cwd]);
 
   // Load models on mount
   useEffect(() => {
-    let cancelled = false;
-    api.listWorkspaceBPUModels(boardId, cwd).then((models) => {
-      if (cancelled) return;
-      setDiscoveredModels(models);
-      if (models.length > 0) {
-        setSelectedModel(models[0]);
-      } else {
-        setSelectedModel('/root/yolov8_640x640_nv12.bin');
-      }
-    }).catch(() => {
-      if (!cancelled) setSelectedModel('/root/yolov8_640x640_nv12.bin');
-    });
-    return () => { cancelled = true; };
-  }, [boardId, cwd]);
+    void loadModels();
+  }, [loadModels]);
+
+  // Download official sample model
+  const handleDownloadSample = async () => {
+    if (downloadingSample || benchmarking) return;
+    setDownloadingSample(true);
+    setBenchmarkError('');
+    try {
+      const soc = snapshot?.board || 'RDK';
+      const downloadedPath = await api.downloadSampleBPUModel(boardId, soc);
+      await loadModels(downloadedPath);
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setDownloadingSample(false);
+    }
+  };
+
+  // Upload model from local computer
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingModel(true);
+    setBenchmarkError('');
+    try {
+      const reader = new FileReader();
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          const commaIdx = result.indexOf(',');
+          resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const uploadedPath = await api.uploadBPUModel(boardId, file.name, base64Data);
+      await loadModels(uploadedPath);
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setUploadingModel(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   // Inspect model when path changes
   // Use a ref for the concurrency guard so the useCallback identity stays stable
@@ -2478,7 +2531,6 @@ function BPUBenchmarkDialog({
     }
   };
 
-
   const copyReport = () => {
     if (!currentResult) return;
     const md = `### BPU Benchmark Report: ${currentResult.modelName || currentResult.modelPath}
@@ -2496,6 +2548,13 @@ function BPUBenchmarkDialog({
 
   return (
     <div className="modal-backdrop">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".bin,.hbm"
+        style={{display: 'none'}}
+        onChange={handleUploadFile}
+      />
       <section className="modal bpu-modal" role="dialog" aria-modal="true" aria-labelledby="bpu-title">
         <div className="modal-header">
           <div>
@@ -2510,28 +2569,91 @@ function BPUBenchmarkDialog({
           {/* Left Sidebar: Configurations */}
           <div className="bpu-sidebar">
             <div className="bpu-sidebar-group">
-              <label>Select Model File</label>
-              <div className="bpu-model-list">
-                {discoveredModels.map((m) => (
+              <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px'}}>
+                <label style={{margin: 0}}>Select Model File</label>
+                <div style={{display: 'flex', gap: '4px'}}>
                   <button
-                    key={m}
                     type="button"
-                    className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
-                    onClick={() => setSelectedModel(m)}
+                    className="icon-button"
+                    title="Upload local model (.bin/.hbm)"
+                    style={{width: '24px', height: '24px', padding: 0}}
+                    disabled={uploadingModel || downloadingSample}
+                    onClick={() => fileInputRef.current?.click()}
                   >
-                    <Package size={14} />
-                    <span title={m}>{m.split('/').pop() || m}</span>
+                    {uploadingModel ? <LoaderCircle size={13} className="spin" /> : <Upload size={13} />}
                   </button>
-                ))}
-                <button
-                  type="button"
-                  className={`bpu-model-item ${selectedModel === 'custom' ? 'selected' : ''}`}
-                  onClick={() => setSelectedModel('custom')}
-                >
-                  <Folder size={14} />
-                  <span>Custom Path...</span>
-                </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title="Download official sample model"
+                    style={{width: '24px', height: '24px', padding: 0}}
+                    disabled={uploadingModel || downloadingSample}
+                    onClick={() => void handleDownloadSample()}
+                  >
+                    {downloadingSample ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
+                  </button>
+                </div>
               </div>
+
+              {discoveredModels.length > 0 ? (
+                <div className="bpu-model-list">
+                  {discoveredModels.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
+                      onClick={() => setSelectedModel(m)}
+                    >
+                      <Package size={14} />
+                      <span title={m}>{m.split('/').pop() || m}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`bpu-model-item ${selectedModel === 'custom' ? 'selected' : ''}`}
+                    onClick={() => setSelectedModel('custom')}
+                  >
+                    <Folder size={14} />
+                    <span>Custom Path...</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="bpu-empty-card">
+                  <Package size={28} style={{color: 'var(--text-dim)', opacity: 0.6}} />
+                  <div>
+                    <h4>未发现板端模型</h4>
+                    <p>当前开发板常用目录下暂未检测到 .bin 或 .hbm BPU 模型文件。</p>
+                  </div>
+                  <div className="bpu-empty-actions">
+                    <button
+                      type="button"
+                      className="primary-button bpu-quick-action-btn"
+                      disabled={downloadingSample || uploadingModel}
+                      onClick={() => void handleDownloadSample()}
+                    >
+                      {downloadingSample ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}
+                      {downloadingSample ? '正在下载部署...' : '📥 一键下载官方示例模型'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button bpu-quick-action-btn"
+                      disabled={uploadingModel || downloadingSample}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      {uploadingModel ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}
+                      {uploadingModel ? '正在上传...' : '📤 上传本地模型文件'}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    style={{background: 'none', border: 'none', color: 'var(--blue)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline'}}
+                    onClick={() => setSelectedModel('custom')}
+                  >
+                    或手动输入板端路径...
+                  </button>
+                </div>
+              )}
+
               {selectedModel === 'custom' && (
                 <div style={{marginTop: '6px'}}>
                   <input
@@ -2557,6 +2679,7 @@ function BPUBenchmarkDialog({
 
             <div className="bpu-sidebar-group">
               <label>Benchmark Settings</label>
+
               <div className="bpu-form-row">
                 <label style={{fontSize: '11px'}}>
                   BPU Core

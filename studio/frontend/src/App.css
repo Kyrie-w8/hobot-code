@@ -1324,13 +1324,54 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 48px 20px;
+  padding: 40px 20px;
   color: var(--text-dim);
   text-align: center;
 }
 .bpu-empty-hint svg {
   color: var(--text-dim);
   opacity: 0.5;
+}
+.bpu-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 24px 20px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--line-strong);
+  background: var(--surface-subtle);
+  margin-top: 10px;
+}
+.bpu-empty-card h4 {
+  margin: 0;
+  font-size: var(--font-size-body);
+  color: var(--text);
+}
+.bpu-empty-card p {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-dim);
+  max-width: 320px;
+  line-height: 1.5;
+}
+.bpu-empty-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 280px;
+}
+.bpu-quick-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: var(--font-size-caption);
+  border-radius: var(--radius-sm);
 }
 .bpu-badge {
   display: inline-flex;
@@ -1343,6 +1384,7 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   font-size: var(--font-size-caption);
   font-weight: 600;
 }
+
 
 @media (max-width: 1100px) {
   .studio-shell { grid-template-columns: 248px minmax(460px, 1fr); }

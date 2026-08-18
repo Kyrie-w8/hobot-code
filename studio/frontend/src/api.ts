@@ -112,6 +112,9 @@ const mockBackend: Backend = {
     `${cwd}/yolov8_640x640_nv12.bin`,
     `${cwd}/mobileone_s0_224_rgb_x5.bin`
   ],
+  DownloadSampleBPUModel: async (_board: string, _soc: string): Promise<string> => '/root/models/mobilenetv2_224x224_nv12.bin',
+  UploadBPUModel: async (_board: string, filename: string, _data: string): Promise<string> => `/root/models/${filename}`,
+
 
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
@@ -212,7 +215,10 @@ export const api = {
   inspectBPUModel: (boardId: string, modelPath: string): Promise<BPUModelInfo> => backend().InspectBPUModel(boardId, modelPath),
   runBPUBenchmark: (boardId: string, request: BPUBenchmarkRequest): Promise<BPUBenchmarkResult> => backend().RunBPUBenchmark(boardId, request),
   listWorkspaceBPUModels: (boardId: string, cwd: string): Promise<string[]> => backend().ListWorkspaceBPUModels(boardId, cwd),
+  downloadSampleBPUModel: (boardId: string, soc: string): Promise<string> => backend().DownloadSampleBPUModel(boardId, soc),
+  uploadBPUModel: (boardId: string, filename: string, base64Data: string): Promise<string> => backend().UploadBPUModel(boardId, filename, base64Data),
   disconnectBoard: (id: string) => backend().DisconnectBoard(id),
+
 
   tasks: (id: string, archived = false): Promise<TaskPage> => backend().RefreshTasks(id, archived),
   task: (boardId: string, taskId: string): Promise<Task> => backend().GetTask(boardId, taskId),

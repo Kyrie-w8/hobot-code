@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+
 	"errors"
 	"fmt"
 	"net/url"
@@ -797,6 +799,31 @@ func (app *App) ListWorkspaceBPUModels(boardID, cwd string) ([]string, error) {
 	defer cancel()
 	return client.ListBPUModels(ctx, cwd)
 }
+
+func (app *App) DownloadSampleBPUModel(boardID, soc string) (string, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 2*time.Minute)
+	defer cancel()
+	return client.DownloadSampleBPUModel(ctx, soc)
+}
+
+func (app *App) UploadBPUModel(boardID, filename string, base64Data string) (string, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return "", err
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64 model data: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 3*time.Minute)
+	defer cancel()
+	return client.UploadBPUModel(ctx, filename, data)
+}
+
 
 func (app *App) RefreshTasks(boardID string, includeArchived bool) (hobot.TaskPage, error) {
 	client, err := app.client(boardID)
