@@ -42,6 +42,7 @@ func newPermissionReviewTestTask(t *testing.T) (*task, *permissionReviewerServic
 	t.Helper()
 	root := t.TempDir()
 	cfg := config{
+		SessionDir: root,
 		modelEgressRoutes: map[string]modelEgressRoute{
 			"drobotics": {ID: "drobotics", API: "drobotics-anthropic", Models: map[string]bool{"kimi-k3": true}},
 		},
@@ -84,6 +85,10 @@ func TestPermissionReviewerUsesTaskModelIntentAndExactScope(t *testing.T) {
 	}
 	if result.Status != "approved" || result.Source != "approval-model" || result.Model != "drobotics/kimi-k3" || result.Scope == nil {
 		t.Fatalf("unexpected review result: %+v", result)
+	}
+	audit, err := os.ReadFile(filepath.Join(current.permissionPolicyDirectory(), "approval-review-audit.jsonl"))
+	if err != nil || !bytes.Contains(audit, []byte(`"source":"approval-model"`)) || bytes.Contains(audit, []byte("ssh board install model")) {
+		t.Fatalf("approval audit is missing or retained tool input: %q err=%v", audit, err)
 	}
 }
 

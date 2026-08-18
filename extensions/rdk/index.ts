@@ -2,7 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, lstat, mkdir, open, readFile, readdir, rename, stat } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -90,8 +90,6 @@ const BUILTIN_DROBOTICS_MODELS = [
 ] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
-const REVIEWER_AUDIT_TIMEOUT_MS = 1_000;
-const REVIEWER_AUDIT_MAX_BYTES = 5 * 1024 * 1024;
 type JsonRecord = Record<string, unknown>;
 
 interface BoardSnapshot {
@@ -637,10 +635,6 @@ function permissionPolicyPath(): string {
   return resolveUserPaths().permissionPolicy;
 }
 
-function permissionReviewAuditPath(): string {
-  return resolve(dirname(permissionPolicyPath()), "approval-review-audit.jsonl");
-}
-
 function memoryConfigPath(): string {
   return resolveUserPaths().memoryConfig;
 }
@@ -775,7 +769,6 @@ export default function rdkExtension(pi: ExtensionAPI) {
   const ephemeralCollaborationFile = String(process.env.HOBOT_CODE_SIDE_COLLABORATION_FILE ?? "").trim();
   const sideAgentMode = ephemeralSideAgentMode || backgroundAgentRole === "side";
   const permissionReviewer = createPermissionReviewer();
-	let reviewerAuditTail: Promise<void> = Promise.resolve();
   const runtimeProbeMode = process.env.HOBOT_CODE_RUNTIME_PROBE === "1";
   const rdkProbeMode = process.env.HOBOT_CODE_RDK_PROBE === "1";
   const openExplorerSkillPack = String(process.env.HOBOT_CODE_OPENEXPLORER_SKILLS_ROOT ?? "").trim();
@@ -1001,65 +994,6 @@ export default function rdkExtension(pi: ExtensionAPI) {
   function toolCallAction(toolName: string, input: JsonRecord): PermissionAction {
     const info = pi.getAllTools().find((tool) => tool.name === toolName);
     return resolveToolCallAction(permissionPolicy, toolName, input, isMcpTool(info ?? toolName)) as PermissionAction;
-  }
-
-  async function auditReviewerDecision(tool: string, input: JsonRecord, decision: Record<string, unknown>): Promise<void> {
-    const record = JSON.stringify({
-      schema: 1,
-      at: new Date().toISOString(),
-      taskId: backgroundTaskID || undefined,
-      sideAgent: sideAgentMode || undefined,
-      tool,
-      action: decision.status,
-      source: decision.source,
-      fingerprint: decision.fingerprint,
-      scope: decision.scope,
-      reasons: decision.reasons,
-      risk: typeof decision.risk === "string" ? decision.risk : undefined,
-      model: typeof decision.model === "string" ? decision.model : undefined,
-      latencyMs: typeof decision.latencyMs === "number" ? decision.latencyMs : undefined,
-      // Do not retain tool arguments: target paths and command payloads can
-      // themselves be sensitive. The exact-action fingerprint is auditable.
-      inputShape: Object.keys(input).sort(),
-      targetKind: typeof input.path === "string" ? "path" : typeof input.command === "string" ? "command" : "structured",
-    });
-    const write = async () => {
-      await mkdir(dirname(permissionReviewAuditPath()), { recursive: true, mode: 0o700 });
-		const directory = await lstat(dirname(permissionReviewAuditPath()));
-		if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("review audit directory is not a private real directory");
-		await chmod(dirname(permissionReviewAuditPath()), 0o700);
-      try {
-		const existing = await lstat(permissionReviewAuditPath());
-		if (!existing.isFile() || existing.isSymbolicLink()) throw new Error("review audit path is not a regular file");
-        if ((await stat(permissionReviewAuditPath())).size >= REVIEWER_AUDIT_MAX_BYTES) {
-			try {
-				const backup = await lstat(`${permissionReviewAuditPath()}.1`);
-				if (!backup.isFile() || backup.isSymbolicLink()) throw new Error("review audit backup path is not a regular file");
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-          await rename(permissionReviewAuditPath(), `${permissionReviewAuditPath()}.1`);
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-		const flags = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_CLOEXEC;
-		const audit = await open(permissionReviewAuditPath(), flags, 0o600);
-		try {
-			const info = await audit.stat();
-			if (!info.isFile()) throw new Error("review audit path is not a regular file");
-			await audit.chmod(0o600);
-			await audit.write(`${record}\n`);
-		} finally {
-			await audit.close();
-		}
-    };
-	const queued = reviewerAuditTail.then(async () => Promise.race([
-		write(),
-		new Promise<never>((_, reject) => setTimeout(() => reject(new Error("review audit timed out")), REVIEWER_AUDIT_TIMEOUT_MS)),
-	]));
-	reviewerAuditTail = queued.catch(() => undefined);
-	await queued;
   }
 
   async function refreshPermissionPolicy(): Promise<void> {
@@ -1962,7 +1896,6 @@ export default function rdkExtension(pi: ExtensionAPI) {
           });
           decision = { ...decision, reasons: Array.isArray(decision.reasons) ? decision.reasons.map((reason) => redactSensitiveText(String(reason))) : ["approval model returned no reason"] };
           reviewerDecision = decision;
-          await auditReviewerDecision(event.toolName, event.input as JsonRecord, decision);
         } catch (error) {
           // Reviewer parse, timeout, and audit failures are never permissions.
           decision = {
@@ -1986,7 +1919,6 @@ export default function rdkExtension(pi: ExtensionAPI) {
           if (retry === "Retry this exact action once with reviewer" && typeof decision.fingerprint === "string" && permissionReviewer.requestExactRetry(decision.fingerprint)) {
             let retried = await permissionReviewer.review({ taskId: backgroundTaskID, tool: event.toolName, input: event.input as JsonRecord, facts: reviewFacts, reasons: approvalReasons });
             retried = { ...retried, reasons: Array.isArray(retried.reasons) ? retried.reasons.map((reason) => redactSensitiveText(String(reason))) : ["approval model returned no reason"] };
-            try { await auditReviewerDecision(event.toolName, event.input as JsonRecord, retried); } catch { return { block: true, reason: "approval model audit failed during exact retry; request manual approval" }; }
             if (retried.status === "approved") reviewerApproved = true;
             decision = retried;
             reviewerDecision = decision;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.10
+
+### Fixed
+
+- Persist approval-model audit records in agentd instead of the sandboxed worker. Workspace and stricter sandboxes keep the session policy directory read-only while approvals remain auditable and no longer fall back to a human after a successful model decision.
+
 ## 0.28.9
 
 ### Fixed

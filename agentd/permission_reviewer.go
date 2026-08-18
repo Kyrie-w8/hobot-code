@@ -7,17 +7,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	permissionReviewTimeout      = 30 * time.Second
-	maximumPermissionReviewInput = 128 * 1024
-	maximumPermissionModelOutput = 256 * 1024
-	maximumPermissionReviewText  = 2048
-	permissionReviewMaxTokens    = 1024
+	permissionReviewTimeout       = 30 * time.Second
+	maximumPermissionReviewInput  = 128 * 1024
+	maximumPermissionModelOutput  = 256 * 1024
+	maximumPermissionReviewText   = 2048
+	permissionReviewMaxTokens     = 1024
+	permissionReviewAuditMaxBytes = 5 * 1024 * 1024
 )
 
 var permissionReviewDecisionPattern = regexp.MustCompile(`^(approved|manual-required|denied)$`)
@@ -56,6 +61,7 @@ type permissionReviewResult struct {
 type permissionReviewerService struct {
 	egress *modelEgressServer
 	call   func(context.Context, modelOption, permissionReviewEnvelope) ([]byte, error)
+	audit  sync.Mutex
 }
 
 type permissionReviewEnvelope struct {
@@ -124,7 +130,73 @@ func (service *permissionReviewerService) review(current *task, params permissio
 	if result.Status == "approved" {
 		result.Scope = map[string]string{"kind": "exact-action", "taskId": metadata.ID, "action": params.Fingerprint}
 	}
+	if err := service.auditDecision(current, params, result); err != nil {
+		return permissionReviewResult{}, fmt.Errorf("record approval decision: %w", err)
+	}
 	return result, nil
+}
+
+func (service *permissionReviewerService) auditDecision(current *task, params permissionReviewParams, result permissionReviewResult) error {
+	service.audit.Lock()
+	defer service.audit.Unlock()
+	directory := current.permissionPolicyDirectory()
+	if err := ensurePrivateDir(directory); err != nil {
+		return err
+	}
+	path := filepath.Join(directory, "approval-review-audit.jsonl")
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("approval audit is not a regular file")
+		}
+		if owner, known := fileOwner(info); known && owner != os.Getuid() {
+			return fmt.Errorf("approval audit has an unexpected owner")
+		}
+		if info.Size() >= permissionReviewAuditMaxBytes {
+			backup := path + ".1"
+			if backupInfo, backupErr := os.Lstat(backup); backupErr == nil && (!backupInfo.Mode().IsRegular() || backupInfo.Mode()&os.ModeSymlink != 0) {
+				return fmt.Errorf("approval audit backup is not a regular file")
+			} else if backupErr != nil && !os.IsNotExist(backupErr) {
+				return backupErr
+			}
+			if err := os.Rename(path, backup); err != nil {
+				return err
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	keys := make([]string, 0, len(params.Input))
+	for key := range params.Input {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	targetKind := "structured"
+	if _, ok := params.Input["path"].(string); ok {
+		targetKind = "path"
+	} else if _, ok := params.Input["command"].(string); ok {
+		targetKind = "command"
+	}
+	metadata := current.snapshot()
+	record := map[string]any{
+		"schema": 1, "at": time.Now().UTC().Format(time.RFC3339Nano), "taskId": metadata.ID,
+		"sideAgent": metadata.BranchKind == "side", "tool": params.Tool, "action": result.Status,
+		"source": result.Source, "fingerprint": result.Fingerprint, "scope": result.Scope, "reasons": result.Reasons,
+		"risk": result.Risk, "model": result.Model, "latencyMs": result.LatencyMS, "inputShape": keys, "targetKind": targetKind,
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	_, err = file.Write(append(encoded, '\n'))
+	return err
 }
 
 func (manager *taskManager) permissionReviewModel(selection string) (modelOption, error) {
