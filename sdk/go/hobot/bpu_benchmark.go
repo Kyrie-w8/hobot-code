@@ -347,7 +347,7 @@ func (client *Client) RunBPUBenchmark(ctx context.Context, req BPUBenchmarkReque
 // ListBPUModels finds .bin, .hbm and .onnx model files in dedicated model directories.
 func (client *Client) ListBPUModels(ctx context.Context, cwd string) ([]string, error) {
 	// 1. Scan primary curated model directories first
-	primaryDirs := []string{"/root/models", "/userdata/models", "/opt/hobot/model/x5/basic", "/opt/hobot/model", "/root/ssd"}
+	primaryDirs := []string{"/root/models", "/userdata/models", "/opt/hobot/model/s600/basic", "/opt/hobot/model/x5/basic", "/opt/hobot/model", "/root/ssd"}
 	if cwd != "" && cwd != "/root" && !strings.Contains(cwd, "/predictions") && !strings.Contains(cwd, "/evaluation") {
 		primaryDirs = append([]string{cwd}, primaryDirs...)
 	}
@@ -389,7 +389,6 @@ func (client *Client) ListBPUModels(ctx context.Context, cwd string) ([]string, 
 	return models, nil
 }
 
-
 // DownloadSampleBPUModel downloads a verified standard benchmark model for the given SoC.
 func (client *Client) DownloadSampleBPUModel(ctx context.Context, soc string) (string, error) {
 	socLower := strings.ToLower(soc)
@@ -408,9 +407,9 @@ func (client *Client) DownloadSampleBPUModel(ctx context.Context, soc string) (s
 	if strings.Contains(socLower, "x5") || strings.Contains(socLower, "bayese") {
 		targetFile = fmt.Sprintf("%s/mobilenetv2_224x224_nv12.bin", targetDir)
 		downloadScript = fmt.Sprintf(`
-if [ -f "/opt/hobot/model/x5/basic/mobilenetv2_224x224_nv12.bin" ]; then
+if [ -s "/opt/hobot/model/x5/basic/mobilenetv2_224x224_nv12.bin" ]; then
   cp "/opt/hobot/model/x5/basic/mobilenetv2_224x224_nv12.bin" %[1]s
-elif [ -f "/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/mobilenetv2_224x224_nv12.bin" ]; then
+elif [ -s "/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/mobilenetv2_224x224_nv12.bin" ]; then
   cp "/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/mobilenetv2_224x224_nv12.bin" %[1]s
 else
   curl -fsSL -o %[1]s "https://github.com/D-Robotics/rdk_model_zoo/raw/main/demos/Vision/mobilenet_v2/models/mobilenetv2_224x224_nv12.bin" || \
@@ -422,9 +421,11 @@ fi
 		// S100 / S600 (Nash-E / Nash-M / HBM)
 		targetFile = fmt.Sprintf("%s/mobilenetv2_224x224_nv12.hbm", targetDir)
 		downloadScript = fmt.Sprintf(`
-if [ -f "/root/ssd/Ultralytics_YOLO/yolo26x_cls_nashe_224x224_nv12.hbm" ]; then
+if [ -s "/opt/hobot/model/s600/basic/mobilenetv2_224x224_nv12.hbm" ]; then
+  cp "/opt/hobot/model/s600/basic/mobilenetv2_224x224_nv12.hbm" %[1]s
+elif [ -s "/root/ssd/Ultralytics_YOLO/yolo26x_cls_nashe_224x224_nv12.hbm" ]; then
   cp "/root/ssd/Ultralytics_YOLO/yolo26x_cls_nashe_224x224_nv12.hbm" %[1]s
-elif [ -f "/root/ssd/YOLOv8_LowLatency/yolov8n_dfl_test1_hwcrgb888.hbm" ]; then
+elif [ -s "/root/ssd/YOLOv8_LowLatency/yolov8n_dfl_test1_hwcrgb888.hbm" ]; then
   cp "/root/ssd/YOLOv8_LowLatency/yolov8n_dfl_test1_hwcrgb888.hbm" %[1]s
 else
   curl -fsSL -o %[1]s "https://github.com/D-Robotics/rdk_model_zoo/raw/main/demos/Vision/mobilenet_v2/models/mobilenetv2_224x224_nashe_nv12.hbm" || \
@@ -433,6 +434,7 @@ fi
 [ -s %[1]s ] && echo "OK" || echo "FAIL"
 `, quoteArg(targetFile))
 	}
+
 
 	outBytes, err := client.runBoardCommand(ctx, downloadScript, nil)
 	if err != nil || !strings.Contains(string(outBytes), "OK") {
