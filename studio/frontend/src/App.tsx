@@ -2452,18 +2452,26 @@ function BPUBenchmarkDialog({
     setModelToDelete(null);
     setBenchmarkError('');
     try {
-      await api.deleteBPUModel(boardId, path);
-      if (selectedModel === path) {
-        setModelInfo(null);
-        setCurrentResult(null);
+      // Find next adjacent model to select after deletion
+      const currentIdx = discoveredModels.indexOf(path);
+      let nextModelToSelect = '';
+      if (discoveredModels.length > 1) {
+        if (currentIdx >= 0 && currentIdx < discoveredModels.length - 1) {
+          nextModelToSelect = discoveredModels[currentIdx + 1];
+        } else if (currentIdx > 0) {
+          nextModelToSelect = discoveredModels[currentIdx - 1];
+        }
       }
-      await loadModels();
+
+      await api.deleteBPUModel(boardId, path);
+      await loadModels(nextModelToSelect);
     } catch (err) {
       setBenchmarkError(friendlyError(String(err)));
     } finally {
       setDeletingModel(null);
     }
   };
+
 
 
   // Download official sample model
@@ -2643,11 +2651,18 @@ function BPUBenchmarkDialog({
                       const isDeleting = deletingModel === m;
                       const isSystemProtected = m.startsWith('/opt/hobot/') || m.startsWith('/app/');
                       return (
-                        <button
+                        <div
                           key={m}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
                           onClick={() => setSelectedModel(m)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedModel(m);
+                            }
+                          }}
                         >
                           <Package size={14} />
                           <span title={m}>{name}</span>
@@ -2662,16 +2677,18 @@ function BPUBenchmarkDialog({
                               <Lock size={12} />
                             </span>
                           ) : (
-                            <span
+                            <button
+                              type="button"
                               className="bpu-model-delete"
                               title={`从开发板删除 ${name}`}
                               onClick={(e) => requestDeleteModel(e, m)}
                             >
                               {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
-                            </span>
+                            </button>
                           )}
-                        </button>
+                        </div>
                       );
+
 
 
                     })}
