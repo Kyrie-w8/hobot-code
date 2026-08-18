@@ -2522,6 +2522,7 @@ function BPUBenchmarkDialog({
     setInspectError('');
     try {
       const info = await api.inspectBPUModel(boardId, path);
+      // Double check that user hasn't switched to a different model in the meantime
       setModelInfo(info);
     } catch (err) {
       setInspectError(friendlyError(String(err)));
@@ -2533,10 +2534,15 @@ function BPUBenchmarkDialog({
   }, [boardId]);
 
   useEffect(() => {
+    setModelInfo(null);
+    setCurrentResult(null);
+    setInspectError('');
+    setBenchmarkError('');
     if (effectivePath && effectivePath !== 'custom') {
       void inspectModel(effectivePath);
     }
   }, [effectivePath, inspectModel]);
+
 
   const mainRef = useRef<HTMLDivElement>(null);
 
