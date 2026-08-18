@@ -1,13 +1,42 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPermissionReviewerReservesOutputForReasoningModels(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, incoming *http.Request) {
+		body, err := io.ReadAll(incoming.Body)
+		if err != nil || json.Unmarshal(body, &request) != nil {
+			t.Fatalf("decode reviewer request: %v", err)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.Copy(response, bytes.NewBufferString(`{"content":[{"type":"thinking","thinking":"bounded"},{"type":"text","text":"{\"decision\":\"approved\",\"risk\":\"low\",\"reason\":\"The action is scoped.\"}"}]}`))
+	}))
+	defer server.Close()
+	service := newPermissionReviewerService(&modelEgressServer{
+		client: server.Client(), slots: make(chan struct{}, 1), routes: map[string]modelEgressRoute{
+			"drobotics": {ID: "drobotics", API: "drobotics-anthropic", Endpoint: server.URL, Credential: "secret"},
+		},
+	})
+	content, err := service.callModel(context.Background(), modelOption{Provider: "drobotics", ID: "kimi-k3"}, permissionReviewEnvelope{Tool: "bash"})
+	if err != nil || !bytes.Contains(content, []byte(`"decision":"approved"`)) {
+		t.Fatalf("reasoning response was not decoded: %q err=%v", content, err)
+	}
+	if request["max_tokens"] != float64(permissionReviewMaxTokens) || permissionReviewMaxTokens < 1024 {
+		t.Fatalf("reviewer output budget is too small for reasoning models: %+v", request["max_tokens"])
+	}
+}
 
 func newPermissionReviewTestTask(t *testing.T) (*task, *permissionReviewerService) {
 	t.Helper()

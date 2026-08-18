@@ -210,7 +210,7 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.28.7" {
+	if currentStudioVersion() != "0.28.8" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {

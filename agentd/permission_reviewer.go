@@ -17,6 +17,7 @@ const (
 	maximumPermissionReviewInput = 128 * 1024
 	maximumPermissionModelOutput = 256 * 1024
 	maximumPermissionReviewText  = 2048
+	permissionReviewMaxTokens    = 1024
 )
 
 var permissionReviewDecisionPattern = regexp.MustCompile(`^(approved|manual-required|denied)$`)
@@ -160,18 +161,18 @@ func (service *permissionReviewerService) callModel(ctx context.Context, model m
 	switch route.API {
 	case "drobotics-anthropic", "anthropic-messages":
 		payload = map[string]any{
-			"model": model.ID, "max_tokens": 256, "stream": false, "temperature": 0,
+			"model": model.ID, "max_tokens": permissionReviewMaxTokens, "stream": false, "temperature": 0,
 			"system":   permissionReviewerSystemPrompt,
 			"messages": []map[string]string{{"role": "user", "content": string(user)}},
 		}
 	case "openai-completions":
 		payload = map[string]any{
-			"model": model.ID, "max_tokens": 256, "stream": false, "temperature": 0,
+			"model": model.ID, "max_tokens": permissionReviewMaxTokens, "stream": false, "temperature": 0,
 			"messages": []map[string]string{{"role": "system", "content": permissionReviewerSystemPrompt}, {"role": "user", "content": string(user)}},
 		}
 	case "openai-responses":
 		payload = map[string]any{
-			"model": model.ID, "max_output_tokens": 256, "stream": false,
+			"model": model.ID, "max_output_tokens": permissionReviewMaxTokens, "stream": false,
 			"instructions": permissionReviewerSystemPrompt, "input": string(user),
 		}
 	default:

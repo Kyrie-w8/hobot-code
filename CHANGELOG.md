@@ -1,11 +1,17 @@
 # Changelog
 
+## 0.28.8
+
+### Fixed
+
+- Reserve enough bounded output for reasoning-capable approval models to finish their strict JSON decision after a thinking block, instead of falling back to human approval before the decision is emitted.
+
 ## 0.28.7
 
 ### Added
 
 - Upgrade **Approve for me** to an isolated, tool-free approval Agent that uses the task model, recent user intent, and exact tool action to review SSH, network, package, service, process, system-path, hardware, MCP, remote-build, and persistent operations.
-- Add `tasks.permissions.llm-review.v1` and a task-scoped `permission.review` control method. Model credentials remain in agentd, so approval works across Board access modes without exposing model egress to an Offline worker.
+- Add `tasks.permissions.llm-review.v1` and a task-scoped `permission.review` control method. Model credentials remain in agentd, so approval works across Board access modes; an Offline task still needs a local model before its Agent can propose tools.
 
 ### Changed
 
