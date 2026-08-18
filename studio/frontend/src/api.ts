@@ -1,5 +1,6 @@
-import type {AddManagedProviderRequest, Board, BoardInstallResult, BoardUpdateCheck, BoardUpdateResult, Connection, CreateScheduleRequest, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventEnvelope, EventPage, ExtensionCatalog, ForkTaskRequest, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskPage, WorkspaceApplyResult, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Board, BoardInstallResult, BoardUpdateCheck, BoardUpdateResult, BPUBenchmarkRequest, BPUBenchmarkResult, BPUModelInfo, Connection, CreateScheduleRequest, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventEnvelope, EventPage, ExtensionCatalog, ForkTaskRequest, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskPage, WorkspaceApplyResult, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 import {historyPageBefore} from './conversation-history.js';
+
 
 export type TaskWatchStatus = {
   boardId: string;
@@ -84,6 +85,47 @@ const mockBackend: Backend = {
   InspectDeployment: async (_board: string, cwd: string): Promise<DeploymentInspection> => ({capturedAt: new Date().toISOString(), cwd, board: 'D-Robotics RDK S600', boardId: 's600', rdkOsVersion: '5.1.0', truncated: false, artifacts: [{path: `${cwd}/model.onnx`, relativePath: 'model.onnx', name: 'model.onnx', kind: 'onnx', sizeBytes: 48 * 1024 ** 2, modifiedAt: new Date().toISOString(), compatibility: 'conversion-required', reason: 'source model requires board-specific conversion and quantization'}, {path: `${cwd}/output/detector_s600.hbm`, relativePath: 'output/detector_s600.hbm', name: 'detector_s600.hbm', kind: 'rdk-hbm', sizeBytes: 23 * 1024 ** 2, modifiedAt: new Date().toISOString(), compatibility: 'candidate', reason: 'filename matches the current board; runtime validation is still required'}]}),
   StartDeployment: async (_board: string, request: StartDeploymentRequest): Promise<Task> => ({...mockTasks[0], id: `task-${Date.now()}`, name: request.name || `Deploy ${request.artifactPath.split('/').at(-1)}`, cwd: request.cwd, status: 'starting'}),
   GetDeploymentStatus: async (_board: string, taskId: string): Promise<DeploymentStatus> => ({taskId, phase: 'running', deployment: {schema: 1, cwd: '/root/yolo_bench_s100', board: 'D-Robotics RDK S600', boardId: 's600', rdkOsVersion: '5.1.0', goal: 'deploy-and-validate', artifact: {path: '/root/yolo_bench_s100/model.onnx', relativePath: 'model.onnx', name: 'model.onnx', kind: 'onnx', sizeBytes: 1, modifiedAt: new Date().toISOString(), compatibility: 'conversion-required', reason: 'conversion required'}, reportPath: '/root/yolo_bench_s100/.hobot/deployments/demo.json', createdAt: new Date().toISOString()}}),
+  InspectBPUModel: async (_board: string, modelPath: string): Promise<BPUModelInfo> => ({
+    modelName: 'yolov8n_640x640_nv12',
+    modelFile: modelPath,
+    targetSoc: 'x5',
+    bpuPlatformVersion: '1.3.6',
+    hbrtVersion: '3.15.55.0',
+    dnnVersion: '1.24.5',
+    modelBuilderVersion: '1.23.6',
+    loadDdrCostMs: 379.39,
+    inputs: [
+      {index: 0, name: 'images', inputSource: 'HB_DNN_INPUT_FROM_PYRAMID', validShape: '(1,3,640,640)', alignedShape: '(1,3,640,640)', alignedBytes: 614400, tensorType: 'HB_DNN_IMG_TYPE_NV12', tensorLayout: 'HB_DNN_LAYOUT_NCHW', quantiType: 'NONE'}
+    ],
+    outputs: [
+      {index: 0, name: 'output0', validShape: '(1,80,80,80)', alignedShape: '(1,80,80,80)', alignedBytes: 2048000, tensorType: 'HB_DNN_TENSOR_TYPE_F32', tensorLayout: 'HB_DNN_LAYOUT_NHWC', quantiType: 'NONE'},
+      {index: 1, name: '318', validShape: '(1,80,80,64)', alignedShape: '(1,80,80,64)', alignedBytes: 1638400, tensorType: 'HB_DNN_TENSOR_TYPE_S32', tensorLayout: 'HB_DNN_LAYOUT_NHWC', quantiType: 'SCALE', quantizeAxis: 3}
+    ]
+  }),
+  RunBPUBenchmark: async (_board: string, req: BPUBenchmarkRequest): Promise<BPUBenchmarkResult> => ({
+    modelPath: req.modelPath,
+    modelName: 'yolov8n_640x640_nv12',
+    coreId: req.coreId,
+    threadCount: req.threadCount || 1,
+    frameCount: req.frameCount || 200,
+    fps: 80.26 * (req.threadCount > 1 ? req.threadCount * 0.95 : 1),
+    averageLatencyMs: 12.42,
+    minLatencyMs: 6.25,
+    maxLatencyMs: 13.36,
+    programRunTimeMs: 2491.78,
+    totalLatencyMs: 2485.71,
+    capturedAt: new Date().toISOString()
+  }),
+  ListWorkspaceBPUModels: async (_board: string, cwd: string): Promise<string[]> => [
+    `${cwd}/yolov8_640x640_nv12.bin`,
+    `${cwd}/mobileone_s0_224_rgb_x5.bin`
+  ],
+  DownloadSampleBPUModel: async (_board: string, _soc: string): Promise<string> => '/root/models/mobilenetv2_224x224_nv12.bin',
+  UploadBPUModel: async (_board: string, filename: string, _data: string): Promise<string> => `/root/models/${filename}`,
+  DeleteBPUModel: async (_board: string, _modelPath: string): Promise<void> => undefined,
+
+
+
   DisconnectBoard: async () => undefined,
   RefreshTasks: async (): Promise<TaskPage> => ({tasks: mockTasks}),
   GetTask: async (_board: string, taskId: string) => mockTasks.find((task) => task.id === taskId),
@@ -196,7 +238,16 @@ export const api = {
   inspectDeployment: (boardId: string, cwd: string): Promise<DeploymentInspection> => backend().InspectDeployment(boardId, cwd),
   startDeployment: (boardId: string, request: StartDeploymentRequest): Promise<Task> => backend().StartDeployment(boardId, request),
   deploymentStatus: (boardId: string, taskId: string): Promise<DeploymentStatus> => backend().GetDeploymentStatus(boardId, taskId),
+  inspectBPUModel: (boardId: string, modelPath: string): Promise<BPUModelInfo> => backend().InspectBPUModel(boardId, modelPath),
+  runBPUBenchmark: (boardId: string, request: BPUBenchmarkRequest): Promise<BPUBenchmarkResult> => backend().RunBPUBenchmark(boardId, request),
+  listWorkspaceBPUModels: (boardId: string, cwd: string): Promise<string[]> => backend().ListWorkspaceBPUModels(boardId, cwd),
+  downloadSampleBPUModel: (boardId: string, soc: string): Promise<string> => backend().DownloadSampleBPUModel(boardId, soc),
+  uploadBPUModel: (boardId: string, filename: string, base64Data: string): Promise<string> => backend().UploadBPUModel(boardId, filename, base64Data),
+  deleteBPUModel: (boardId: string, modelPath: string): Promise<void> => backend().DeleteBPUModel(boardId, modelPath),
   disconnectBoard: (id: string) => backend().DisconnectBoard(id),
+
+
+
   tasks: (id: string, archived = false): Promise<TaskPage> => backend().RefreshTasks(id, archived),
   task: (boardId: string, taskId: string): Promise<Task> => backend().GetTask(boardId, taskId),
   schedules: (boardId: string, includeAll = true): Promise<Schedule[]> => backend().ListSchedules(boardId, includeAll),
