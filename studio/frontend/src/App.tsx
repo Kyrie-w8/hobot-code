@@ -2635,6 +2635,7 @@ function BPUBenchmarkDialog({
                       const name = m.split('/').pop() || m;
                       const isOfficial = /mobilenetv2_224x224/i.test(name);
                       const isDeleting = deletingModel === m;
+                      const isSystemProtected = m.startsWith('/opt/hobot/') || m.startsWith('/app/');
                       return (
                         <button
                           key={m}
@@ -2645,15 +2646,18 @@ function BPUBenchmarkDialog({
                           <Package size={14} />
                           <span title={m}>{name}</span>
                           {isOfficial && <span className="bpu-official-tag">Official</span>}
-                          <span
-                            className="bpu-model-delete"
-                            title={`Delete ${name} from board`}
-                            onClick={(e) => requestDeleteModel(e, m)}
-                          >
-                            {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
-                          </span>
+                          {!isSystemProtected && (
+                            <span
+                              className="bpu-model-delete"
+                              title={`Delete ${name} from board`}
+                              onClick={(e) => requestDeleteModel(e, m)}
+                            >
+                              {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
+                            </span>
+                          )}
                         </button>
                       );
+
                     })}
                     <button
                       type="button"
