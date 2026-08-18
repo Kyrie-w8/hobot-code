@@ -824,6 +824,17 @@ func (app *App) UploadBPUModel(boardID, filename string, base64Data string) (str
 	return client.UploadBPUModel(ctx, filename, data)
 }
 
+func (app *App) DeleteBPUModel(boardID, modelPath string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, 30*time.Second)
+	defer cancel()
+	return client.DeleteBPUModel(ctx, modelPath)
+}
+
+
 
 func (app *App) RefreshTasks(boardID string, includeArchived bool) (hobot.TaskPage, error) {
 	client, err := app.client(boardID)

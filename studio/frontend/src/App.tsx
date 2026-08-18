@@ -2409,6 +2409,7 @@ function BPUBenchmarkDialog({
 
   const [downloadingSample, setDownloadingSample] = useState(false);
   const [uploadingModel, setUploadingModel] = useState(false);
+  const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const effectivePath = (selectedModel === 'custom' ? customModelPath : selectedModel).trim();
@@ -2434,6 +2435,30 @@ function BPUBenchmarkDialog({
     void loadModels();
   }, [loadModels]);
 
+  // Delete model file
+  const handleDeleteModel = async (e: React.MouseEvent, path: string) => {
+    e.stopPropagation();
+    if (deletingModel || benchmarking) return;
+    const name = path.split('/').pop() || path;
+    if (!window.confirm(`确定要从开发板删除模型文件 "${name}" 吗？此操作不可恢复。`)) {
+      return;
+    }
+    setDeletingModel(path);
+    setBenchmarkError('');
+    try {
+      await api.deleteBPUModel(boardId, path);
+      if (selectedModel === path) {
+        setModelInfo(null);
+        setCurrentResult(null);
+      }
+      await loadModels();
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setDeletingModel(null);
+    }
+  };
+
   // Download official sample model
   const handleDownloadSample = async () => {
     if (downloadingSample || benchmarking) return;
@@ -2449,6 +2474,7 @@ function BPUBenchmarkDialog({
       setDownloadingSample(false);
     }
   };
+
 
   // Upload model from local computer
   const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2601,6 +2627,7 @@ function BPUBenchmarkDialog({
                     {discoveredModels.map((m) => {
                       const name = m.split('/').pop() || m;
                       const isOfficial = /mobilenetv2_224x224/i.test(name);
+                      const isDeleting = deletingModel === m;
                       return (
                         <button
                           key={m}
@@ -2611,6 +2638,13 @@ function BPUBenchmarkDialog({
                           <Package size={14} />
                           <span title={m}>{name}</span>
                           {isOfficial && <span className="bpu-official-tag">Official</span>}
+                          <span
+                            className="bpu-model-delete"
+                            title={`Delete ${name} from board`}
+                            onClick={(e) => void handleDeleteModel(e, m)}
+                          >
+                            {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
+                          </span>
                         </button>
                       );
                     })}
@@ -2623,6 +2657,7 @@ function BPUBenchmarkDialog({
                       <span>Custom Path...</span>
                     </button>
                   </div>
+
 
                   {!discoveredModels.some((m) => /mobilenetv2_224x224/i.test(m)) && (
                     <div className="bpu-download-banner">

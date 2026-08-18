@@ -465,3 +465,23 @@ func (client *Client) UploadBPUModel(ctx context.Context, filename string, data 
 	return targetFile, nil
 }
 
+// DeleteBPUModel deletes the specified model file on the board.
+func (client *Client) DeleteBPUModel(ctx context.Context, modelPath string) error {
+	if modelPath == "" {
+		return fmt.Errorf("model path is required")
+	}
+	// Safety protection: only allow deleting under /root, /userdata, /tmp
+	cleaned := filepath.Clean(modelPath)
+	if !strings.HasPrefix(cleaned, "/root/") && !strings.HasPrefix(cleaned, "/userdata/") && !strings.HasPrefix(cleaned, "/tmp/") {
+		return fmt.Errorf("deleting system-protected model is restricted: %s", cleaned)
+	}
+
+	rmCmd := fmt.Sprintf("rm -f %s && echo 'OK'", quoteArg(cleaned))
+	outBytes, err := client.runBoardCommand(ctx, rmCmd, nil)
+	if err != nil || !strings.Contains(string(outBytes), "OK") {
+		return fmt.Errorf("failed to delete model file: %v (output: %s)", err, strings.TrimSpace(string(outBytes)))
+	}
+	return nil
+}
+
+
