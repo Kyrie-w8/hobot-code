@@ -2410,6 +2410,7 @@ function BPUBenchmarkDialog({
   const [downloadingSample, setDownloadingSample] = useState(false);
   const [uploadingModel, setUploadingModel] = useState(false);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
+  const [modelToDelete, setModelToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const effectivePath = (selectedModel === 'custom' ? customModelPath : selectedModel).trim();
@@ -2435,15 +2436,20 @@ function BPUBenchmarkDialog({
     void loadModels();
   }, [loadModels]);
 
-  // Delete model file
-  const handleDeleteModel = async (e: React.MouseEvent, path: string) => {
+  // Request model deletion confirmation
+  const requestDeleteModel = (e: React.MouseEvent, path: string) => {
     e.stopPropagation();
+    e.preventDefault();
     if (deletingModel || benchmarking) return;
-    const name = path.split('/').pop() || path;
-    if (!window.confirm(`确定要从开发板删除模型文件 "${name}" 吗？此操作不可恢复。`)) {
-      return;
-    }
+    setModelToDelete(path);
+  };
+
+  // Execute confirmed deletion
+  const confirmDeleteModel = async () => {
+    if (!modelToDelete || deletingModel || benchmarking) return;
+    const path = modelToDelete;
     setDeletingModel(path);
+    setModelToDelete(null);
     setBenchmarkError('');
     try {
       await api.deleteBPUModel(boardId, path);
@@ -2458,6 +2464,7 @@ function BPUBenchmarkDialog({
       setDeletingModel(null);
     }
   };
+
 
   // Download official sample model
   const handleDownloadSample = async () => {
@@ -2641,7 +2648,7 @@ function BPUBenchmarkDialog({
                           <span
                             className="bpu-model-delete"
                             title={`Delete ${name} from board`}
-                            onClick={(e) => void handleDeleteModel(e, m)}
+                            onClick={(e) => requestDeleteModel(e, m)}
                           >
                             {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
                           </span>
@@ -2830,12 +2837,12 @@ function BPUBenchmarkDialog({
                   <span className="bpu-metric-value" style={{fontSize: '18px', paddingTop: '4px'}}>
                     {currentResult.coreId === 0 ? 'All / Auto' : `Core ${currentResult.coreId - 1}`}
                   </span>
-                  <span className="bpu-metric-sub">{snapshot?.board || 'RDK SoC'} Accelerator</span>
+                  <span className="bpu-metric-sub">Total {bpuCoreCount} Cores Available</span>
                 </div>
                 <div className="bpu-metric-card">
-                  <span className="bpu-metric-label">DDR Load Time</span>
-                  <span className="bpu-metric-value" style={{fontSize: '18px', paddingTop: '4px'}}>
-                    {modelInfo?.loadDdrCostMs ? `${modelInfo.loadDdrCostMs.toFixed(1)} ms` : 'Cached'}
+                  <span className="bpu-metric-label">Model Architecture</span>
+                  <span className="bpu-metric-value" style={{fontSize: '15px', paddingTop: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                    {currentResult.modelName || 'Native BPU Model'}
                   </span>
                   <span className="bpu-metric-sub">Runtime: {modelInfo?.hbrtVersion || 'HBRT 3.15'}</span>
                 </div>
@@ -2936,6 +2943,45 @@ function BPUBenchmarkDialog({
             )}
           </div>
         </div>
+
+        {/* Delete Confirmation Modal */}
+        {modelToDelete && (
+          <div className="modal-backdrop" style={{zIndex: 1100}}>
+            <div className="modal" style={{maxWidth: '420px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                <div style={{width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(224, 108, 117, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--red)', flexShrink: 0}}>
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h4 style={{margin: 0, fontSize: '14px'}}>确认删除板端模型？</h4>
+                  <p style={{margin: '4px 0 0', fontSize: '12px', color: 'var(--text-muted)'}}>
+                    文件：<strong>{modelToDelete.split('/').pop()}</strong>
+                  </p>
+                </div>
+              </div>
+              <p style={{margin: 0, fontSize: '12px', color: 'var(--text-dim)', lineHeight: 1.5}}>
+                此操作将从开发板永久删除该模型文件（<code>{modelToDelete}</code>），不可恢复。
+              </p>
+              <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px'}}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setModelToDelete(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  style={{background: 'var(--red)', borderColor: 'var(--red)', color: '#fff'}}
+                  onClick={() => void confirmDeleteModel()}
+                >
+                  确认删除
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="support-footer">
           <span>{modelInfo ? `Inspected model: ${modelInfo.modelName || modelInfo.modelFile}` : 'BPU Engine Ready'}</span>
