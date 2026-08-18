@@ -6,9 +6,10 @@ import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bot, Box, Brain, CalendarClock, Check, ChevronDown,
   ChevronRight, Clipboard, CornerDownRight, Cpu, FilePenLine, Folder,
   GitBranch, ListTodo, LoaderCircle, MessageSquare,
-  Download, FileDiff, Gauge, Info, KeyRound, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
-  Play, Square, SquareTerminal, Trash2, Wrench, X, XCircle,
+  Download, FileDiff, Gauge, HardDrive, Info, KeyRound, Lock, Monitor, Moon, MoreHorizontal, Package, Palette, PanelRight, Paperclip, Plus, RefreshCw, Search, Server, ShieldCheck, Sun,
+  Play, Square, SquareTerminal, Trash2, Upload, Wrench, X, XCircle, Zap,
 } from 'lucide-react';
+
 import {api, isMock} from './api';
 import type {TaskWatchStatus} from './api';
 import {composerIsBlocked, composerMode, shouldCancelTurnShortcut, shouldSubmitComposer, terminalStatuses, turnCancellationMode} from './composer-policy.js';
@@ -39,7 +40,8 @@ import {includedModelSummary, includedProviderGroups} from './provider-catalog.j
 import {applyTheme, readThemePreference, resolveTheme, saveThemePreference} from './appearance-theme.js';
 import type {ThemePreference} from './appearance-theme.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, BPUBenchmarkRequest, BPUBenchmarkResult, BPUModelInfo, BPUTensorDesc, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+
 import './App.css';
 
 const isMacOS = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -102,8 +104,10 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState('');
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showBPUBenchmark, setShowBPUBenchmark] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
+
 	const [workspaceInspection, setWorkspaceInspection] = useState<{taskId: string; loading: boolean; result?: WorkspaceIsolation} | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [unreadTasks, setUnreadTasks] = useState<Set<string>>(new Set());
@@ -1555,10 +1559,12 @@ function App() {
 		{connection?.capabilities?.capabilities.includes('schedules.v1') && <button className="icon-button" title="Schedules" disabled={connectionState !== 'online'} onClick={() => setShowSchedules(true)}><CalendarClock size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('providers.manage.v1') && <button className="icon-button" title="Model providers" disabled={connectionState !== 'online'} onClick={() => setShowProviders(true)}><KeyRound size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('diagnostics.inspect.v1') && <button className={`icon-button diagnostic-status ${diagnostics?.status ?? ''}`} title="Board readiness" disabled={connectionState !== 'online'} onClick={() => void openDiagnostics()}>{diagnosticsLoading ? <LoaderCircle size={16} className="spin" /> : <Activity size={16} />}</button>}
+        {connectionState === 'online' && <button className="icon-button" title="BPU Benchmark & Model Inspector" onClick={() => setShowBPUBenchmark(true)}><Gauge size={16} /></button>}
         {connection?.capabilities?.capabilities.includes('support.bundle.v1') && <button className="icon-button" title="Save private support bundle" disabled={busy || connectionState !== 'online'} onClick={() => void saveSupportBundle()}><Download size={16} /></button>}
         <button className="icon-button" title={connectionState === 'offline' ? 'Reconnect board' : 'Sync board now'} disabled={refreshing || !connection} onClick={() => void refreshWorkspace()}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
         <button className={`icon-button ${showInspector ? 'active' : ''}`} title="Board monitor" onClick={() => setShowInspector((value) => !value)}><PanelRight size={17} /></button>
       </header>
+
 
       <aside className="task-sidebar">
         <div className="sidebar-heading">
@@ -1670,8 +1676,9 @@ function App() {
       {showProviders && connection && <ProviderDialog boardId={connection.board.id} boardName={connection.board.name} models={models} onChanged={async (result) => {setNotice(result.message); if (result.applied) {const nextModels = await api.models(connection.board.id); setModels(nextModels);}}} onClose={() => setShowProviders(false)} />}
       {supportBundle && <SupportDiagnosticsDialog bundle={supportBundle} onClose={() => setSupportBundle(null)} />}
       {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} failure={diagnosticsError} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
-      {showModelReadiness && connection && effectiveModel && <ModelReadinessDialog model={effectiveModel} snapshot={snapshot} capabilities={connection.capabilities?.capabilities ?? []} qualification={qualificationForModel} health={currentModelHealth} conformance={currentModelConformance} runtimeProbe={currentModelRuntimeProbe} rdkProbe={currentModelRDKProbe} rdkMatrix={currentModelRDKMatrix} activeStage={checkingModel ? 'health' : verifyingModel ? 'protocol' : modelQualificationStage} activeProfile={modelQualificationProfile} failure={modelReadinessError} onRunHealth={() => void checkModelHealth()} onRunProtocol={() => void verifyModelConformance()} onRunRuntime={() => void probeModelRuntime()} onRunRDK={(profile) => void probeModelRDK(profile)} onClose={() => setShowModelReadiness(false)} />}
+      {showBPUBenchmark && connection && <BPUBenchmarkDialog boardId={connection.board.id} boardName={connection.board.name} snapshot={snapshot} cwd={selectedTask?.cwd ?? '/root'} onClose={() => setShowBPUBenchmark(false)} />}
       {showAccessSettings && selectedTask && <AccessSettingsDialog permissionMode={selectedPermissionMode} sandboxMode={selectedSandboxMode} networkMode={selectedNetworkMode} workspaceMode={selectedTask.workspaceMode || 'shared'} summary={accessPresentation.summary} hasAutoReview={Boolean(connection?.capabilities?.capabilities.includes('tasks.permissions.llm-review.v1'))} hasWorkspace={Boolean(draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'))} workspaceEligible={Boolean(workspaceInspection?.result?.eligible)} workspaceLoading={workspaceInspectionLoading} workspaceReason={workspaceInspection?.result?.reason || ''} hasSandbox={Boolean(selectedTask.sandboxMode || connection?.capabilities?.capabilities.includes('tasks.sandbox.v1'))} hasNetwork={Boolean(selectedTask.networkMode || connection?.capabilities?.capabilities.includes('tasks.network.v1'))} sandboxAvailable={Boolean(connection?.capabilities?.sandbox?.available)} networkModes={connection?.capabilities?.sandbox?.networkModes ?? []} modelOnly={effectiveModel?.modelOnly === true} canChangePermissions={canChangePermissions} canChangeSandbox={canChangeSandbox} canChangeNetwork={canChangeNetwork} canStopWorker={canStopBoundaryWorker} busy={busy} onWorkspace={changeWorkspaceMode} onPermission={(mode) => void changePermissionMode(mode)} onSandbox={(mode) => void changeSandboxMode(mode)} onNetwork={(mode) => void changeNetworkMode(mode)} onStopWorker={() => void stopTask()} onClose={() => setShowAccessSettings(false)} />}
+
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
 	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
@@ -2682,7 +2689,658 @@ function ReadinessDiagnosticsDialog({report, loading, failure, onRefresh, onRepa
   </section></div>;
 }
 
+function BPUBenchmarkDialog({
+  boardId,
+  boardName,
+  snapshot,
+  cwd,
+  onClose,
+}: {
+  boardId: string;
+  boardName: string;
+  snapshot: SystemSnapshot | null;
+  cwd: string;
+  onClose: () => void;
+}) {
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [customModelPath, setCustomModelPath] = useState('');
+  const [coreId, setCoreId] = useState(0);
+  const [threadCount, setThreadCount] = useState(1);
+  const [frameCount, setFrameCount] = useState(100);
+
+  const [modelInfo, setModelInfo] = useState<BPUModelInfo | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectError, setInspectError] = useState('');
+  const [benchmarking, setBenchmarking] = useState(false);
+  const [benchmarkError, setBenchmarkError] = useState('');
+  const [currentResult, setCurrentResult] = useState<BPUBenchmarkResult | null>(null);
+  const [history, setHistory] = useState<BPUBenchmarkResult[]>([]);
+
+  const [downloadingSample, setDownloadingSample] = useState(false);
+  const [uploadingModel, setUploadingModel] = useState(false);
+  const [deletingModel, setDeletingModel] = useState<string | null>(null);
+  const [modelToDelete, setModelToDelete] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const effectivePath = (selectedModel === 'custom' ? customModelPath : selectedModel).trim();
+
+  const loadModels = useCallback((targetModelToSelect?: string) => {
+    return api.listWorkspaceBPUModels(boardId, cwd).then((models) => {
+      setDiscoveredModels(models);
+      if (targetModelToSelect && (models.includes(targetModelToSelect) || targetModelToSelect === 'custom')) {
+        setSelectedModel(targetModelToSelect);
+      } else if (models.length > 0) {
+        setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
+      } else {
+        setSelectedModel('');
+      }
+    }).catch(() => {
+      setDiscoveredModels([]);
+      setSelectedModel('');
+    });
+  }, [boardId, cwd]);
+
+  // Load models on mount
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels]);
+
+  // Request model deletion confirmation
+  const requestDeleteModel = (e: React.MouseEvent, path: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (deletingModel || benchmarking) return;
+    setModelToDelete(path);
+  };
+
+  // Execute confirmed deletion
+  const confirmDeleteModel = async () => {
+    if (!modelToDelete || deletingModel || benchmarking) return;
+    const path = modelToDelete;
+    setDeletingModel(path);
+    setModelToDelete(null);
+    setBenchmarkError('');
+    try {
+      // Find next adjacent model to select after deletion
+      const currentIdx = discoveredModels.indexOf(path);
+      let nextModelToSelect = '';
+      if (discoveredModels.length > 1) {
+        if (currentIdx >= 0 && currentIdx < discoveredModels.length - 1) {
+          nextModelToSelect = discoveredModels[currentIdx + 1];
+        } else if (currentIdx > 0) {
+          nextModelToSelect = discoveredModels[currentIdx - 1];
+        }
+      }
+
+      await api.deleteBPUModel(boardId, path);
+      await loadModels(nextModelToSelect);
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setDeletingModel(null);
+    }
+  };
+
+
+
+  // Download official sample model
+  const handleDownloadSample = async () => {
+    if (downloadingSample || benchmarking) return;
+    setDownloadingSample(true);
+    setBenchmarkError('');
+    try {
+      const soc = snapshot?.board || 'RDK';
+      const downloadedPath = await api.downloadSampleBPUModel(boardId, soc);
+      await loadModels(downloadedPath);
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setDownloadingSample(false);
+    }
+  };
+
+
+  // Upload model from local computer
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingModel(true);
+    setBenchmarkError('');
+    try {
+      const reader = new FileReader();
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          const commaIdx = result.indexOf(',');
+          resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const uploadedPath = await api.uploadBPUModel(boardId, file.name, base64Data);
+      await loadModels(uploadedPath);
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setUploadingModel(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Inspect model when path changes
+  // Use a ref for the concurrency guard so the useCallback identity stays stable
+  // and doesn't trigger the useEffect in an infinite loop.
+  const inspectingRef = useRef(false);
+  const inspectModel = useCallback(async (path: string) => {
+    if (!path || inspectingRef.current) return;
+    inspectingRef.current = true;
+    setInspecting(true);
+    setInspectError('');
+    try {
+      const info = await api.inspectBPUModel(boardId, path);
+      // Double check that user hasn't switched to a different model in the meantime
+      setModelInfo(info);
+    } catch (err) {
+      setInspectError(friendlyError(String(err)));
+      setModelInfo(null);
+    } finally {
+      inspectingRef.current = false;
+      setInspecting(false);
+    }
+  }, [boardId]);
+
+  useEffect(() => {
+    setModelInfo(null);
+    setCurrentResult(null);
+    setInspectError('');
+    setBenchmarkError('');
+    if (effectivePath && effectivePath !== 'custom') {
+      void inspectModel(effectivePath);
+    }
+  }, [effectivePath, inspectModel]);
+
+
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  // Run benchmark
+  const runBenchmark = async () => {
+    if (!effectivePath || benchmarking || inspectingRef.current) return;
+    setBenchmarking(true);
+    setBenchmarkError('');
+    mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    try {
+      const res = await api.runBPUBenchmark(boardId, {
+        modelPath: effectivePath,
+        modelName: modelInfo?.modelName || undefined,
+        coreId,
+        threadCount,
+        frameCount,
+      });
+      setCurrentResult(res);
+      setHistory((prev) => [res, ...prev.slice(0, 9)]);
+      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      setBenchmarkError(friendlyError(String(err)));
+    } finally {
+      setBenchmarking(false);
+    }
+  };
+
+  const copyReport = () => {
+    if (!currentResult) return;
+    const md = `### BPU Benchmark Report: ${currentResult.modelName || currentResult.modelPath}
+- **Board**: ${boardName} (${snapshot?.board || 'RDK'})
+- **FPS**: ${currentResult.fps.toFixed(2)}
+- **Average Latency**: ${currentResult.averageLatencyMs.toFixed(2)} ms
+- **Min / Max Latency**: ${currentResult.minLatencyMs.toFixed(2)} ms / ${currentResult.maxLatencyMs.toFixed(2)} ms
+- **Threads / Cores**: ${currentResult.threadCount} threads / Core ${currentResult.coreId === 0 ? 'Auto' : currentResult.coreId - 1}
+- **Test Frames**: ${currentResult.frameCount} frames
+- **Captured At**: ${currentResult.capturedAt}`;
+    void navigator.clipboard.writeText(md);
+  };
+
+  const bpuCoreCount = snapshot?.bpuCores?.length ?? (snapshot?.bpuDevices?.length ?? 1);
+
+  return (
+    <div className="modal-backdrop">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".bin,.hbm"
+        style={{display: 'none'}}
+        onChange={handleUploadFile}
+      />
+      <section className="modal bpu-modal" role="dialog" aria-modal="true" aria-labelledby="bpu-title">
+        <div className="modal-header">
+          <div>
+            <span className="modal-eyebrow">D-Robotics Hardware Acceleration · {snapshot?.board || 'RDK'} · {bpuCoreCount}x BPU</span>
+            <h2 id="bpu-title">BPU Benchmark & Model Inspector</h2>
+          </div>
+          <button className="icon-button" title="Close" disabled={benchmarking} onClick={onClose}><X size={18} /></button>
+        </div>
+
+
+        <div className="bpu-layout">
+          {/* Left Sidebar: Configurations */}
+          <div className="bpu-sidebar">
+            <div className="bpu-sidebar-group">
+              <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px'}}>
+                <label style={{margin: 0}}>Select Model File</label>
+                <div style={{display: 'flex', gap: '4px'}}>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title="Upload local model (.bin/.hbm)"
+                    style={{width: '24px', height: '24px', padding: 0}}
+                    disabled={uploadingModel || downloadingSample}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {uploadingModel ? <LoaderCircle size={13} className="spin" /> : <Upload size={13} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title="Download official sample model"
+                    style={{width: '24px', height: '24px', padding: 0}}
+                    disabled={uploadingModel || downloadingSample}
+                    onClick={() => void handleDownloadSample()}
+                  >
+                    {downloadingSample ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
+                  </button>
+                </div>
+              </div>
+
+              {discoveredModels.length > 0 ? (
+                <>
+                  <div className="bpu-model-list">
+                    {discoveredModels.map((m) => {
+                      const name = m.split('/').pop() || m;
+                      const isOfficial = /mobilenetv2_224x224/i.test(name);
+                      const isDeleting = deletingModel === m;
+                      const isSystemProtected = m.startsWith('/opt/hobot/') || m.startsWith('/app/');
+                      return (
+                        <div
+                          key={m}
+                          role="button"
+                          tabIndex={0}
+                          className={`bpu-model-item ${selectedModel === m ? 'selected' : ''}`}
+                          onClick={() => setSelectedModel(m)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedModel(m);
+                            }
+                          }}
+                        >
+                          <Package size={14} />
+                          <span title={m}>{name}</span>
+                          {isOfficial && <span className="bpu-official-tag">Official</span>}
+                          {isSystemProtected ? (
+                            <span
+                              className="bpu-model-delete system-protected"
+                              title="系统预装示例模型（只读）"
+                              style={{opacity: 0.35, cursor: 'not-allowed'}}
+                              onClick={(e) => { e.stopPropagation(); }}
+                            >
+                              <Lock size={12} />
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="bpu-model-delete"
+                              title={`从开发板删除 ${name}`}
+                              onClick={(e) => requestDeleteModel(e, m)}
+                            >
+                              {isDeleting ? <LoaderCircle size={12} className="spin" /> : <Trash2 size={12} />}
+                            </button>
+                          )}
+                        </div>
+                      );
+
+
+
+                    })}
+                    <button
+                      type="button"
+                      className={`bpu-model-item ${selectedModel === 'custom' ? 'selected' : ''}`}
+                      onClick={() => setSelectedModel('custom')}
+                    >
+                      <Folder size={14} />
+                      <span>Custom Path...</span>
+                    </button>
+                  </div>
+
+
+                  {!discoveredModels.some((m) => /mobilenetv2_224x224/i.test(m)) && (
+                    <div className="bpu-download-banner">
+                      <span>💡 尚未安装官方基准模型</span>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        style={{padding: '2px 8px', fontSize: '11px', whiteSpace: 'nowrap'}}
+                        disabled={downloadingSample || uploadingModel}
+                        onClick={() => void handleDownloadSample()}
+                      >
+                        {downloadingSample ? <LoaderCircle size={12} className="spin" /> : <Download size={12} />}
+                        {downloadingSample ? '下载中' : '📥 获取官方示例'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="bpu-empty-card">
+                  <Package size={28} style={{color: 'var(--text-dim)', opacity: 0.6}} />
+                  <div>
+                    <h4>未发现板端模型</h4>
+                    <p>当前开发板常用目录下暂未检测到 .bin 或 .hbm BPU 模型文件。</p>
+                  </div>
+                  <div className="bpu-empty-actions">
+                    <button
+                      type="button"
+                      className="primary-button bpu-quick-action-btn"
+                      disabled={downloadingSample || uploadingModel}
+                      onClick={() => void handleDownloadSample()}
+                    >
+                      {downloadingSample ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}
+                      {downloadingSample ? '正在下载部署...' : '📥 一键下载官方示例模型'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button bpu-quick-action-btn"
+                      disabled={uploadingModel || downloadingSample}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      {uploadingModel ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}
+                      {uploadingModel ? '正在上传...' : '📤 上传本地模型文件'}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    style={{background: 'none', border: 'none', color: 'var(--blue)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline'}}
+                    onClick={() => setSelectedModel('custom')}
+                  >
+                    或手动输入板端路径...
+                  </button>
+                </div>
+              )}
+
+
+              {selectedModel === 'custom' && (
+                <div style={{marginTop: '6px'}}>
+                  <input
+                    type="text"
+                    value={customModelPath}
+                    onChange={(e) => setCustomModelPath(e.target.value)}
+                    placeholder="/path/to/model.bin"
+                    style={{width: '100%', fontSize: '12px'}}
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{marginTop: '6px', width: '100%'}}
+                    disabled={!customModelPath.trim() || inspecting}
+                    onClick={() => void inspectModel(customModelPath.trim())}
+                  >
+                    {inspecting ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />}
+                    Inspect Model
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="bpu-sidebar-group">
+              <label>Benchmark Settings</label>
+
+              <div className="bpu-form-row">
+                <label style={{fontSize: '11px'}}>
+                  BPU Core
+                  <select value={coreId} disabled={benchmarking} onChange={(e) => setCoreId(Number(e.target.value))}>
+                    <option value={0}>Auto / Any</option>
+                    {Array.from({length: bpuCoreCount}, (_, i) => (
+                      <option key={i} value={i + 1}>Core {i}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{fontSize: '11px'}}>
+                  Threads
+                  <select value={threadCount} disabled={benchmarking} onChange={(e) => setThreadCount(Number(e.target.value))}>
+                    <option value={1}>1 thread (latency)</option>
+                    <option value={2}>2 threads</option>
+                    <option value={4}>4 threads (throughput)</option>
+                    <option value={8}>8 threads (stress)</option>
+                  </select>
+                </label>
+              </div>
+              <label style={{fontSize: '11px', marginTop: '4px'}}>
+                Iterations (Frames)
+                <select value={frameCount} disabled={benchmarking} onChange={(e) => setFrameCount(Number(e.target.value))}>
+                  <option value={50}>50 frames (~0.5s - Fast)</option>
+                  <option value={100}>100 frames (~1.2s)</option>
+                  <option value={200}>200 frames (~2.5s)</option>
+                  <option value={500}>500 frames (~6.0s)</option>
+                </select>
+              </label>
+
+            </div>
+
+            <div style={{marginTop: 'auto', paddingTop: '10px'}}>
+              <button
+                type="button"
+                className="primary-button"
+                style={{width: '100%', minHeight: '38px', gap: '8px'}}
+                disabled={!effectivePath || benchmarking}
+                onClick={() => void runBenchmark()}
+              >
+                {benchmarking ? <LoaderCircle size={16} className="spin" /> : <Gauge size={16} />}
+                {benchmarking ? 'Benchmarking...' : '⚡ Run BPU Benchmark'}
+              </button>
+            </div>
+          </div>
+
+
+          {/* Right Main Dashboard */}
+          <div ref={mainRef} className="bpu-main">
+
+            {benchmarkError && (
+              <div className="schedule-error" style={{margin: 0}}>
+                <AlertTriangle size={16} />
+                <span>{benchmarkError}</span>
+              </div>
+            )}
+            {inspectError && (
+              <div className="schedule-error">
+                <AlertTriangle size={15} />
+                <span>{inspectError}</span>
+              </div>
+            )}
+            {benchmarking && (
+              <div className="bpu-running-banner">
+                <LoaderCircle size={20} className="spin" />
+                <div>
+                  <strong>Executing BPU Hardware Benchmark on {snapshot?.board || 'RDK SoC'}...</strong>
+                  <span>Running {frameCount} frames ({threadCount} thread{threadCount > 1 ? 's' : ''}) on {coreId === 0 ? 'All / Auto Cores' : `Core ${coreId - 1}`}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Top Metric Cards */}
+            {currentResult && (
+
+              <div className="bpu-hero-grid">
+                <div className="bpu-metric-card accent">
+                  <span className="bpu-metric-label">Inference Throughput</span>
+                  <span className="bpu-metric-value">{currentResult.fps.toFixed(1)} <small style={{fontSize: '14px', fontWeight: 500}}>FPS</small></span>
+                  <span className="bpu-metric-sub">{currentResult.threadCount} thread(s) · {currentResult.frameCount} frames</span>
+                </div>
+                <div className="bpu-metric-card">
+                  <span className="bpu-metric-label">Avg Latency</span>
+                  <span className="bpu-metric-value">{currentResult.averageLatencyMs.toFixed(2)} <small style={{fontSize: '14px', fontWeight: 500}}>ms</small></span>
+                  <span className="bpu-metric-sub">Min {currentResult.minLatencyMs.toFixed(1)}ms · Max {currentResult.maxLatencyMs.toFixed(1)}ms</span>
+                </div>
+                <div className="bpu-metric-card">
+                  <span className="bpu-metric-label">BPU Target Core</span>
+                  <span className="bpu-metric-value" style={{fontSize: '18px', paddingTop: '4px'}}>
+                    {currentResult.coreId === 0 ? 'All / Auto' : `Core ${currentResult.coreId - 1}`}
+                  </span>
+                  <span className="bpu-metric-sub">Total {bpuCoreCount} Cores Available</span>
+                </div>
+                <div className="bpu-metric-card">
+                  <span className="bpu-metric-label">Model Architecture</span>
+                  <span className="bpu-metric-value" style={{fontSize: '15px', paddingTop: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                    {currentResult.modelName || 'Native BPU Model'}
+                  </span>
+                  <span className="bpu-metric-sub">Runtime: {modelInfo?.hbrtVersion || 'HBRT 3.15'}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Model & Tensor Inspection */}
+            {modelInfo && (
+              <div className="bpu-card-section">
+                <div className="bpu-section-title">
+                  <span>Model Specification ({modelInfo.modelName || modelInfo.modelFile.split('/').pop()})</span>
+                  {modelInfo.targetSoc && <span className="bpu-badge">SoC: {modelInfo.targetSoc.toUpperCase()}</span>}
+                </div>
+
+                {/* Input Tensors */}
+                <div className="tensor-grid">
+                  {modelInfo.inputs.map((t) => (
+                    <div key={`in-${t.index}`} className="tensor-card">
+                      <div className="tensor-card-header">
+                        <strong style={{fontSize: '12px'}}>{t.name || `Input #${t.index}`}</strong>
+                        <span className="tensor-tag">INPUT {t.index}</span>
+                      </div>
+                      <dl className="tensor-props">
+                        <dt>Shape:</dt><dd>{t.validShape}</dd>
+                        <dt>Format:</dt><dd>{t.tensorType}</dd>
+                        {t.tensorLayout && <><dt>Layout:</dt><dd>{t.tensorLayout}</dd></>}
+                        {t.inputSource && <><dt>Source:</dt><dd>{t.inputSource}</dd></>}
+                        {t.alignedBytes > 0 && <><dt>Buffer:</dt><dd>{(t.alignedBytes / 1024).toFixed(1)} KB</dd></>}
+                      </dl>
+                    </div>
+                  ))}
+
+
+                  {/* Output Tensors */}
+                  {modelInfo.outputs.map((t) => (
+                    <div key={`out-${t.index}`} className="tensor-card">
+                      <div className="tensor-card-header">
+                        <strong style={{fontSize: '12px'}}>{t.name || `Output #${t.index}`}</strong>
+                        <span className="tensor-tag output">OUTPUT {t.index}</span>
+                      </div>
+                      <dl className="tensor-props">
+                        <dt>Shape:</dt><dd>{t.validShape}</dd>
+                        <dt>Type:</dt><dd>{t.tensorType}</dd>
+                        <dt>Quant:</dt><dd>{t.quantiType}</dd>
+                        {t.alignedBytes > 0 && <><dt>Size:</dt><dd>{(t.alignedBytes / 1024).toFixed(1)} KB</dd></>}
+                      </dl>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Empty State when no model inspected and no benchmark run */}
+            {!currentResult && !modelInfo && !inspecting && (
+              <div className="bpu-empty-hint">
+                <Gauge size={42} />
+                <div>
+                  <strong>No Model Selected</strong>
+                  <p style={{margin: '4px 0 0', fontSize: '13px'}}>Select a model from the left sidebar to inspect tensor architecture and benchmark BPU inference speed.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Benchmark History */}
+            {history.length > 0 && (
+              <div className="bpu-card-section" style={{marginTop: 'auto'}}>
+                <div className="bpu-section-title">
+                  <span>Session Benchmark History</span>
+                  <button type="button" className="secondary-button" style={{padding: '3px 8px', fontSize: '12px'}} onClick={copyReport}>
+                    <Clipboard size={12} /> Copy Markdown Report
+                  </button>
+                </div>
+                <table className="bpu-history-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Model</th>
+                      <th>Threads</th>
+                      <th>Core</th>
+                      <th>FPS</th>
+                      <th>Avg Latency</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((h, idx) => (
+                      <tr key={idx}>
+                        <td>{formatTime(h.capturedAt)}</td>
+                        <td title={h.modelPath}>{h.modelName || h.modelPath.split('/').pop()}</td>
+                        <td>{h.threadCount}T</td>
+                        <td>{h.coreId === 0 ? 'Auto' : `Core ${h.coreId - 1}`}</td>
+                        <td><strong>{h.fps.toFixed(1)} FPS</strong></td>
+                        <td>{h.averageLatencyMs.toFixed(2)} ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Delete Confirmation Modal */}
+        {modelToDelete && (
+          <div className="modal-backdrop" style={{zIndex: 1100}}>
+            <div className="modal" style={{maxWidth: '420px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                <div style={{width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(224, 108, 117, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--red)', flexShrink: 0}}>
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h4 style={{margin: 0, fontSize: '14px'}}>确认删除板端模型？</h4>
+                  <p style={{margin: '4px 0 0', fontSize: '12px', color: 'var(--text-muted)'}}>
+                    文件：<strong>{modelToDelete.split('/').pop()}</strong>
+                  </p>
+                </div>
+              </div>
+              <p style={{margin: 0, fontSize: '12px', color: 'var(--text-dim)', lineHeight: 1.5}}>
+                此操作将从开发板永久删除该模型文件（<code>{modelToDelete}</code>），不可恢复。
+              </p>
+              <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px'}}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setModelToDelete(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  style={{background: 'var(--red)', borderColor: 'var(--red)', color: '#fff'}}
+                  onClick={() => void confirmDeleteModel()}
+                >
+                  确认删除
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="support-footer">
+          <span>{modelInfo ? `Inspected model: ${modelInfo.modelName || modelInfo.modelFile}` : 'BPU Engine Ready'}</span>
+          <button className="primary-button" onClick={onClose} disabled={benchmarking}>Done</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function InspectorSection({title, children}: {title: string; children: ReactNode}) { return <section className="inspector-section"><h3>{title}</h3>{children}</section>; }
+
 
 function TaskSandboxInspector({task}: {task: Task}) {
   const sandbox = task.sandbox;
