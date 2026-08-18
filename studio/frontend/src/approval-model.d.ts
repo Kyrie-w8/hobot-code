@@ -5,6 +5,6 @@ export function approvalPresentation(approval: Approval): {
   detail: string;
   remembersExactCall: boolean;
   state: 'reviewing' | 'approved' | 'denied' | 'manual-required';
-  decisionSource: 'board-reviewer' | 'human';
+  decisionSource: 'approval-model' | 'human';
 };
 export function approvalResponse(method: Approval['method'], action: 'confirm' | 'deny' | 'cancel' | 'submit' | 'select', value?: string): Record<string, unknown>;

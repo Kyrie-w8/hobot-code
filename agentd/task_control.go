@@ -14,8 +14,8 @@ import (
 )
 
 // taskControlServer is deliberately narrower than agentd. A sandboxed worker
-// may manage schedules for its own main task, but cannot reach task, approval,
-// provider, or board control APIs.
+// may request an exact-action model review and a main task may manage its own
+// schedules. Neither capability exposes general daemon or provider APIs.
 type taskControlServer struct {
 	current  *task
 	path     string
@@ -161,6 +161,28 @@ func (server *taskControlServer) dispatch(connection *net.UnixConn, req request)
 		return
 	}
 	metadata := server.current.snapshot()
+	if req.Method == "permission.review" {
+		var params permissionReviewParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		if params.Fingerprint != permissionReviewFingerprint(params.Tool, params.Input) {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", fmt.Errorf("permission review fingerprint does not match the action")))
+			return
+		}
+		if server.current.manager.reviewer == nil {
+			_ = writeJSON(connection, failure(req.ID, "reviewer_unavailable", fmt.Errorf("approval model is unavailable")))
+			return
+		}
+		result, err := server.current.manager.reviewer.review(server.current, params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "reviewer_unavailable", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+		return
+	}
 	if !server.current.manager.isScheduleMainTask(metadata) {
 		_ = writeJSON(connection, failure(req.ID, "forbidden", fmt.Errorf("only a main Agent timeline can manage schedules")))
 		return

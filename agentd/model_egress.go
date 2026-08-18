@@ -49,6 +49,67 @@ type modelEgressServer struct {
 	close    sync.Once
 }
 
+func (service *modelEgressServer) completeJSON(ctx context.Context, provider string, body []byte, maximumResponse int64) ([]byte, error) {
+	route, ok := service.routes[provider]
+	if !ok {
+		return nil, fmt.Errorf("model provider is unavailable: %s", provider)
+	}
+	if len(body) == 0 || len(body) > maximumModelEgressRequest || !json.Valid(body) {
+		return nil, fmt.Errorf("invalid model request")
+	}
+	if maximumResponse <= 0 || maximumResponse > maximumModelEgressResponse {
+		return nil, fmt.Errorf("invalid model response limit")
+	}
+	select {
+	case service.slots <- struct{}{}:
+		defer func() { <-service.slots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, route.Endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	switch route.API {
+	case "drobotics-anthropic":
+		request.Header.Set("Authorization", "Bearer "+route.Credential)
+		request.Header.Set("Anthropic-Version", "2023-06-01")
+	case "anthropic-messages":
+		if route.AuthHeader {
+			request.Header.Set("Authorization", "Bearer "+route.Credential)
+		} else {
+			request.Header.Set("X-Api-Key", route.Credential)
+		}
+		request.Header.Set("Anthropic-Version", "2023-06-01")
+	case "openai-completions", "openai-responses":
+		request.Header.Set("Authorization", "Bearer "+route.Credential)
+	default:
+		return nil, fmt.Errorf("model provider API is unsupported")
+	}
+	request.Header.Set("User-Agent", "hobot-code-agentd/"+version)
+	response, err := service.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	content, err := io.ReadAll(io.LimitReader(response.Body, maximumResponse+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > maximumResponse {
+		return nil, fmt.Errorf("model response is too large")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("model gateway returned HTTP %d", response.StatusCode)
+	}
+	if !json.Valid(content) {
+		return nil, fmt.Errorf("model gateway returned invalid JSON")
+	}
+	return content, nil
+}
+
 func normalizeModelEgressBaseURL(value string) (string, error) {
 	return normalizeModelEgressURL(value, defaultDroboticsBaseURL, "ANTHROPIC_BASE_URL")
 }

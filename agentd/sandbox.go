@@ -200,16 +200,10 @@ func (manager *taskManager) resolveTaskSandbox(requested, permissionMode string,
 	if err != nil {
 		return "", taskSandboxStatus{}, err
 	}
-	if permissionMode == "auto-review" && mode != sandboxModeReview && mode != sandboxModeWorkspace {
-		return "", taskSandboxStatus{}, fmt.Errorf("auto-review requires the review or workspace OS sandbox; board hardware and no-sandbox modes are not eligible")
-	}
 	if mode == sandboxModeOff {
 		return mode, sandboxStatus(mode, "none", "disabled explicitly for this task"), nil
 	}
 	if manager.cfg.SandboxBinary == "" {
-		if permissionMode == "auto-review" {
-			return "", taskSandboxStatus{}, fmt.Errorf("auto-review requires an available board OS sandbox")
-		}
 		// Non-Linux development hosts cannot enforce the board sandbox. Release
 		// builds on Linux use the explicit unavailable sentinel and fail closed.
 		return sandboxModeOff, sandboxStatus(sandboxModeOff, "none", "OS sandboxing is available on Linux board targets"), nil
@@ -488,10 +482,10 @@ func (manager *taskManager) sandboxCommand(metadata taskMetadata, agentArgs []st
 	args = append(args, "--ro-bind", filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"), filepath.Join(manager.cfg.SessionDir, metadata.ID, "policy"))
 	// Only this task's control directory is visible. The daemon root and other
 	// task control sockets remain masked, even for the same Unix uid.
-	if manager.cfg.TaskControlRoot != "" && manager.isScheduleMainTask(metadata) {
+	if manager.cfg.TaskControlRoot != "" {
 		controlDir := filepath.Join(manager.cfg.TaskControlRoot, metadata.ID)
 		if !pathIsDirectory(controlDir) {
-			return "", nil, taskSandboxStatus{}, fmt.Errorf("task schedule control is unavailable")
+			return "", nil, taskSandboxStatus{}, fmt.Errorf("task control is unavailable")
 		}
 		args = append(args, "--ro-bind", controlDir, controlDir)
 	}

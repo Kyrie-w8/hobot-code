@@ -75,13 +75,13 @@ func TestPermissionPoliciesKeepHighRiskToolsBounded(t *testing.T) {
 	}
 }
 
-func TestAutoReviewRequiresAnEnforcedWorkspaceOrReviewSandbox(t *testing.T) {
+func TestAutoReviewIsIndependentFromTheExecutionSandbox(t *testing.T) {
 	manager := &taskManager{cfg: config{SandboxBinary: ""}}
-	if _, _, err := manager.resolveTaskSandbox(sandboxModeOff, "auto-review", false); err == nil {
-		t.Fatal("auto-review accepted an unsandboxed task")
+	if mode, _, err := manager.resolveTaskSandbox(sandboxModeOff, "auto-review", false); err != nil || mode != sandboxModeOff {
+		t.Fatalf("auto-review rejected an unsandboxed task: mode=%s err=%v", mode, err)
 	}
-	if _, _, err := manager.resolveTaskSandbox(sandboxModeWorkspace, "auto-review", false); err == nil {
-		t.Fatal("auto-review accepted an unavailable OS sandbox")
+	if mode, _, err := manager.resolveTaskSandbox(sandboxModeWorkspace, "auto-review", false); err != nil || mode != sandboxModeOff {
+		t.Fatalf("auto-review did not preserve the normal non-Linux sandbox fallback: mode=%s err=%v", mode, err)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestSetPermissionModePersistsPrivateTaskPolicy(t *testing.T) {
 	}
 }
 
-func TestSetPermissionModeRejectsAutoReviewWithoutAnEligibleSandbox(t *testing.T) {
+func TestSetPermissionModeAcceptsAutoReviewWithoutAnOSSandbox(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "00112233445566778899aabb")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -210,11 +210,11 @@ func TestSetPermissionModeRejectsAutoReviewWithoutAnEligibleSandbox(t *testing.T
 	}
 	manager := &taskManager{cfg: config{SessionDir: filepath.Join(root, "sessions")}, tasks: map[string]*task{current.metadata.ID: current}}
 	current.manager = manager
-	if _, err := manager.setPermissionMode(setTaskPermissionParams{TaskID: current.metadata.ID, Mode: "auto-review"}); err == nil {
-		t.Fatal("auto-review was enabled without an eligible OS sandbox")
+	if _, err := manager.setPermissionMode(setTaskPermissionParams{TaskID: current.metadata.ID, Mode: "auto-review"}); err != nil {
+		t.Fatalf("auto-review was rejected without an OS sandbox: %v", err)
 	}
-	if got := current.snapshot().PermissionMode; got != "ask" {
-		t.Fatalf("rejected permission change mutated metadata: %s", got)
+	if got := current.snapshot().PermissionMode; got != "auto-review" {
+		t.Fatalf("permission mode was not updated: %s", got)
 	}
 }
 

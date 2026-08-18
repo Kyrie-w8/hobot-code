@@ -62,6 +62,7 @@ func newDaemonServer(cfg config) (*daemonServer, error) {
 		egress.shutdown()
 		return nil, err
 	}
+	manager.reviewer = newPermissionReviewerService(egress)
 	schedules, err := newScheduleManager(cfg, manager)
 	if err != nil {
 		egress.shutdown()
@@ -97,7 +98,7 @@ func (server *daemonServer) info(clientFingerprint string) daemonInfo {
 func (server *daemonServer) capabilities() capabilityInfo {
 	capabilities := append([]string(nil), protocolCapabilities...)
 	if modelEgressAvailable(server.cfg) {
-		capabilities = append(capabilities, "models.egress-broker.v1")
+		capabilities = append(capabilities, "models.egress-broker.v1", "tasks.permissions.llm-review.v1")
 	}
 	return capabilityInfo{
 		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion, EventSchema: eventSchemaVersion,

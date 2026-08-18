@@ -134,6 +134,7 @@ type taskManager struct {
 	models              map[string]modelOption
 	modelListErr        error
 	schedules           *scheduleManager
+	reviewer            *permissionReviewerService
 }
 
 type queuedLaunch struct {
@@ -1657,12 +1658,9 @@ func (current *task) launch(prompt string, images []imageContent, approve bool, 
 	if err != nil {
 		return fmt.Errorf("prepare private task session: %w", err)
 	}
-	controlSocket := ""
-	if current.manager.isScheduleMainTask(metadata) {
-		controlSocket, err = current.startTaskControlSocket()
-		if err != nil {
-			return fmt.Errorf("start task schedule control: %w", err)
-		}
+	controlSocket, err := current.startTaskControlSocket()
+	if err != nil {
+		return fmt.Errorf("start task control: %w", err)
 	}
 	keepControlSocket := false
 	defer func() {
@@ -2835,14 +2833,7 @@ func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (t
 		current.mu.Unlock()
 		return taskMetadata{}, fmt.Errorf("task must be idle or stopped before changing permissions")
 	}
-	sandboxMode := current.metadata.SandboxMode
-	deployment := current.metadata.Deployment != nil
 	current.mu.Unlock()
-	if mode == "auto-review" {
-		if _, _, err := manager.resolveTaskSandbox(sandboxMode, mode, deployment); err != nil {
-			return taskMetadata{}, err
-		}
-	}
 	current.mu.Lock()
 	previousMode := current.metadata.PermissionMode
 	previousUpdatedAt := current.metadata.UpdatedAt

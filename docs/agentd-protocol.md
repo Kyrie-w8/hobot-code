@@ -85,7 +85,7 @@
 | `schedule.pause` / `schedule.resume` | `{id}` | 暂停或恢复未来触发；已完成的一次性计划不可恢复 |
 | `schedule.run-now` | `{id}` | 请求一轮立即执行；忙碌任务只保留一个待执行 occurrence |
 | `schedule.delete` | `{id}` | 删除未来计划，不中断已经开始的本轮 |
-| `task.start` | `{name?, cwd, prompt, images?, approve?, model?, permissionMode?, workspaceMode?, sandboxMode?, networkMode?}` | 新任务元数据；`permissionMode` 可为 `review`、`ask`、`auto-review` 或 `developer`。`auto-review` 仅在声明 `tasks.permissions.auto-review.v1` 且有效 `review`/`workspace` OS sandbox 时可用；`workspaceMode` 为 `shared` 或 `worktree`；`sandboxMode` 为 `review`、`workspace`、`system` 或 `off`；`networkMode` 为 `shared`、`model-only` 或 `offline`；无 worker 槽时返回 `queued` 任务 |
+| `task.start` | `{name?, cwd, prompt, images?, approve?, model?, permissionMode?, workspaceMode?, sandboxMode?, networkMode?}` | 新任务元数据；`permissionMode` 可为 `review`、`ask`、`auto-review` 或 `developer`。新版 `auto-review` 要求 `tasks.permissions.llm-review.v1`，与 OS sandbox 档位独立；`workspaceMode` 为 `shared` 或 `worktree`；`sandboxMode` 为 `review`、`workspace`、`system` 或 `off`；`networkMode` 为 `shared`、`model-only` 或 `offline`；无 worker 槽时返回 `queued` 任务 |
 | `task.list` | `{}` | 未归档任务元数据，按创建时间倒序 |
 | `task.page` | `{cursor?, limit?, includeArchived?}` | 有界任务分页与下一游标 |
 | `task.get` | `{taskId}` | 单个任务元数据 |
@@ -96,7 +96,7 @@
 | `task.restart` | `{taskId, prompt, images?}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
 | `task.fork` | `{taskId, sequence?, prompt?, images?, name?, kind, model?, permissionMode?, sandboxMode?, networkMode?}` | `side` 从最新稳定上下文创建独立任务，Prompt 可省略并在首条消息时启动；`edit` 从指定用户消息之前创建替换时间线且必须提供 Prompt |
 | `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为 queued/终态任务持久化下次启动使用的模型 |
-| `task.permissions` | `{taskId, mode}` | 为 idle、queued 或终态任务设置独立的 `review`、`ask`、`auto-review` 或 `developer` 权限策略；旧服务未声明 `tasks.permissions.auto-review.v1` 时客户端不得显示或发送该模式 |
+| `task.permissions` | `{taskId, mode}` | 为 idle、queued 或终态任务设置独立的 `review`、`ask`、`auto-review` 或 `developer` 权限策略；客户端只有在服务声明 `tasks.permissions.llm-review.v1` 时才把 `auto-review` 显示为模型版 **Approve for me** |
 | `task.sandbox` | `{taskId, mode}` | 为 queued 或终态任务设置板端 OS 隔离档位；运行中的 worker 不允许热切换 |
 | `task.network` | `{taskId, mode}` | 为 queued 或终态任务设置 `shared`/`model-only`/`offline` 网络边界；后两者要求有效 Bubblewrap sandbox |
 | `task.command` | `{taskId, command}` | 把一条 Pi RPC 命令发送给 worker |

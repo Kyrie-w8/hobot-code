@@ -67,8 +67,8 @@ func permissionPolicyForMode(mode string) (taskPermissionPolicy, error) {
 			permissionRule{Tool: "mcp:*", Action: "ask"},
 		)
 	case "ask", "auto-review":
-		// Auto-review has Ask's board policy. Its extension reviewer can only
-		// decide one qualifying action and cannot persist a broader grant.
+		// Auto-review has Ask's board policy. agentd's isolated model reviewer
+		// can decide one exact action and cannot persist a broader grant.
 		policy.RootMode = "confirm"
 		if normalized == "auto-review" {
 			policy.Reviewer = "auto-review"

@@ -144,7 +144,7 @@ func TestLiveSideTaskLimitIsScopedToMainTask(t *testing.T) {
 	}
 }
 
-func TestLaunchedSideWorkerReceivesBoundCollaborationIdentity(t *testing.T) {
+func TestLaunchedSideWorkerReceivesBoundCollaborationAndReviewIdentity(t *testing.T) {
 	cfg := testConfig(t)
 	identityPath := filepath.Join(t.TempDir(), "worker-identity")
 	t.Setenv("HOBOT_CODE_TEST_AGENT_ENV_PATH", identityPath)
@@ -167,7 +167,7 @@ func TestLaunchedSideWorkerReceivesBoundCollaborationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "role=side\nparent=" + source.metadata.ID + "\nsource=" + source.metadata.ID + "\ntask=\ncontrol=\n"
+	want := "role=side\nparent=" + source.metadata.ID + "\nsource=" + source.metadata.ID + "\ntask=" + metadata.ID + "\ncontrol=set\n"
 	if string(content) != want {
 		t.Fatalf("worker collaboration identity = %q, want %q", content, want)
 	}

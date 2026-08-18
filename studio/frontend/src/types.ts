@@ -126,7 +126,7 @@ export type Approval = {
   prefill?: string;
   active: boolean;
   state?: 'reviewing' | 'approved' | 'denied' | 'manual-required';
-  decisionSource?: 'board-reviewer' | 'human';
+  decisionSource?: 'approval-model' | 'board-reviewer' | 'human';
   decisionReason?: string;
 };
 

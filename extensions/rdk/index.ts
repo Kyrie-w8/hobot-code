@@ -1015,6 +1015,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
       fingerprint: decision.fingerprint,
       scope: decision.scope,
       reasons: decision.reasons,
+      risk: typeof decision.risk === "string" ? decision.risk : undefined,
+      model: typeof decision.model === "string" ? decision.model : undefined,
+      latencyMs: typeof decision.latencyMs === "number" ? decision.latencyMs : undefined,
       // Do not retain tool arguments: target paths and command payloads can
       // themselves be sensitive. The exact-action fingerprint is auditable.
       inputShape: Object.keys(input).sort(),
@@ -1066,10 +1069,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
   }
 
   function autoReviewEnabled(): boolean {
-    const sandbox = sandboxRuntimeStatus();
-    return permissionPolicy.reviewer === AUTO_REVIEW_MODE
-      && sandbox.managed
-      && ["review", "workspace"].includes(sandbox.mode);
+    return permissionPolicy.reviewer === AUTO_REVIEW_MODE;
   }
 
   function toolIsMcp(toolName: string): boolean {
@@ -1871,7 +1871,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
 
     if (event.toolName === "write" || event.toolName === "edit") {
       const inspected = await inspectResolvedPath(ctx.cwd, String(event.input.path ?? ""));
-      if (inspected.criticalRoot) {
+      if (inspected.criticalRoot && !autoReviewEnabled()) {
         return { block: true, reason: `Direct writes under ${inspected.criticalRoot} are blocked by the RDK safety policy` };
       }
       reviewFacts.withinWorkspace = inspected.withinWorkspace;
@@ -1953,19 +1953,21 @@ export default function rdkExtension(pi: ExtensionAPI) {
       if (autoReviewMode) {
         let decision: Record<string, unknown>;
         try {
-          decision = permissionReviewer.review({
+          decision = await permissionReviewer.review({
             taskId: backgroundTaskID,
             tool: event.toolName,
             input: event.input as JsonRecord,
             facts: reviewFacts,
+            reasons: approvalReasons,
           });
+          decision = { ...decision, reasons: Array.isArray(decision.reasons) ? decision.reasons.map((reason) => redactSensitiveText(String(reason))) : ["approval model returned no reason"] };
           reviewerDecision = decision;
           await auditReviewerDecision(event.toolName, event.input as JsonRecord, decision);
         } catch (error) {
           // Reviewer parse, timeout, and audit failures are never permissions.
           decision = {
             status: "manual-required",
-            source: "board-reviewer",
+            source: "approval-model",
             reasons: [`reviewer unavailable: ${error instanceof Error ? error.message : String(error)}`],
           };
         }
@@ -1976,23 +1978,24 @@ export default function rdkExtension(pi: ExtensionAPI) {
         }
         if (decision.status === "denied") {
           if (typeof decision.fingerprint === "string") permissionReviewer.recordDenial(decision.fingerprint);
-          if (!ctx.hasUI) return { block: true, reason: `board reviewer denied ${event.toolName}: ${(decision.reasons as string[]).join("; ")}` };
+          if (!ctx.hasUI) return { block: true, reason: `approval model denied ${event.toolName}: ${(decision.reasons as string[]).join("; ")}` };
           const retry = await ctx.ui.select(
-            `Board reviewer denied ${event.toolName}. ${(decision.reasons as string[]).join("; ")}`,
+            `Approval model denied ${event.toolName}. ${(decision.reasons as string[]).join("; ")}`,
             ["Retry this exact action once with reviewer", "Cancel"],
           );
           if (retry === "Retry this exact action once with reviewer" && typeof decision.fingerprint === "string" && permissionReviewer.requestExactRetry(decision.fingerprint)) {
-            const retried = permissionReviewer.review({ taskId: backgroundTaskID, tool: event.toolName, input: event.input as JsonRecord, facts: reviewFacts });
-            try { await auditReviewerDecision(event.toolName, event.input as JsonRecord, retried); } catch { return { block: true, reason: "board reviewer audit failed during exact retry; request manual approval" }; }
+            let retried = await permissionReviewer.review({ taskId: backgroundTaskID, tool: event.toolName, input: event.input as JsonRecord, facts: reviewFacts, reasons: approvalReasons });
+            retried = { ...retried, reasons: Array.isArray(retried.reasons) ? retried.reasons.map((reason) => redactSensitiveText(String(reason))) : ["approval model returned no reason"] };
+            try { await auditReviewerDecision(event.toolName, event.input as JsonRecord, retried); } catch { return { block: true, reason: "approval model audit failed during exact retry; request manual approval" }; }
             if (retried.status === "approved") reviewerApproved = true;
             decision = retried;
             reviewerDecision = decision;
           }
           if (decision.status === "denied") {
-			return { block: true, reason: `board reviewer denied ${event.toolName}: ${(decision.reasons as string[]).join("; ")}. Find a materially safer path.` };
+			return { block: true, reason: `approval model denied ${event.toolName}: ${(decision.reasons as string[]).join("; ")}. Find a materially safer path.` };
 		}
         }
-        if (!reviewerApproved) approvalReasons.push(`board reviewer requires a human decision: ${(decision.reasons as string[]).join("; ")}`);
+        if (!reviewerApproved) approvalReasons.push(`approval model requires a human decision: ${(decision.reasons as string[]).join("; ")}`);
       }
       if (!reviewerApproved && !ctx.hasUI) {
         return {
@@ -2254,7 +2257,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
           .join("\n");
         ctx.ui.notify([
           `Policy: ${permissionPolicyPath()}`,
-          `Reviewer: ${permissionPolicy.reviewer === AUTO_REVIEW_MODE ? "board auto-review" : "human"}`,
+          `Reviewer: ${permissionPolicy.reviewer === AUTO_REVIEW_MODE ? "independent approval model" : "human"}`,
           `Root mode: ${permissionPolicy.rootMode}`,
           `Default: ${permissionPolicy.default}`,
           `OS sandbox: ${sandboxRuntimeStatus().mode} (${sandboxRuntimeStatus().backend}; ${sandboxRuntimeStatus().scope}; network ${sandboxRuntimeStatus().network})`,

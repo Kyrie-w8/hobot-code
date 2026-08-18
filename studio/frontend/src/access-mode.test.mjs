@@ -34,10 +34,11 @@ test('access mode preserves non-standard combinations as a readable custom summa
   assert.equal(presentation.summary, 'Review only · Workspace · Offline');
 });
 
-test('approve for me is capability gated and cannot select an unsafe board boundary', async () => {
+test('approve for me is model-review capability gated and independent of board boundary', async () => {
   const source = await readFile(new URL('./App.tsx', import.meta.url), 'utf8');
-  assert.match(source, /tasks\.permissions\.auto-review\.v1/);
+  assert.match(source, /tasks\.permissions\.llm-review\.v1/);
   assert.match(source, /hasAutoReview && <option value="auto-review"/);
-  assert.match(source, /value="system" disabled=\{!sandboxAvailable \|\| permissionMode === 'auto-review'\}/);
-  assert.match(source, /value="off" disabled=\{networkMode !== 'shared' \|\| permissionMode === 'auto-review'\}/);
+  assert.match(source, /value="system" disabled=\{!sandboxAvailable\}/);
+  assert.match(source, /value="off" disabled=\{networkMode !== 'shared'\}/);
+  assert.doesNotMatch(source, /autoReviewSandboxEligible/);
 });

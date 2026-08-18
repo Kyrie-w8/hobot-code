@@ -16,10 +16,11 @@ test('approval presentation preserves security detail over generic messages', ()
   assert.equal(view.state, 'manual-required');
 });
 
-test('approval presentation distinguishes reviewer state from a human approval', () => {
+test('approval presentation distinguishes model review from a human approval', () => {
   const view = approvalPresentation({title: 'Reviewing bash', state: 'reviewing', decisionSource: 'board-reviewer'});
   assert.equal(view.state, 'reviewing');
-  assert.equal(view.decisionSource, 'board-reviewer');
+  assert.equal(view.decisionSource, 'approval-model');
+  assert.equal(approvalPresentation({title: 'Reviewing bash', state: 'reviewing', decisionSource: 'approval-model'}).decisionSource, 'approval-model');
 });
 
 test('approval presentation retains non-generic backend guidance', () => {

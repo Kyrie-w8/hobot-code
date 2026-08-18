@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.7
+
+### Added
+
+- Upgrade **Approve for me** to an isolated, tool-free approval Agent that uses the task model, recent user intent, and exact tool action to review SSH, network, package, service, process, system-path, hardware, MCP, remote-build, and persistent operations.
+- Add `tasks.permissions.llm-review.v1` and a task-scoped `permission.review` control method. Model credentials remain in agentd, so approval works across Board access modes without exposing model egress to an Offline worker.
+
+### Changed
+
+- Make approval choice independent from Board access and Network. The reviewer may approve an action but cannot bypass the selected filesystem, device, capability, or network boundary.
+- Retain manual or denied handling only for critical invariants such as credential exfiltration, broad irreversible destruction, hidden persistent access, disabled security controls, and reviewer infrastructure tampering. Model failures and invalid responses fall back to a human decision.
+
 ## 0.28.6
 
 ### Added
