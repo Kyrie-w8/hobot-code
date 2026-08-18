@@ -2446,11 +2446,14 @@ function BPUBenchmarkDialog({
     }
   }, [effectivePath, inspectModel]);
 
+  const mainRef = useRef<HTMLDivElement>(null);
+
   // Run benchmark
   const runBenchmark = async () => {
     if (!effectivePath || benchmarking || inspecting) return;
     setBenchmarking(true);
     setBenchmarkError('');
+    mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     try {
       const res = await api.runBPUBenchmark(boardId, {
         modelPath: effectivePath,
@@ -2460,6 +2463,7 @@ function BPUBenchmarkDialog({
       });
       setCurrentResult(res);
       setHistory((prev) => [res, ...prev.slice(0, 9)]);
+      mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setBenchmarkError(friendlyError(String(err)));
     } finally {
@@ -2591,7 +2595,8 @@ function BPUBenchmarkDialog({
           </div>
 
           {/* Right Main Dashboard */}
-          <div className="bpu-main">
+          <div ref={mainRef} className="bpu-main">
+
             {benchmarkError && (
               <div className="schedule-error" style={{margin: 0}}>
                 <AlertTriangle size={16} />

@@ -1055,31 +1055,46 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 
 /* BPU Benchmark & Model Inspector Modal */
 .bpu-modal {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: min(100%, 980px);
   height: min(840px, calc(100vh - 48px));
   overflow: hidden;
 }
 .bpu-modal .modal-header {
-  height: auto;
+  display: flex;
   min-height: 64px;
-  padding: 16px 20px 14px;
+  height: auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
   box-sizing: border-box;
-  overflow: visible;
+  flex-shrink: 0;
+}
+.bpu-modal .modal-header div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .bpu-modal .modal-header .modal-eyebrow {
   display: block;
-  margin-bottom: 4px;
+  color: var(--accent);
+  font-size: var(--font-size-caption);
+  font-weight: 650;
+  text-transform: uppercase;
   line-height: 1.2;
+  margin-bottom: 3px;
 }
 .bpu-modal .modal-header h2 {
   margin: 0;
+  font-size: var(--font-size-heading);
   line-height: 1.2;
 }
 .bpu-layout {
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
+  flex: 1;
   min-height: 0;
   overflow: hidden;
 }
@@ -1093,7 +1108,8 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   overflow-y: auto;
 }
 .bpu-sidebar-group {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 .bpu-sidebar-group label {
@@ -1104,18 +1120,22 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   letter-spacing: 0.5px;
 }
 .bpu-model-list {
-  display: grid;
-  gap: 4px;
-  max-height: 200px;
-  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 220px;
   overflow-y: auto;
-  padding-right: 2px;
+  overflow-x: hidden;
+  padding-right: 4px;
 }
 .bpu-model-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 9px;
+  min-height: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -1123,8 +1143,8 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   font-size: var(--font-size-caption);
   text-align: left;
   cursor: pointer;
-  min-width: 0;
-  overflow: hidden;
+  box-sizing: border-box;
+  width: 100%;
   transition: all 0.15s ease;
 }
 .bpu-model-item:hover {
@@ -1133,8 +1153,11 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 }
 .bpu-model-item.selected {
   border-color: var(--blue);
-  background: rgba(119, 168, 216, 0.1);
-  font-weight: 550;
+  background: rgba(119, 168, 216, 0.12);
+  font-weight: 600;
+}
+.bpu-model-item svg {
+  flex-shrink: 0;
 }
 .bpu-model-item span {
   flex: 1;
@@ -1156,6 +1179,7 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   overflow-y: auto;
   min-height: 0;
 }
+
 .bpu-running-banner {
   display: flex;
   align-items: center;
