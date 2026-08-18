@@ -344,25 +344,31 @@ func (client *Client) RunBPUBenchmark(ctx context.Context, req BPUBenchmarkReque
 }
 
 
-// ListBPUModels finds .bin, .hbm and .onnx model files in the cwd, /root, /opt/hobot/model, /userdata, /tmp, etc.
+// ListBPUModels finds .bin, .hbm and .onnx model files in dedicated model directories.
 func (client *Client) ListBPUModels(ctx context.Context, cwd string) ([]string, error) {
-	dirs := []string{"/root/models", "/userdata/models", "/root", "/opt/hobot/model/x5/basic", "/opt/hobot/model", "/root/ssd"}
-	if cwd != "" && cwd != "/root" {
-		dirs = append([]string{cwd}, dirs...)
+	// 1. Scan primary curated model directories first
+	primaryDirs := []string{"/root/models", "/userdata/models", "/opt/hobot/model/x5/basic", "/opt/hobot/model", "/root/ssd"}
+	if cwd != "" && cwd != "/root" && !strings.Contains(cwd, "/predictions") && !strings.Contains(cwd, "/evaluation") {
+		primaryDirs = append([]string{cwd}, primaryDirs...)
 	}
 
-	// Build find command scanning target directories
-	var validDirs []string
+	var validPrimary []string
 	seen := make(map[string]bool)
-	for _, d := range dirs {
+	for _, d := range primaryDirs {
 		if !seen[d] {
 			seen[d] = true
-			validDirs = append(validDirs, quoteArg(d))
+			validPrimary = append(validPrimary, quoteArg(d))
 		}
 	}
 
-	cmd := fmt.Sprintf("find %s -maxdepth 3 -type f \\( -name '*.bin' -o -name '*.hbm' \\) 2>/dev/null | head -n 40", strings.Join(validDirs, " "))
-	outputBytes, err := client.runBoardCommand(ctx, cmd, nil)
+	// Also scan /root up to depth 2 (excluding evaluation / prediction subdirs)
+	findCmd := fmt.Sprintf(
+		"find %s -maxdepth 3 -type f \\( -name '*.bin' -o -name '*.hbm' \\) ! -path '*/predictions/*' ! -path '*/evaluation/*' ! -path '*/sample_gdc/*' ! -path '*/vp_sensors/*' 2>/dev/null; " +
+		"find /root -maxdepth 2 -type f \\( -name '*.bin' -o -name '*.hbm' \\) 2>/dev/null",
+		strings.Join(validPrimary, " "),
+	)
+
+	outputBytes, err := client.runBoardCommand(ctx, findCmd, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -372,12 +378,17 @@ func (client *Client) ListBPUModels(ctx context.Context, cwd string) ([]string, 
 	for _, l := range lines {
 		trimmed := strings.TrimSpace(l)
 		if trimmed != "" && !modelSeen[trimmed] {
+			// Skip known non-BPU binary artifacts
+			if strings.Contains(trimmed, "eva-") || strings.Contains(trimmed, "reference/") || strings.Contains(trimmed, "_gdc.bin") {
+				continue
+			}
 			modelSeen[trimmed] = true
 			models = append(models, trimmed)
 		}
 	}
 	return models, nil
 }
+
 
 // DownloadSampleBPUModel downloads a verified standard benchmark model for the given SoC.
 func (client *Client) DownloadSampleBPUModel(ctx context.Context, soc string) (string, error) {

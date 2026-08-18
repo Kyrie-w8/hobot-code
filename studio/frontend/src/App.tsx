@@ -2741,7 +2741,7 @@ function BPUBenchmarkDialog({
                 type="button"
                 className="primary-button"
                 style={{width: '100%', minHeight: '38px', gap: '8px'}}
-                disabled={!effectivePath || benchmarking || inspecting}
+                disabled={!effectivePath || benchmarking}
                 onClick={() => void runBenchmark()}
               >
                 {benchmarking ? <LoaderCircle size={16} className="spin" /> : <Gauge size={16} />}
@@ -2749,6 +2749,7 @@ function BPUBenchmarkDialog({
               </button>
             </div>
           </div>
+
 
           {/* Right Main Dashboard */}
           <div ref={mainRef} className="bpu-main">
