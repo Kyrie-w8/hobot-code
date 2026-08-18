@@ -2396,7 +2396,8 @@ function BPUBenchmarkDialog({
   const [customModelPath, setCustomModelPath] = useState('');
   const [coreId, setCoreId] = useState(0);
   const [threadCount, setThreadCount] = useState(1);
-  const [frameCount, setFrameCount] = useState(200);
+  const [frameCount, setFrameCount] = useState(100);
+
   const [modelInfo, setModelInfo] = useState<BPUModelInfo | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState('');
@@ -2457,6 +2458,7 @@ function BPUBenchmarkDialog({
     try {
       const res = await api.runBPUBenchmark(boardId, {
         modelPath: effectivePath,
+        modelName: modelInfo?.modelName || undefined,
         coreId,
         threadCount,
         frameCount,
@@ -2470,6 +2472,7 @@ function BPUBenchmarkDialog({
       setBenchmarking(false);
     }
   };
+
 
   const copyReport = () => {
     if (!currentResult) return;
@@ -2572,12 +2575,13 @@ function BPUBenchmarkDialog({
               <label style={{fontSize: '11px', marginTop: '4px'}}>
                 Iterations (Frames)
                 <select value={frameCount} disabled={benchmarking} onChange={(e) => setFrameCount(Number(e.target.value))}>
+                  <option value={50}>50 frames (~0.5s - Fast)</option>
                   <option value={100}>100 frames (~1.2s)</option>
                   <option value={200}>200 frames (~2.5s)</option>
                   <option value={500}>500 frames (~6.0s)</option>
-                  <option value={1000}>1000 frames (~12.0s)</option>
                 </select>
               </label>
+
             </div>
 
             <div style={{marginTop: 'auto', paddingTop: '10px'}}>

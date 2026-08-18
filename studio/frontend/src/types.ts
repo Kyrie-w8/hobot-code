@@ -95,11 +95,13 @@ export type BPUModelInfo = {
 
 export type BPUBenchmarkRequest = {
   modelPath: string;
+  modelName?: string;
   coreId: number;
   frameCount: number;
   threadCount: number;
   inputFile?: string;
 };
+
 
 export type BPUBenchmarkResult = {
   modelPath: string;

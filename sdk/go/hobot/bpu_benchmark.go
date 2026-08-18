@@ -39,11 +39,13 @@ type BPUModelInfo struct {
 
 type BPUBenchmarkRequest struct {
 	ModelPath   string `json:"modelPath"`
+	ModelName   string `json:"modelName,omitempty"`
 	CoreID      int    `json:"coreId"`      // 0=all/any, 1=core0, 2=core1
 	FrameCount  int    `json:"frameCount"`  // default 200
 	ThreadCount int    `json:"threadCount"` // default 1
 	InputFile   string `json:"inputFile,omitempty"`
 }
+
 
 type BPUBenchmarkResult struct {
 	ModelPath        string    `json:"modelPath"`
@@ -318,6 +320,9 @@ func (client *Client) RunBPUBenchmark(ctx context.Context, req BPUBenchmarkReque
 
 	cmd := fmt.Sprintf("hrt_model_exec perf --model_file %s --frame_count %d --thread_num %d",
 		quoteArg(req.ModelPath), frameCount, threadCount)
+	if req.ModelName != "" {
+		cmd += fmt.Sprintf(" --model_name %s", quoteArg(req.ModelName))
+	}
 	if req.CoreID > 0 {
 		cmd += fmt.Sprintf(" --core_id %d", req.CoreID)
 	}
@@ -325,6 +330,7 @@ func (client *Client) RunBPUBenchmark(ctx context.Context, req BPUBenchmarkReque
 		cmd += fmt.Sprintf(" --input_file %s", quoteArg(req.InputFile))
 	}
 	cmd += " 2>&1"
+
 
 	outputBytes, err := client.runBoardCommand(ctx, cmd, nil)
 	output := string(outputBytes)
