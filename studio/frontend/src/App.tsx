@@ -2426,8 +2426,12 @@ function BPUBenchmarkDialog({
   }, [boardId, cwd]);
 
   // Inspect model when path changes
+  // Use a ref for the concurrency guard so the useCallback identity stays stable
+  // and doesn't trigger the useEffect in an infinite loop.
+  const inspectingRef = useRef(false);
   const inspectModel = useCallback(async (path: string) => {
-    if (!path || inspecting || benchmarking) return;
+    if (!path || inspectingRef.current) return;
+    inspectingRef.current = true;
     setInspecting(true);
     setInspectError('');
     try {
@@ -2437,9 +2441,10 @@ function BPUBenchmarkDialog({
       setInspectError(friendlyError(String(err)));
       setModelInfo(null);
     } finally {
+      inspectingRef.current = false;
       setInspecting(false);
     }
-  }, [boardId, inspecting, benchmarking]);
+  }, [boardId]);
 
   useEffect(() => {
     if (effectivePath && effectivePath !== 'custom') {
@@ -2451,7 +2456,7 @@ function BPUBenchmarkDialog({
 
   // Run benchmark
   const runBenchmark = async () => {
-    if (!effectivePath || benchmarking || inspecting) return;
+    if (!effectivePath || benchmarking || inspectingRef.current) return;
     setBenchmarking(true);
     setBenchmarkError('');
     mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
