@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.29.2
+
+### Changed
+
+- Make `Approve for me` low-interruption by design: ordinary workspace, build, test, SSH, remote inspection, temporary proxy, and routine network actions run directly without calling the approval model.
+- Reserve model review for actions with concrete side effects, and reserve human confirmation for exceptional high-impact boundaries or an explicit model decision.
+- Allow a non-critical exact action to continue with a visible one-shot fallback when the approval model is unavailable or returns malformed output; hard safety boundaries never use this fallback.
+- Accept one unambiguous approval decision wrapped in common model formatting, including Markdown fences, extra fields, and common decision aliases.
+
 ## 0.29.1
 
 ### Changed

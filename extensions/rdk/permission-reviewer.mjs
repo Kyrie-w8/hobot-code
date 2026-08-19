@@ -8,6 +8,7 @@ export const REVIEWER_VERSION = 2;
 export const REVIEWER_DENIAL_LIMIT = 3;
 export const REVIEWER_WINDOW_LIMIT = 10;
 export const REVIEWER_WINDOW_MS = 10 * 60_000;
+export const REVIEWER_FALLBACK_SOURCE = "reviewer-unavailable-fallback";
 
 const CONTROL_SOCKET_ENV = "HOBOT_CODE_TASK_CONTROL_SOCKET";
 const TASK_ID_ENV = "HOBOT_CODE_TASK_ID";
@@ -33,6 +34,20 @@ const CRITICAL_DEVICE_REASONS = new Set([
   "changes a filesystem or partition table",
   "writes directly to a block or device node",
 ]);
+const ROUTINE_APPROVAL_REASONS = new Set([
+  "the permission policy requires confirmation",
+  "root strict mode requires confirmation for every mutation-capable tool",
+  "the remote build host requires network access",
+]);
+const ROUTINE_DIRECT_TOOLS = new Set([
+  "bash",
+  "edit",
+  "openexplorer_build_host",
+  "openexplorer_remote_run",
+  "quality_gate",
+  "write",
+]);
+const OUTBOUND_STATE_CHANGE = /(?:\bcurl\b[^;&|]*\s(?:-d|--data(?:-[a-z-]+)?|-F|--form|-T|--upload-file|-X|--request)(?:\s|=)|\bgit\s+push\b|\bscp\b|\bsftp\b)/iu;
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -58,6 +73,31 @@ export function hardPermissionReviewBoundary(tool, input, facts = {}) {
     if (CRITICAL_DEVICE_REASONS.has(String(reason))) reasons.push(`the action ${reason}`);
   }
   return reasons;
+}
+
+export function routineActionNeedsNoReview(tool, input, facts = {}, reasons = []) {
+  if (!ROUTINE_DIRECT_TOOLS.has(String(tool))) return false;
+  if (tool === "openexplorer_build_host" && input?.action !== "probe") return false;
+  if (hardPermissionReviewBoundary(tool, input, facts).length > 0) return false;
+  const destructive = Array.isArray(facts.destructiveReasons) ? facts.destructiveReasons : [];
+  const ambiguous = Array.isArray(facts.ambiguousReasons) ? facts.ambiguousReasons : [];
+  if (destructive.length > 0 || ambiguous.length > 0) return false;
+  if (facts.outsideWorkspace || facts.criticalPath || facts.persistent || facts.mcp) return false;
+  if ((tool === "bash" || tool === "openexplorer_remote_run") && OUTBOUND_STATE_CHANGE.test(String(input?.command ?? ""))) return false;
+  const networkReasons = new Set(Array.isArray(facts.networkReasons) ? facts.networkReasons.map(String) : []);
+  return reasons.every((reason) => ROUTINE_APPROVAL_REASONS.has(String(reason)) || networkReasons.has(String(reason)));
+}
+
+function reviewerUnavailableFallback(request, fingerprint) {
+  return {
+    status: "approved",
+    source: REVIEWER_FALLBACK_SOURCE,
+    fingerprint,
+    risk: "medium",
+    fallback: true,
+    scope: { kind: "exact-action", taskId: String(request?.taskId ?? ""), action: fingerprint },
+    reasons: ["approval reviewer was unavailable; low-interruption mode allowed this non-critical exact action"],
+  };
 }
 
 function taskControlEnvironment(env = process.env) {
@@ -154,7 +194,16 @@ export function createPermissionReviewer({ now = () => Date.now(), review = requ
       if ((consecutiveDenials >= REVIEWER_DENIAL_LIMIT || denials.length >= REVIEWER_WINDOW_LIMIT) && !retry) {
         return { status: "denied", source: "approval-model-circuit", fingerprint, reasons: ["approval review paused after repeated denials; choose a materially safer action or approve manually"], hard: false };
       }
-      return review({ ...request, tool, input, fingerprint });
+      try {
+        const result = await review({ ...request, tool, input, fingerprint });
+        if (!result || !["approved", "manual-required", "denied"].includes(result.status)
+          || result.fingerprint !== fingerprint || !Array.isArray(result.reasons)) {
+          throw new Error("approval reviewer returned an invalid result");
+        }
+        return result;
+      } catch {
+        return reviewerUnavailableFallback(request, fingerprint);
+      }
     },
   };
 }

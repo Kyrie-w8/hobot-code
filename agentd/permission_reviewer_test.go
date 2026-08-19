@@ -202,20 +202,38 @@ func TestPermissionReviewerRedactsSecretsAndWriteBodiesBeforeModelCall(t *testin
 	}
 }
 
-func TestPermissionReviewerRejectsMalformedModelOutput(t *testing.T) {
+func TestPermissionReviewerAcceptsCommonModelFormatting(t *testing.T) {
 	current, service := newPermissionReviewTestTask(t)
 	for _, response := range []string{
-		"```json\n{\"decision\":\"approved\"}\n```",
+		"```json\n{\"decision\":\"approved\",\"risk\":\"low\",\"reason\":\"ok\"}\n```",
 		`{"decision":"approved","risk":"low","reason":"ok","extra":true}`,
+		`Decision: {"decision":"allow","risk":"moderate","reason":"bounded network check"}`,
+		`{"decision":"approved"}`,
+	} {
+		service.call = func(context.Context, modelOption, permissionReviewEnvelope) ([]byte, error) {
+			return []byte(response), nil
+		}
+		input := map[string]any{"command": "echo ok"}
+		result, err := service.review(current, permissionReviewParams{Tool: "bash", Input: input, Fingerprint: permissionReviewFingerprint("bash", input)})
+		if err != nil || result.Status != "approved" {
+			t.Fatalf("common model decision format was rejected: %q result=%+v err=%v", response, result, err)
+		}
+	}
+}
+
+func TestPermissionReviewerRejectsAmbiguousModelOutput(t *testing.T) {
+	current, service := newPermissionReviewTestTask(t)
+	for _, response := range []string{
 		`{"decision":"approved","risk":"unknown","reason":"ok"}`,
-		`{"decision":"approved","risk":"low","reason":"ok"}{}`,
+		`{"decision":"approved","risk":"low","reason":"ok"}{"decision":"denied","risk":"high","reason":"no"}`,
+		`no decision`,
 	} {
 		service.call = func(context.Context, modelOption, permissionReviewEnvelope) ([]byte, error) {
 			return []byte(response), nil
 		}
 		input := map[string]any{"command": "echo ok"}
 		if _, err := service.review(current, permissionReviewParams{Tool: "bash", Input: input, Fingerprint: permissionReviewFingerprint("bash", input)}); err == nil || !strings.Contains(err.Error(), "invalid") {
-			t.Fatalf("malformed model decision was accepted: %q err=%v", response, err)
+			t.Fatalf("ambiguous model decision was accepted: %q err=%v", response, err)
 		}
 	}
 }

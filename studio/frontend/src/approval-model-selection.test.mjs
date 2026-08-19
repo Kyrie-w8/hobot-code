@@ -14,3 +14,10 @@ test('Studio exposes a task-scoped approval model without coupling it to the Age
   assert.match(api, /SetTaskApprovalModel/u);
   assert.match(api, /setApprovalModel/u);
 });
+
+test('Approve for me explains routine direct execution instead of claiming every action uses a model', async () => {
+  const source = await readFile(new URL('./App.tsx', import.meta.url), 'utf8');
+  assert.match(source, /Routine actions run directly/u);
+  assert.match(source, /reviews meaningful side effects/u);
+  assert.doesNotMatch(source, /reviews each requested action/u);
+});

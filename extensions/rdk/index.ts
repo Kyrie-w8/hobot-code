@@ -73,7 +73,7 @@ import {
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
 import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety, shellReviewFacts, unboundedRemoteScanReasons } from "./runtime-safety.mjs";
-import { AUTO_REVIEW_MODE, createPermissionReviewer } from "./permission-reviewer.mjs";
+import { AUTO_REVIEW_MODE, REVIEWER_FALLBACK_SOURCE, createPermissionReviewer, routineActionNeedsNoReview } from "./permission-reviewer.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
 import { acquireWorkspaceWriteLease } from "./workspace-write-lease.mjs";
@@ -1880,7 +1880,11 @@ export default function rdkExtension(pi: ExtensionAPI) {
       let reviewerApproved = false;
       let reviewerDecision: Record<string, unknown> | undefined;
       const autoReviewMode = autoReviewEnabled();
-      if (autoReviewMode) {
+      const routinePolicyApproval = autoReviewMode
+        && routineActionNeedsNoReview(event.toolName, event.input, reviewFacts, approvalReasons);
+      if (routinePolicyApproval) {
+        reviewerApproved = true;
+      } else if (autoReviewMode) {
         let decision: Record<string, unknown>;
         try {
           decision = await permissionReviewer.review({
@@ -1904,7 +1908,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
           // A review is a one-shot exact action. It never changes policy, roots,
           // network, sandbox, or writable paths.
           reviewerApproved = true;
-          const reviewerName = typeof decision.model === "string" && decision.model ? decision.model : "approval model";
+          const reviewerName = decision.source === REVIEWER_FALLBACK_SOURCE
+            ? "low-interruption fallback"
+            : typeof decision.model === "string" && decision.model ? decision.model : "approval model";
           const reviewerReason = Array.isArray(decision.reasons) ? decision.reasons.join("; ") : "scoped action";
           ctx.ui.notify(`Approved by ${reviewerName}: ${reviewerReason}`, "info");
         }
