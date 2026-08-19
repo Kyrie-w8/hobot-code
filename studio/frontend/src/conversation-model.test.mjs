@@ -60,6 +60,17 @@ test('compaction lifecycle remains visible inside the active turn', () => {
   ]);
 });
 
+test('automatic approval decisions remain visible without creating a blocking prompt', () => {
+  const result = buildConversation([
+    event(1, 'user.message', {text: 'Pause the recurring check'}),
+    event(2, 'approval.reviewed', {toolName: 'bash', status: 'approved', risk: 'low', reason: 'The schedule pause is reversible.', model: 'drobotics/qwen3.8-max'}),
+    event(3, 'assistant.text.delta', {delta: 'Paused.'}),
+    event(4, 'task.idle'),
+  ]);
+  assert.equal(result[1].notices[0].label, 'Approved by drobotics/qwen3.8-max · bash · The schedule pause is reversible.');
+  assert.equal(result[1].text, 'Paused.');
+});
+
 test('conversation separates turns at each persisted user message', () => {
   const result = buildConversation([
     event(1, 'assistant.text.delta', {delta: 'Legacy response'}),

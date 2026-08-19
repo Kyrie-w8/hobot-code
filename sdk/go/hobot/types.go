@@ -496,6 +496,7 @@ type Task struct {
 	ResumeCount      int                `json:"resumeCount,omitempty"`
 	RestartCount     int                `json:"restartCount,omitempty"`
 	Model            string             `json:"model,omitempty"`
+	ApprovalModel    string             `json:"approvalModel,omitempty"`
 	PermissionMode   string             `json:"permissionMode,omitempty"`
 	SandboxMode      string             `json:"sandboxMode"`
 	NetworkMode      string             `json:"networkMode"`
@@ -647,6 +648,7 @@ type StartTaskRequest struct {
 	Images         []ImageContent `json:"images,omitempty"`
 	Approve        bool           `json:"approve,omitempty"`
 	Model          string         `json:"model,omitempty"`
+	ApprovalModel  string         `json:"approvalModel,omitempty"`
 	PermissionMode string         `json:"permissionMode,omitempty"`
 	WorkspaceMode  string         `json:"workspaceMode,omitempty"`
 	SandboxMode    string         `json:"sandboxMode,omitempty"`
@@ -661,6 +663,7 @@ type ForkTaskRequest struct {
 	Name           string         `json:"name,omitempty"`
 	Kind           string         `json:"kind,omitempty"`
 	Model          string         `json:"model,omitempty"`
+	ApprovalModel  string         `json:"approvalModel,omitempty"`
 	PermissionMode string         `json:"permissionMode,omitempty"`
 	SandboxMode    string         `json:"sandboxMode,omitempty"`
 	NetworkMode    string         `json:"networkMode,omitempty"`

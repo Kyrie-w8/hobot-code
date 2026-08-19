@@ -67,6 +67,7 @@ type taskMetadata struct {
 	ResumeCount     int                `json:"resumeCount,omitempty"`
 	RestartCount    int                `json:"restartCount,omitempty"`
 	Model           string             `json:"model,omitempty"`
+	ApprovalModel   string             `json:"approvalModel,omitempty"`
 	PermissionMode  string             `json:"permissionMode,omitempty"`
 	SandboxMode     string             `json:"sandboxMode"`
 	NetworkMode     string             `json:"networkMode"`
@@ -157,6 +158,7 @@ type startTaskParams struct {
 	Images         []imageContent    `json:"images,omitempty"`
 	Approve        bool              `json:"approve,omitempty"`
 	Model          string            `json:"model,omitempty"`
+	ApprovalModel  string            `json:"approvalModel,omitempty"`
 	PermissionMode string            `json:"permissionMode,omitempty"`
 	WorkspaceMode  string            `json:"workspaceMode,omitempty"`
 	SandboxMode    string            `json:"sandboxMode,omitempty"`
@@ -172,6 +174,7 @@ type forkTaskParams struct {
 	Name           string         `json:"name,omitempty"`
 	Kind           string         `json:"kind,omitempty"`
 	Model          string         `json:"model,omitempty"`
+	ApprovalModel  string         `json:"approvalModel,omitempty"`
 	PermissionMode string         `json:"permissionMode,omitempty"`
 	SandboxMode    string         `json:"sandboxMode,omitempty"`
 	NetworkMode    string         `json:"networkMode,omitempty"`
@@ -232,6 +235,11 @@ type setTaskModelParams struct {
 type setTaskPermissionParams struct {
 	TaskID string `json:"taskId"`
 	Mode   string `json:"mode"`
+}
+
+type setTaskApprovalModelParams struct {
+	TaskID string `json:"taskId"`
+	Model  string `json:"model,omitempty"`
 }
 
 type setTaskSandboxParams struct {
@@ -359,6 +367,10 @@ func newTaskManager(cfg config) (*taskManager, error) {
 		}
 		if metadata.Model != "" && validPersistedModel(metadata.Model) == "" {
 			metadata.Model = ""
+			legacyMetadataCleared = true
+		}
+		if metadata.ApprovalModel != "" && validPersistedModel(metadata.ApprovalModel) == "" {
+			metadata.ApprovalModel = ""
 			legacyMetadataCleared = true
 		}
 		if metadata.SessionFile != "" {
@@ -1035,6 +1047,14 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
 	}
+	if params.ApprovalModel != "" {
+		if normalizeModelSelection(params.ApprovalModel) == "" {
+			return taskMetadata{}, fmt.Errorf("approval model must use provider/model format")
+		}
+		if _, err := manager.permissionReviewModel(params.ApprovalModel, params.Model); err != nil {
+			return taskMetadata{}, err
+		}
+	}
 	if err := manager.validateImagesForModel(normalizeModelSelection(params.Model), params.Images); err != nil {
 		return taskMetadata{}, err
 	}
@@ -1122,7 +1142,7 @@ func (manager *taskManager) start(params startTaskParams) (taskMetadata, error) 
 			ID: id, Name: name, Cwd: cwd, ProjectCwd: projectCwd, WorkspaceMode: workspaceMode,
 			WorkspaceID: id, WorktreePath: worktreePath, WorktreeBase: worktreeBase, Status: statusStopped,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: params.Approve,
-			Model: normalizeModelSelection(params.Model), PermissionMode: permissionMode,
+			Model: normalizeModelSelection(params.Model), ApprovalModel: normalizeModelSelection(params.ApprovalModel), PermissionMode: permissionMode,
 			SandboxMode: sandboxMode, NetworkMode: networkMode, Sandbox: sandbox, Deployment: params.Deployment,
 		},
 		subscribers: make(map[uint64]chan taskEvent),
@@ -1195,6 +1215,9 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	}
 	if params.Model != "" && normalizeModelSelection(params.Model) == "" {
 		return taskMetadata{}, fmt.Errorf("model must use provider/model format")
+	}
+	if params.ApprovalModel != "" && normalizeModelSelection(params.ApprovalModel) == "" {
+		return taskMetadata{}, fmt.Errorf("approval model must use provider/model format")
 	}
 	if params.PermissionMode != "" {
 		if _, err := normalizePermissionMode(params.PermissionMode); err != nil {
@@ -1306,6 +1329,15 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 	if model == "" {
 		model = parent.Model
 	}
+	approvalModel := normalizeModelSelection(params.ApprovalModel)
+	if approvalModel == "" {
+		approvalModel = parent.ApprovalModel
+	}
+	if approvalModel != "" {
+		if _, err := manager.permissionReviewModel(approvalModel, model); err != nil {
+			return taskMetadata{}, err
+		}
+	}
 	if err := manager.validateImagesForModel(model, params.Images); err != nil {
 		return taskMetadata{}, err
 	}
@@ -1363,7 +1395,7 @@ func (manager *taskManager) fork(params forkTaskParams) (taskMetadata, error) {
 			WorkspaceMode: workspaceMode, WorkspaceID: parent.WorkspaceID,
 			WorktreePath: parent.WorktreePath, WorktreeBase: parent.WorktreeBase, Status: status,
 			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Approved: parent.Approved,
-			SessionFile: forkFile, Model: model, PermissionMode: permissionMode,
+			SessionFile: forkFile, Model: model, ApprovalModel: approvalModel, PermissionMode: permissionMode,
 			SandboxMode: sandboxMode, NetworkMode: networkMode, Sandbox: sandbox, ParentTaskID: parentTaskID,
 			SourceTaskID: parent.ID,
 			ForkSequence: params.Sequence, BranchKind: params.Kind, AwaitingPrompt: awaitingPrompt,
@@ -2856,6 +2888,37 @@ func (manager *taskManager) setPermissionMode(params setTaskPermissionParams) (t
 		if restoreErr := current.writePermissionPolicy(previousMode); restoreErr != nil {
 			return taskMetadata{}, fmt.Errorf("save task metadata: %w; restore permission policy: %v", err, restoreErr)
 		}
+		return taskMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func (manager *taskManager) setApprovalModel(params setTaskApprovalModelParams) (taskMetadata, error) {
+	manager.startMu.Lock()
+	defer manager.startMu.Unlock()
+	model := normalizeModelSelection(params.Model)
+	if params.Model != "" && model == "" {
+		return taskMetadata{}, fmt.Errorf("approval model must use provider/model format")
+	}
+	current, err := manager.get(params.TaskID)
+	if err != nil {
+		return taskMetadata{}, err
+	}
+	metadata := current.snapshot()
+	if metadata.Status != statusIdle && metadata.Status != statusQueued && !isTerminalStatus(metadata.Status) {
+		return taskMetadata{}, fmt.Errorf("task must be idle or stopped before changing the approval model")
+	}
+	if model != "" {
+		if _, err := manager.permissionReviewModel(model, metadata.Model); err != nil {
+			return taskMetadata{}, err
+		}
+	}
+	current.mu.Lock()
+	current.metadata.ApprovalModel = model
+	current.metadata.UpdatedAt = time.Now().UTC()
+	metadata = current.metadata
+	current.mu.Unlock()
+	if err := current.saveMetadata(); err != nil {
 		return taskMetadata{}, err
 	}
 	return metadata, nil

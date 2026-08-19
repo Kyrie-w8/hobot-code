@@ -26,7 +26,24 @@ const REVIEWER_CONTROL_MUTATION = /(?:^|[;&|]\s*)(?:sudo\s+)?(?:rm|mv|cp|ln|chmo
 const BROAD_DESTRUCTION = /(?:^|[;&|]\s*)(?:sudo\s+)?(?:rm\s+(?:-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*|-[A-Za-z]*f[A-Za-z]*r[A-Za-z]*)\s+(?:\/|~|\$HOME)(?:\s|$)|mkfs(?:\.[A-Za-z0-9]+)?\s+\/dev\/|wipefs\b|dd\b[^;&|\n]*\bof=\/dev\/)/iu;
 const SECURITY_ACCESS_PATH = /(?:sshd_config|authorized_keys|\/etc\/(?:shadow|sudoers))/iu;
 const SECURITY_WEAKENING_COMMAND = /(?:^|[;&|]\s*)(?:sudo\s+)?(?:(?:iptables|ip6tables)\s+-F\b|nft\s+flush\s+ruleset\b|(?:systemctl|service)\s+(?:disable|stop)\s+(?:auditd|firewalld|ufw|sshd?)\b)/iu;
-const SECRET_EXFILTRATION = /(?:curl|wget|nc|ncat|ssh|scp|sftp)[^\n;&|]*(?:ANTHROPIC_AUTH_TOKEN|API_KEY|SECRET|TOKEN|PASSWORD|sk-[A-Za-z0-9_-]{12,}|\.ssh\/|\.gnupg\/|authorized_keys)/iu;
+const SECRET_EGRESS_CLIENT = /(?:^|[;&|]\s*)(?:sudo\s+)?(?:curl|wget|nc|ncat|ssh|scp|sftp)\b/iu;
+const SECRET_REFERENCE = /(?:\$(?:\{)?[A-Za-z_][A-Za-z0-9_]*(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*(?:\})?|\bBearer\s+[A-Za-z0-9._~+/-]{12,}|sk-[A-Za-z0-9_-]{12,}|\.ssh\/|\.gnupg\/|authorized_keys)/iu;
+const HUMAN_IMPACT_REASONS = new Set([
+  "removes or destroys files",
+  "deletes files through find",
+  "terminates running processes",
+  "changes or stops a system service",
+  "changes system service configuration or process state",
+  "stops or reboots the board",
+  "performs a destructive or forceful Git operation",
+  "performs a privileged or destructive container operation",
+  "changes cluster state or executes inside a workload",
+  "deletes Hobot Code task state",
+  "deletes Hobot Code schedule state",
+  "removes or replaces Hobot Code persistent task and conversation state",
+  "changes a filesystem or partition table",
+  "writes directly to a block or device node",
+]);
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -45,8 +62,12 @@ export function hardPermissionReviewBoundary(tool, input, facts = {}) {
   if (((tool === "write" || tool === "edit") && REVIEWER_CONTROL_PATH.test(target)) || (tool === "bash" && REVIEWER_CONTROL_MUTATION.test(command))) reasons.push("the action tampers with Hobot Code approval or control infrastructure");
   if (BROAD_DESTRUCTION.test(command)) reasons.push("the action performs broad irreversible destruction");
   if (((tool === "write" || tool === "edit") && SECURITY_ACCESS_PATH.test(target)) || (tool === "bash" && SECURITY_WEAKENING_COMMAND.test(command))) reasons.push("the action changes persistent access or disables a security control");
-  if (SECRET_EXFILTRATION.test(command)) reasons.push("the action may transmit credentials or secrets");
+  if (SECRET_EGRESS_CLIENT.test(command) && SECRET_REFERENCE.test(command)) reasons.push("the action may transmit credentials or secrets");
   if ((tool === "write" || tool === "edit") && CREDENTIAL_OR_ACCESS_PATH.test(target)) reasons.push("the action writes authentication, credential, or privileged access configuration");
+  const destructiveReasons = Array.isArray(facts.destructiveReasons) ? facts.destructiveReasons : [];
+  for (const reason of destructiveReasons) {
+    if (HUMAN_IMPACT_REASONS.has(String(reason))) reasons.push(`the action ${reason}`);
+  }
   return reasons;
 }
 

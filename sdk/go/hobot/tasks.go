@@ -326,6 +326,12 @@ func (client *Client) SetPermissionMode(ctx context.Context, taskID, mode string
 	return task, err
 }
 
+func (client *Client) SetApprovalModel(ctx context.Context, taskID, model string) (Task, error) {
+	var task Task
+	err := client.Call(ctx, "task.approval-model", map[string]any{"taskId": taskID, "model": model}, &task)
+	return task, err
+}
+
 func (client *Client) SetSandboxMode(ctx context.Context, taskID, mode string) (Task, error) {
 	var task Task
 	err := client.Call(ctx, "task.sandbox", map[string]any{"taskId": taskID, "mode": mode}, &task)

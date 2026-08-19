@@ -294,6 +294,8 @@ HOBOT_CODE_ALLOW_DIRTY_BUILD=1 make release
 
 root 会话默认使用 `rootMode: "confirm"`，对 `bash`、`write`、`edit` 逐次审批。Developer 预设或 `/permissions root policy` 会改用策略判定，但不会关闭硬安全边界；`/permissions root confirm` 可恢复严格模式。普通审批只提供本次允许；只有能够用清晰安全边界表达的权限才提供任务级选项，例如「当前任务允许网络」和「当前任务信任该构建机」。新审批不再创建难以区分的「记住完全相同调用」规则；旧任务中已有的精确调用规则仍可读取，仅用于兼容 Resume。
 
+`auto-review` 可为每个任务单独选择审批模型。空 `approvalModel` 表示跟随 Agent 模型；固定值使用 `provider/model`，必须对应当前 agentd 模型出口可用的模型。低/中风险批准只适用于当前 action 指纹；删除、进程或服务停止、任务状态删除等外部影响操作强制人工，高危或严重风险的模型批准也会降级为人工。
+
 任务级「允许网络」只会将虚拟 `network` 规则设为 `allow`，不会连带授予文件写入、root、硬件访问或破坏性命令权限。Developer 已默认允许普通网络和 OpenExplorer 远端命令，但远端命令仍执行与本地 Bash 相同的破坏性检查。
 
 硬安全边界高于用户规则：
@@ -365,7 +367,7 @@ HOBOT_CODE_MAX_SIDE_AGENTS=2 hobot
 无界面任务可直接交给 `agentd`，无需安装 `tmux`：
 
 ```bash
-hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] \
+hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--approval-model follow|PROVIDER/MODEL] \
   [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
 hobot task list
 hobot task show TASK_ID [--details]

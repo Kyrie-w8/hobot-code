@@ -98,7 +98,7 @@ func (server *daemonServer) info(clientFingerprint string) daemonInfo {
 func (server *daemonServer) capabilities() capabilityInfo {
 	capabilities := append([]string(nil), protocolCapabilities...)
 	if modelEgressAvailable(server.cfg) {
-		capabilities = append(capabilities, "models.egress-broker.v1", "tasks.permissions.llm-review.v1")
+		capabilities = append(capabilities, "models.egress-broker.v1", "tasks.permissions.llm-review.v1", "tasks.permissions.model.v1")
 	}
 	return capabilityInfo{
 		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion, EventSchema: eventSchemaVersion,
@@ -765,6 +765,18 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 		metadata, err := server.manager.setPermissionMode(params)
 		if err != nil {
 			_ = writeJSON(connection, failure(req.ID, "task_permissions_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, metadata))
+	case "task.approval-model":
+		var params setTaskApprovalModelParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		metadata, err := server.manager.setApprovalModel(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_approval_model_failed", err))
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, metadata))

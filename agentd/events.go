@@ -165,6 +165,9 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 	case "hobot_approval_resolved":
 		normalizedType = "approval.resolved"
 		copyEventFields(data, event, "id")
+	case "hobot_approval_reviewed":
+		normalizedType = "approval.reviewed"
+		copyEventFields(data, event, "toolName", "status", "risk", "reason", "model")
 	case "auto_retry_start":
 		normalizedType = "retry_start"
 		copyRetryEventFields(data, event, true)
@@ -244,6 +247,8 @@ func normalizedItemFor(eventType string, data map[string]any) *normalizedItem {
 		item.Type, item.Status = "approval", "waiting"
 	case "approval.resolved":
 		item.ID, _ = data["id"].(string)
+		item.Type, item.Status = "approval", "completed"
+	case "approval.reviewed":
 		item.Type, item.Status = "approval", "completed"
 	case "task.queued":
 		item.Type, item.Status = "task", "queued"

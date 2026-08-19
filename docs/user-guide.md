@@ -534,9 +534,9 @@ Route check 缓存 5 分钟，Gateway probe 缓存 1 小时；可用 `--force` �
 | **Approve for me（帮我批准/帮我审阅）** | 独立审批模型结合当前用户意图审查每个待确认的单次操作 | 希望减少打断，同时保留逐操作判断与审计 |
 | **Developer** | 普通读取、构建、测试和工作区编辑尽量不打断 | 受信项目的日常开发 |
 
-`Approve for me` 是一个独立审批 Agent，不是权限授予。worker 把当前工具调用的结构化信息交给 `agentd`；`agentd` 使用任务所选模型发起无工具、无历史继承的一次性审阅，并结合最近的用户意图、工作目录、Board access 与 Network 档位要求严格 JSON 决策。模型凭据始终留在板端控制面，任务即使选择 `Offline` 也不会获得模型出口；`Offline` 下需要联网的工具仍不能执行。
+`Approve for me` 是一个独立审批 Agent，不是权限授予。任务设置中的 **Approval model** 可选择任一已配置模型，默认 **Follow Agent model**；切换审批模型不会改变对话模型。worker 把当前工具调用的结构化信息交给 `agentd`；`agentd` 在无工具、无历史继承的一次性上下文中审阅，并结合最近用户意图、工作目录、Board access 与 Network 档位要求严格 JSON 决策。模型凭据始终留在板端控制面，任务即使选择 `Offline` 也不会获得模型出口；`Offline` 下需要联网的工具仍不能执行。
 
-审批模型可批准与当前任务相符且范围明确的 SSH、普通外联、软件安装、服务与进程管理、系统路径写入、板端硬件操作、远程构建、MCP 和持久化工具。它不会扩大 sandbox、可写目录、设备、Linux capability 或网络边界，也不会创建任务级或永久 allow。凭据外传、根目录或整盘级不可逆破坏、隐藏持久访问、关闭认证/防火墙/审计，以及篡改 Hobot Code 的审批、凭据、审计或控制 socket 属于不可自动覆盖的硬边界。
+审批模型可自动批准范围明确、可逆的低/中风险操作，例如检查、构建、测试、SSH、普通外联、下载、软件安装、部署、板端硬件访问、受控路径写入，以及 `hobot schedule pause|resume|run`。自动批准会作为轻量记录出现在对应对话回合和板端审计中，不弹出确认框。删除文件或计划、结束进程、停止服务、破坏性 Git、容器或集群操作，以及其他可能影响外部工作负载的动作会直接转人工；即使模型返回批准，只要它自己将风险标为 `high` 或 `critical`，板端也会强制要求用户确认。审批不会扩大 sandbox、可写目录、设备、Linux capability 或网络边界，也不会创建任务级或永久 allow。
 
 每次批准只绑定当前 action 指纹。审批模型不可用、30 秒超时、响应不是严格 schema、上下文不足或审计写入失败时回退人工；连续 3 次拒绝或 10 分钟内 10 次拒绝会打开断路器，避免 Agent 反复提交同类危险操作。界面只允许对完全相同的 action 再审一次，硬边界不能通过重试覆盖。板端审计保留 action 指纹、模型、延迟、风险和理由，不保留完整工具参数。Side Agent 使用相同逐请求策略与自己的 task scope，不继承主任务的 allow 或 lease。
 
@@ -1220,6 +1220,7 @@ hobot workspace cleanup TASK_ID --yes
 hobot task start [--name NAME] [--cwd DIR]
                  [--workspace shared|worktree]
                  [--model PROVIDER/MODEL]
+                 [--approval-model follow|PROVIDER/MODEL]
                  [--permissions review|ask|auto-review|developer]
                  [--sandbox review|workspace|system|off]
                  [--network shared|model-only|offline]
@@ -1237,6 +1238,7 @@ hobot task restart TASK_ID [--] PROMPT
 hobot task rename TASK_ID NAME
 hobot task model TASK_ID PROVIDER/MODEL
 hobot task permissions TASK_ID review|ask|auto-review|developer
+hobot task approval-model TASK_ID follow|PROVIDER/MODEL
 hobot task sandbox TASK_ID review|workspace|system|off
 hobot task network TASK_ID shared|model-only|offline
 hobot task archive|unarchive TASK_ID

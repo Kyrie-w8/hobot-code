@@ -48,7 +48,7 @@ Usage:
   hobot workspace delivery TASK_ID
   hobot workspace apply TASK_ID --yes
   hobot workspace cleanup TASK_ID --yes
-  hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
+  hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--approval-model follow|PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT
   hobot task list [--all]
   hobot task show TASK_ID [--details]
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
@@ -62,6 +62,7 @@ Usage:
   hobot task rename TASK_ID NAME
   hobot task model TASK_ID PROVIDER/MODEL
   hobot task permissions TASK_ID review|ask|auto-review|developer
+  hobot task approval-model TASK_ID follow|PROVIDER/MODEL
   hobot task sandbox TASK_ID review|workspace|system|off
   hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
@@ -1172,6 +1173,30 @@ func runTaskCLI(cfg config, args []string) error {
 		}
 		fmt.Printf("Task %s permissions: %s\n", metadata.ID, metadata.PermissionMode)
 		return nil
+	case "approval-model":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task approval-model TASK_ID follow|PROVIDER/MODEL")
+		}
+		model := strings.TrimSpace(args[2])
+		if model == "follow" {
+			model = ""
+		} else if normalizeModelSelection(model) == "" {
+			return fmt.Errorf("approval model must be follow or use provider/model format")
+		}
+		result, err := client.call("task.approval-model", setTaskApprovalModelParams{TaskID: args[1], Model: model})
+		if err != nil {
+			return err
+		}
+		var metadata taskMetadata
+		if err := json.Unmarshal(result, &metadata); err != nil {
+			return err
+		}
+		if metadata.ApprovalModel == "" {
+			fmt.Printf("Task %s approval model: follows Agent model\n", metadata.ID)
+		} else {
+			fmt.Printf("Task %s approval model: %s\n", metadata.ID, metadata.ApprovalModel)
+		}
+		return nil
 	case "sandbox":
 		if len(args) != 3 {
 			return fmt.Errorf("usage: hobot task sandbox TASK_ID review|workspace|system|off")
@@ -1249,6 +1274,7 @@ Usage:
   hobot task rename TASK_ID NAME
   hobot task model TASK_ID PROVIDER/MODEL
   hobot task permissions TASK_ID review|ask|auto-review|developer
+  hobot task approval-model TASK_ID follow|PROVIDER/MODEL
   hobot task sandbox TASK_ID review|workspace|system|off
   hobot task network TASK_ID shared|model-only|offline
   hobot task archive|unarchive TASK_ID
@@ -1272,14 +1298,14 @@ func printRequestedTaskHelp(args []string, output io.Writer) bool {
 		return false
 	}
 	usageByCommand := map[string]string{
-		"start": "hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT",
+		"start": "hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--approval-model follow|PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT",
 		"list":  "hobot task list [--all]", "show": "hobot task show TASK_ID [--details]",
 		"logs": "hobot task logs TASK_ID [--after SEQUENCE] [--follow]", "attach": "hobot task attach TASK_ID [--after SEQUENCE | --replay-all]",
 		"send": "hobot task send TASK_ID [--] PROMPT", "abort": "hobot task abort TASK_ID",
 		"respond": "hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE", "approvals": "hobot task approvals TASK_ID [--details]",
 		"resume": "hobot task resume TASK_ID [-- PROMPT]", "restart": "hobot task restart TASK_ID [--] PROMPT",
 		"rename": "hobot task rename TASK_ID NAME", "archive": "hobot task archive TASK_ID",
-		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|auto-review|developer", "sandbox": "hobot task sandbox TASK_ID review|workspace|system|off", "network": "hobot task network TASK_ID shared|model-only|offline",
+		"model": "hobot task model TASK_ID PROVIDER/MODEL", "permissions": "hobot task permissions TASK_ID review|ask|auto-review|developer", "approval-model": "hobot task approval-model TASK_ID follow|PROVIDER/MODEL", "sandbox": "hobot task sandbox TASK_ID review|workspace|system|off", "network": "hobot task network TASK_ID shared|model-only|offline",
 		"unarchive": "hobot task unarchive TASK_ID", "delete": "hobot task delete TASK_ID --yes", "stop": "hobot task stop TASK_ID",
 	}
 	commandUsage, ok := usageByCommand[command]
@@ -1388,6 +1414,11 @@ func runTaskStart(client daemonClient, args []string) error {
 		fmt.Printf("Project: %s\n", metadata.ProjectCwd)
 	}
 	fmt.Printf("Permissions: %s\n", metadata.PermissionMode)
+	if metadata.ApprovalModel == "" {
+		fmt.Printf("Approval model: follows Agent model\n")
+	} else {
+		fmt.Printf("Approval model: %s\n", metadata.ApprovalModel)
+	}
 	fmt.Printf("OS sandbox: %s (%s)\n", metadata.SandboxMode, metadata.Sandbox.Backend)
 	fmt.Printf("Network: %s\n", metadata.NetworkMode)
 	fmt.Printf("Project resources: %s\n", map[bool]string{true: "trusted", false: "not trusted"}[metadata.Approved])
@@ -1406,6 +1437,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 	name := flags.String("name", "", "task name")
 	cwd := flags.String("cwd", "", "working directory")
 	model := flags.String("model", "", "agent model in provider/model form")
+	approvalModel := flags.String("approval-model", "follow", "approval model: follow or provider/model")
 	permissions := flags.String("permissions", defaultTaskPermissionMode, "permission mode: review, ask, auto-review, or developer")
 	workspace := flags.String("workspace", workspaceModeShared, "workspace mode: shared or worktree")
 	sandbox := flags.String("sandbox", "", "OS sandbox: review, workspace, system, or off")
@@ -1427,7 +1459,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 		promptArgs = promptArgs[1:]
 	}
 	if len(promptArgs) == 0 {
-		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT")
+		return taskStartCLIOptions{}, fmt.Errorf("usage: hobot task start [--name NAME] [--cwd DIR] [--workspace shared|worktree] [--model PROVIDER/MODEL] [--approval-model follow|PROVIDER/MODEL] [--permissions review|ask|auto-review|developer] [--sandbox review|workspace|system|off] [--network shared|model-only|offline] [--trust-project] -- PROMPT")
 	}
 	workingDirectory := *cwd
 	if workingDirectory == "" {
@@ -1438,6 +1470,15 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 		modelSelection = normalizeModelSelection(modelSelection)
 		if modelSelection == "" {
 			return taskStartCLIOptions{}, fmt.Errorf("model must use provider/model format")
+		}
+	}
+	approvalModelSelection := strings.TrimSpace(*approvalModel)
+	if approvalModelSelection == "follow" {
+		approvalModelSelection = ""
+	} else if approvalModelSelection != "" {
+		approvalModelSelection = normalizeModelSelection(approvalModelSelection)
+		if approvalModelSelection == "" {
+			return taskStartCLIOptions{}, fmt.Errorf("approval model must be follow or use provider/model format")
 		}
 	}
 	permissionMode, err := normalizePermissionMode(strings.TrimSpace(*permissions))
@@ -1466,7 +1507,7 @@ func parseTaskStartArgs(args []string, defaultCwd string, output io.Writer) (tas
 	return taskStartCLIOptions{
 		params: startTaskParams{
 			Name: *name, Cwd: workingDirectory, Prompt: prompt, Approve: trustProject,
-			Model: modelSelection, PermissionMode: permissionMode, WorkspaceMode: workspaceMode, SandboxMode: sandboxMode, NetworkMode: networkMode,
+			Model: modelSelection, ApprovalModel: approvalModelSelection, PermissionMode: permissionMode, WorkspaceMode: workspaceMode, SandboxMode: sandboxMode, NetworkMode: networkMode,
 		},
 		usedApproveAlias: usedApproveAlias,
 	}, nil

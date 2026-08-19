@@ -494,6 +494,16 @@ function parseShellProgram(source, depth = 0) {
       awaitingRedirection = redirection;
       continue;
     }
+    if (char === "{" && word?.value) {
+      const close = text.indexOf("}", index + 1);
+      const contents = close < 0 ? "" : text.slice(index + 1, close);
+      const alternatives = contents.split(",");
+      if (alternatives.length > 1 && alternatives.every((value) => value.length > 0 && /^[A-Za-z0-9._/+@%:=-]+$/u.test(value))) {
+        word.value += `{${contents}}`;
+        index = close + 1;
+        continue;
+      }
+    }
     if (char === "(" || char === ")" || char === "{") {
       program.ambiguousReasons.push("shell control syntax cannot be classified safely");
       index += 1;
@@ -723,6 +733,7 @@ function isDangerousHobotInvocation(args) {
   if (values.some((value) => HELP_FLAGS.has(value))) return "";
   if (values[0] === "permissions" && !["status", "reload"].includes(values[1] ?? "status")) return "changes Hobot Code permissions";
   if (values[0] === "task" && ["delete", "purge"].includes(values[1])) return "deletes Hobot Code task state";
+  if (values[0] === "schedule" && values[1] === "delete") return "deletes Hobot Code schedule state";
   if (["update", "upgrade"].includes(values[0])) return "installs or updates Hobot Code";
   return "";
 }

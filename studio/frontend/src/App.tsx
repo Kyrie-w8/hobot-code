@@ -778,7 +778,8 @@ function App() {
         prompt,
         images: submittedImages,
         approve: false,
-        model: selectedModel || undefined,
+		model: selectedModel || undefined,
+		approvalModel: selectedTask.approvalModel || undefined,
 		permissionMode: selectedPermissionMode,
 		workspaceMode: connection?.capabilities?.capabilities.includes('workspaces.isolation.v1') ? selectedTask.workspaceMode || 'shared' : undefined,
 		sandboxMode: connection?.capabilities?.capabilities.includes('tasks.sandbox.v1') ? selectedSandboxMode : undefined,
@@ -1067,6 +1068,26 @@ function App() {
     }
   }
 
+  async function changeApprovalModel(model: string) {
+    if (!selectedTask || !boardId || !canChangePermissions) return;
+    if (draftSelected) {
+      setSelectedTask({...selectedTask, approvalModel: model});
+      return;
+    }
+    const sourceTaskId = selectedTask.id;
+    setBusy(true);
+    setError('');
+    try {
+      const task = await api.setApprovalModel(boardId, selectedTask.id, model);
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setSelectedTask(task);
+      if (activeBoardId.current === boardId) setTasks((current) => current.map((item) => item.id === task.id ? task : item));
+    } catch (reason) {
+      if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) setError(friendlyError(String(reason)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeSandboxMode(mode: string) {
     if (!selectedTask || !boardId || !canChangeSandbox) return;
     if (draftSelected) {
@@ -1160,6 +1181,7 @@ function App() {
       lastSequence: 0,
 	      model: draftModel ? `${draftModel.provider}/${draftModel.id}` : '',
       permissionMode: 'ask',
+	  approvalModel: '',
 	  sandboxMode: 'workspace',
 		  networkMode: draftNetworkMode,
 	  });
@@ -1677,8 +1699,8 @@ function App() {
       {supportBundle && <SupportDiagnosticsDialog bundle={supportBundle} onClose={() => setSupportBundle(null)} />}
       {showDiagnostics && <ReadinessDiagnosticsDialog report={diagnostics} loading={diagnosticsLoading} failure={diagnosticsError} onRefresh={() => void openDiagnostics()} onRepair={(action) => void repairDiagnostic(action)} onClose={() => setShowDiagnostics(false)} />}
       {showBPUBenchmark && connection && <BPUBenchmarkDialog boardId={connection.board.id} boardName={connection.board.name} snapshot={snapshot} cwd={selectedTask?.cwd ?? '/root'} onClose={() => setShowBPUBenchmark(false)} />}
-      {showAccessSettings && selectedTask && <AccessSettingsDialog permissionMode={selectedPermissionMode} sandboxMode={selectedSandboxMode} networkMode={selectedNetworkMode} workspaceMode={selectedTask.workspaceMode || 'shared'} summary={accessPresentation.summary} hasAutoReview={Boolean(connection?.capabilities?.capabilities.includes('tasks.permissions.llm-review.v1'))} hasWorkspace={Boolean(draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'))} workspaceEligible={Boolean(workspaceInspection?.result?.eligible)} workspaceLoading={workspaceInspectionLoading} workspaceReason={workspaceInspection?.result?.reason || ''} hasSandbox={Boolean(selectedTask.sandboxMode || connection?.capabilities?.capabilities.includes('tasks.sandbox.v1'))} hasNetwork={Boolean(selectedTask.networkMode || connection?.capabilities?.capabilities.includes('tasks.network.v1'))} sandboxAvailable={Boolean(connection?.capabilities?.sandbox?.available)} networkModes={connection?.capabilities?.sandbox?.networkModes ?? []} modelOnly={effectiveModel?.modelOnly === true} canChangePermissions={canChangePermissions} canChangeSandbox={canChangeSandbox} canChangeNetwork={canChangeNetwork} canStopWorker={canStopBoundaryWorker} busy={busy} onWorkspace={changeWorkspaceMode} onPermission={(mode) => void changePermissionMode(mode)} onSandbox={(mode) => void changeSandboxMode(mode)} onNetwork={(mode) => void changeNetworkMode(mode)} onStopWorker={() => void stopTask()} onClose={() => setShowAccessSettings(false)} />}
-
+      {showModelReadiness && connection && effectiveModel && <ModelReadinessDialog model={effectiveModel} snapshot={snapshot} capabilities={connection.capabilities?.capabilities ?? []} qualification={qualificationForModel} health={currentModelHealth} conformance={currentModelConformance} runtimeProbe={currentModelRuntimeProbe} rdkProbe={currentModelRDKProbe} rdkMatrix={currentModelRDKMatrix} activeStage={checkingModel ? 'health' : verifyingModel ? 'protocol' : modelQualificationStage} activeProfile={modelQualificationProfile} failure={modelReadinessError} onRunHealth={() => void checkModelHealth()} onRunProtocol={() => void verifyModelConformance()} onRunRuntime={() => void probeModelRuntime()} onRunRDK={(profile) => void probeModelRDK(profile)} onClose={() => setShowModelReadiness(false)} />}
+      {showAccessSettings && selectedTask && <AccessSettingsDialog permissionMode={selectedPermissionMode} approvalModel={selectedTask.approvalModel || ''} models={models} sandboxMode={selectedSandboxMode} networkMode={selectedNetworkMode} workspaceMode={selectedTask.workspaceMode || 'shared'} summary={accessPresentation.summary} hasAutoReview={Boolean(connection?.capabilities?.capabilities.includes('tasks.permissions.llm-review.v1'))} hasApprovalModel={Boolean(connection?.capabilities?.capabilities.includes('tasks.permissions.model.v1'))} hasWorkspace={Boolean(draftSelected && connection?.capabilities?.capabilities.includes('workspaces.isolation.v1'))} workspaceEligible={Boolean(workspaceInspection?.result?.eligible)} workspaceLoading={workspaceInspectionLoading} workspaceReason={workspaceInspection?.result?.reason || ''} hasSandbox={Boolean(selectedTask.sandboxMode || connection?.capabilities?.capabilities.includes('tasks.sandbox.v1'))} hasNetwork={Boolean(selectedTask.networkMode || connection?.capabilities?.capabilities.includes('tasks.network.v1'))} sandboxAvailable={Boolean(connection?.capabilities?.sandbox?.available)} networkModes={connection?.capabilities?.sandbox?.networkModes ?? []} modelOnly={effectiveModel?.modelOnly === true} canChangePermissions={canChangePermissions} canChangeSandbox={canChangeSandbox} canChangeNetwork={canChangeNetwork} canStopWorker={canStopBoundaryWorker} busy={busy} onWorkspace={changeWorkspaceMode} onPermission={(mode) => void changePermissionMode(mode)} onApprovalModel={(model) => void changeApprovalModel(model)} onSandbox={(mode) => void changeSandboxMode(mode)} onNetwork={(mode) => void changeNetworkMode(mode)} onStopWorker={() => void stopTask()} onClose={() => setShowAccessSettings(false)} />}
       {showDeployment && selectedTask && snapshot && <DeploymentDialog boardId={boardId} cwd={selectedTask.cwd} snapshot={snapshot} models={models} busy={busy} onClose={() => setShowDeployment(false)} onStart={startDeployment} />}
 	      {showChanges && selectedTask && boardId && <WorkspaceChangesDialog boardId={boardId} task={selectedTask} canDeliver={Boolean(connection?.capabilities?.capabilities.includes('workspaces.delivery.v1'))} onClose={() => setShowChanges(false)} />}
       {deleteTarget && <DeleteDialog target={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} />}
@@ -1780,13 +1802,16 @@ function ImagePickerButton({disabled, title, onPick, onError}: {disabled: boolea
   return <><button className="icon-button compact attach-button" type="button" title={title} disabled={disabled} onClick={() => input.current?.click()}><Paperclip size={15} /></button><input ref={input} className="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(event) => {const files = [...(event.target.files ?? [])]; event.target.value = ''; void Promise.all(files.map(prepareImage)).then(onPick).catch((reason) => onError(friendlyError(String(reason))));}} /></>;
 }
 
-function AccessSettingsDialog({permissionMode, sandboxMode, networkMode, workspaceMode, summary, hasAutoReview, hasWorkspace, workspaceEligible, workspaceLoading, workspaceReason, hasSandbox, hasNetwork, sandboxAvailable, networkModes, modelOnly, canChangePermissions, canChangeSandbox, canChangeNetwork, canStopWorker, busy, onWorkspace, onPermission, onSandbox, onNetwork, onStopWorker, onClose}: {
+function AccessSettingsDialog({permissionMode, approvalModel, models, sandboxMode, networkMode, workspaceMode, summary, hasAutoReview, hasApprovalModel, hasWorkspace, workspaceEligible, workspaceLoading, workspaceReason, hasSandbox, hasNetwork, sandboxAvailable, networkModes, modelOnly, canChangePermissions, canChangeSandbox, canChangeNetwork, canStopWorker, busy, onWorkspace, onPermission, onApprovalModel, onSandbox, onNetwork, onStopWorker, onClose}: {
   permissionMode: string;
+  approvalModel: string;
+  models: ModelOption[];
   sandboxMode: string;
   networkMode: string;
   workspaceMode: string;
   summary: string;
   hasAutoReview: boolean;
+  hasApprovalModel: boolean;
   hasWorkspace: boolean;
   workspaceEligible: boolean;
   workspaceLoading: boolean;
@@ -1803,6 +1828,7 @@ function AccessSettingsDialog({permissionMode, sandboxMode, networkMode, workspa
   busy: boolean;
   onWorkspace: (mode: string) => void;
   onPermission: (mode: string) => void;
+  onApprovalModel: (model: string) => void;
   onSandbox: (mode: string) => void;
   onNetwork: (mode: string) => void;
   onStopWorker: () => void;
@@ -1816,10 +1842,11 @@ function AccessSettingsDialog({permissionMode, sandboxMode, networkMode, workspa
     <div className="form-grid access-settings-grid">
       {hasWorkspace && <label><span>Workspace</span><select aria-label="Workspace mode" value={workspaceMode} disabled={busy || workspaceLoading} onChange={(event) => onWorkspace(event.target.value)}><option value="shared">Shared project</option><option value="worktree" disabled={!workspaceEligible}>Isolated worktree</option></select><small>{workspaceLoading ? 'Checking whether this project supports isolation.' : workspaceReason || 'An isolated worktree keeps concurrent Agent edits separate.'}</small></label>}
       <label><span>Approvals</span><select aria-label="Approval mode" value={permissionMode} disabled={busy || !canChangePermissions} onChange={(event) => onPermission(event.target.value)}><option value="review">Review only</option><option value="ask">Ask for changes</option>{hasAutoReview && <option value="auto-review" title="An independent model reviews each requested action">Approve for me</option>}{permissionMode === 'auto-review' && !hasAutoReview && <option value="auto-review" disabled>Approve for me (update board)</option>}<option value="developer">Developer</option></select><small>{permissionMode === 'auto-review' ? 'An independent approval model reviews each requested action. Only critical safety boundaries still require you.' : 'Controls who decides when a tool needs approval.'}</small></label>
+      {permissionMode === 'auto-review' && hasApprovalModel && <label><span>Approval model</span><select aria-label="Approval model" value={approvalModel} disabled={busy || !canChangePermissions} onChange={(event) => onApprovalModel(event.target.value)}><option value="">Follow Agent model</option>{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name || model.id} · {model.provider}</option>)}</select><small>Runs in an isolated, tool-free review context. This does not change the Agent model.</small></label>}
       {hasSandbox && <label><span>Board access</span><select aria-label="OS sandbox" value={sandboxMode} disabled={busy || !canChangeSandbox} onChange={(event) => onSandbox(event.target.value)}><option value="review" disabled={!sandboxAvailable}>Read only</option><option value="workspace" disabled={!sandboxAvailable}>Workspace</option><option value="system" disabled={!sandboxAvailable}>Board hardware</option><option value="off" disabled={networkMode !== 'shared'}>No sandbox</option></select><small>Limits files, devices, and Linux capabilities independently from approval review.</small></label>}
       {hasNetwork && <label><span>Network</span><select aria-label="Network boundary" value={networkMode} disabled={busy || !canChangeNetwork} onChange={(event) => onNetwork(event.target.value)}><option value="shared">Network</option><option value="model-only" disabled={!modelOnly || !restrictedNetwork || !networkModes.includes('model-only')}>Model only</option><option value="offline" disabled={!restrictedNetwork || !networkModes.includes('offline')}>Offline</option></select><small>Separates model access from general tool networking.</small></label>}
     </div>
-    {boundariesLocked && <div className="access-settings-note boundary-locked"><Info size={14} /><span>Board access and Network are fixed while this Agent worker exists, including when it is Ready. Stop the Agent to unlock them, then change the settings and Resume. Approvals can still change while Ready.</span>{canStopWorker && <button className="secondary-button" type="button" onClick={onStopWorker} disabled={busy}><Square size={12} fill="currentColor" />Stop Agent</button>}</div>}
+    {boundariesLocked && <div className="access-settings-note boundary-locked"><Info size={14} /><span>Board access and Network are fixed while this Agent worker exists, including when it is Ready. Stop the Agent to unlock them, then change the settings and Resume. Approvals and the approval model can still change while Ready.</span>{canStopWorker && <button className="secondary-button" type="button" onClick={onStopWorker} disabled={busy}><Square size={12} fill="currentColor" />Stop Agent</button>}</div>}
     {sandboxMode === 'off' && <div className="access-settings-note danger"><AlertTriangle size={14} /><span>No sandbox gives tools the board user's host access and requires shared networking.</span></div>}
     <div className="modal-actions"><button className="primary-button" type="button" onClick={onClose}>Done</button></div>
   </section></div>;

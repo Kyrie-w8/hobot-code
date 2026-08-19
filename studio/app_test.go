@@ -141,7 +141,7 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 	}
 	dirty := false
 	info := hobot.DaemonInfo{
-		Version: "0.28.0", Protocol: hobot.ProtocolVersion,
+		Version: "0.29.0", Protocol: hobot.ProtocolVersion,
 		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 4, Capabilities: allCapabilities, Sandbox: hobot.SandboxCapability{Available: true, Backend: "bubblewrap", Profiles: []string{"review", "workspace", "system", "off"}, NetworkModes: []string{"shared", "offline"}}},
 		Build:        hobot.BuildIdentity{Status: "verified", Commit: strings.Repeat("a", 40), Dirty: &dirty, Target: "linux-arm64", PiVersion: "0.84.1", PiCompatibilitySHA256: strings.Repeat("d", 64)},
 	}
@@ -210,7 +210,7 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.28.10" {
+	if currentStudioVersion() != "0.29.0" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {

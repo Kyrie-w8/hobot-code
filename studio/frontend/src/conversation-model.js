@@ -7,6 +7,7 @@ const assistantEventTypes = new Set([
   'tool.completed',
   'approval.requested',
   'approval.resolved',
+  'approval.reviewed',
   'retry_start',
   'retry_end',
   'compaction_start',
@@ -99,6 +100,14 @@ export function buildConversation(events) {
     else if (type.startsWith('tool.')) updateTool(turn, event, type, data);
     else if (type === 'approval.requested') turn.notices.push({type: 'approval', label: 'Approval requested', time: event.time});
     else if (type === 'approval.resolved') turn.notices.push({type: 'approval', label: 'Approval resolved', time: event.time});
+	else if (type === 'approval.reviewed') {
+	  const status = String(data.status ?? 'manual-required');
+	  const tool = String(data.toolName ?? 'action');
+	  const reason = String(data.reason ?? '').trim();
+	  const reviewer = String(data.model ?? 'approval model');
+	  const label = status === 'approved' ? `Approved by ${reviewer} · ${tool}` : status === 'denied' ? `Denied by ${reviewer} · ${tool}` : `Needs your approval · ${tool}`;
+	  turn.notices.push({type: 'approval', label: reason ? `${label} · ${reason}` : label, time: event.time});
+	}
 	else if (type === 'retry_start') beginRetry(turn, data);
 	else if (type === 'retry_end') finishRetry(turn, data, event.time);
     else if (type === 'compaction_start') turn.notices.push({type: 'compact', label: 'Compacting context', time: event.time});

@@ -225,6 +225,7 @@ export type Task = {
   resumeCount?: number;
   restartCount?: number;
   model?: string;
+  approvalModel?: string;
   permissionMode?: 'review' | 'ask' | 'auto-review' | 'developer';
   sandboxMode?: 'review' | 'workspace' | 'system' | 'off';
   networkMode?: 'shared' | 'model-only' | 'offline';
@@ -444,4 +445,4 @@ export type WorkspaceChanges = {capturedAt: string; available: boolean; reposito
 export type WorkspaceIsolation = {capturedAt: string; available: boolean; repository: boolean; eligible: boolean; recommendedMode: 'shared' | 'worktree'; repositoryRoot?: string; scope?: string; head?: string; clean: boolean; reason: string};
 export type WorkspaceDelivery = {taskId: string; ready: boolean; reason: string; patchBytes?: number; digest?: string; alreadyApplied?: boolean};
 export type WorkspaceApplyResult = {taskId: string; applied: boolean; staged: boolean; patchBytes: number; digest: string; appliedAt: string};
-export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; permissionMode?: string; sandboxMode?: 'review' | 'workspace' | 'system' | 'off'; networkMode?: 'shared' | 'model-only' | 'offline'};
+export type ForkTaskRequest = {taskId: string; sequence?: number; prompt?: string; images?: ImageContent[]; name?: string; kind: 'side' | 'edit'; model?: string; approvalModel?: string; permissionMode?: string; sandboxMode?: 'review' | 'workspace' | 'system' | 'off'; networkMode?: 'shared' | 'model-only' | 'offline'};

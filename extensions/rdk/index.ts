@@ -1908,6 +1908,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
           // A review is a one-shot exact action. It never changes policy, roots,
           // network, sandbox, or writable paths.
           reviewerApproved = true;
+          const reviewerName = typeof decision.model === "string" && decision.model ? decision.model : "approval model";
+          const reviewerReason = Array.isArray(decision.reasons) ? decision.reasons.join("; ") : "scoped action";
+          ctx.ui.notify(`Approved by ${reviewerName}: ${reviewerReason}`, "info");
         }
         if (decision.status === "denied") {
           if (typeof decision.fingerprint === "string") permissionReviewer.recordDenial(decision.fingerprint);

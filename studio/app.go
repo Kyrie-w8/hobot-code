@@ -997,6 +997,16 @@ func (app *App) SetTaskPermissionMode(boardID, taskID, mode string) (hobot.Task,
 	return client.SetPermissionMode(ctx, taskID, mode)
 }
 
+func (app *App) SetTaskApprovalModel(boardID, taskID, model string) (hobot.Task, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.Task{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SetApprovalModel(ctx, taskID, model)
+}
+
 func (app *App) SetTaskSandboxMode(boardID, taskID, mode string) (hobot.Task, error) {
 	client, err := app.client(boardID)
 	if err != nil {

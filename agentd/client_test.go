@@ -37,7 +37,7 @@ func TestEventRetentionNoticeExplainsRecoverableHistoryBoundaries(t *testing.T) 
 }
 
 func TestConfigurationDriftScope(t *testing.T) {
-	for _, method := range []string{"models.list", "models.health", "models.conformance", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork"} {
+	for _, method := range []string{"models.list", "models.health", "models.conformance", "deployment.start", "task.start", "task.model", "task.approval-model", "task.resume", "task.restart", "task.fork"} {
 		if !daemonMethodNeedsCurrentConfiguration(method) {
 			t.Fatalf("%s should require current configuration", method)
 		}
@@ -208,13 +208,13 @@ func TestInteractiveEditorPreservesMultipleLines(t *testing.T) {
 func TestTaskStartOptions(t *testing.T) {
 	var help bytes.Buffer
 	options, err := parseTaskStartArgs([]string{
-		"--name", "inspect", "--workspace", "worktree", "--model", " drobotics/kimi-k3 ", "--permissions", "developer", "--sandbox", "system", "--network", "offline", "--trust-project", "--", "check", "board",
+		"--name", "inspect", "--workspace", "worktree", "--model", " drobotics/kimi-k3 ", "--approval-model", "drobotics/qwen3.8-max", "--permissions", "developer", "--sandbox", "system", "--network", "offline", "--trust-project", "--", "check", "board",
 	}, "/workspace", &help)
 	if err != nil {
 		t.Fatal(err)
 	}
 	params := options.params
-	if params.Name != "inspect" || params.Cwd != "/workspace" || params.Prompt != "check board" || params.Model != "drobotics/kimi-k3" || params.PermissionMode != "developer" || params.WorkspaceMode != "worktree" || params.SandboxMode != "system" || params.NetworkMode != "offline" || !params.Approve {
+	if params.Name != "inspect" || params.Cwd != "/workspace" || params.Prompt != "check board" || params.Model != "drobotics/kimi-k3" || params.ApprovalModel != "drobotics/qwen3.8-max" || params.PermissionMode != "developer" || params.WorkspaceMode != "worktree" || params.SandboxMode != "system" || params.NetworkMode != "offline" || !params.Approve {
 		t.Fatalf("unexpected task start params: %+v", params)
 	}
 	if options.usedApproveAlias {
@@ -233,6 +233,9 @@ func TestTaskStartOptions(t *testing.T) {
 func TestTaskStartOptionsRejectInvalidModelAndPermission(t *testing.T) {
 	if _, err := parseTaskStartArgs([]string{"--model", "invalid", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "provider/model") {
 		t.Fatalf("invalid model was accepted: %v", err)
+	}
+	if _, err := parseTaskStartArgs([]string{"--approval-model", "invalid", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "approval model") {
+		t.Fatalf("invalid approval model was accepted: %v", err)
 	}
 	if _, err := parseTaskStartArgs([]string{"--permissions", "unsafe", "prompt"}, "/workspace", io.Discard); err == nil || !strings.Contains(err.Error(), "review, ask, auto-review, or developer") {
 		t.Fatalf("invalid permission mode was accepted: %v", err)

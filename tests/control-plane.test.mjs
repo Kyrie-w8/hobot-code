@@ -130,6 +130,45 @@ test("hard safety boundary is narrow and ignores adversarial prose in ordinary a
   assert.equal(called, false);
 });
 
+test("approval reviewer auto-routes reversible schedule control but asks before external impact", async () => {
+  let calls = 0;
+  const reviewer = createPermissionReviewer({ review: async (request) => {
+    calls += 1;
+    return {status: "approved", source: "approval-model", fingerprint: actionFingerprint(request.tool, request.input), reasons: ["bounded and reversible"]};
+  } });
+  const pause = {command: "hobot schedule pause 0123456789abcdef01234567 2>&1 | head -3"};
+  const pauseAnalysis = analyzeShellCommand(pause.command);
+  assert.deepEqual(pauseAnalysis.destructiveReasons, []);
+  assert.equal((await autoReview(reviewer, "bash", pause, {destructiveReasons: pauseAnalysis.destructiveReasons})).status, "approved");
+
+  for (const command of ["kill 1234", "rm -rf ./build", "hobot schedule delete 0123456789abcdef01234567 --yes"]) {
+    const input = {command};
+    const analysis = analyzeShellCommand(command);
+    const result = await autoReview(reviewer, "bash", input, {destructiveReasons: analysis.destructiveReasons});
+    assert.equal(result.status, "manual-required", command);
+    assert.equal(result.source, "hard-safety-boundary", command);
+  }
+  assert.equal(calls, 1);
+});
+
+test("approval reviewer accepts an inbound bounded model metadata transfer", async () => {
+  const command = 'sleep 20 && scp -o BatchMode=yes openexplorer-builder:/home/bin.wang/adapt_runs/qwen3_4b_20260817/w8a8_qlg/step3/Qwen3-4B-RA-SFT-reproduced-lr1e-5-step465/{tokenizer.json,tokenizer_config.json,vocab.json,special_tokens_map.json,added_tokens.json} /root/Testhobot/model/Qwen3-4B_w8/ 2>&1 && ls /root/Testhobot/model/Qwen3-4B_w8/';
+  const input = {command};
+  const analysis = analyzeShellCommand(command);
+  assert.deepEqual(analysis.destructiveReasons, []);
+  assert.deepEqual(analysis.ambiguousReasons, []);
+  assert.ok(analysis.networkReasons.length > 0);
+  assert.deepEqual(hardPermissionReviewBoundary("bash", input, analysis), []);
+
+  let reviewed = false;
+  const reviewer = createPermissionReviewer({review: async (request) => {
+    reviewed = true;
+    return {status: "approved", source: "approval-model", fingerprint: actionFingerprint(request.tool, request.input), reasons: ["bounded inbound model metadata transfer"]};
+  }});
+  assert.equal((await autoReview(reviewer, "bash", input, analysis)).status, "approved");
+  assert.equal(reviewed, true);
+});
+
 test("reviewer denial circuit is bounded and exact retry cannot bypass hard prohibitions", async () => {
   let clock = 0;
   const reviewer = createPermissionReviewer({ now: () => clock, review: async (request) => ({ status: "approved", source: "approval-model", fingerprint: actionFingerprint(request.tool, request.input), reasons: ["ok"] }) });

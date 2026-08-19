@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.29.0
+
+### Added
+
+- Let each task choose an independent approval model or continue following its Agent model through Studio, RPC, SDK, and CLI.
+- Persist lightweight approval-model decisions in the conversation timeline so automatic approvals remain visible without blocking work.
+
+### Changed
+
+- Auto-approve scoped low- and medium-risk development actions, including reversible Hobot Code schedule control, while requiring explicit human confirmation for deletion, process or service interruption, destructive task-state changes, and other external impact.
+- Downgrade every model-approved high or critical risk action to manual confirmation at the board control plane.
+
+### Fixed
+
+- Treat bounded Shell brace lists as data and distinguish tokenizer metadata filenames from actual credential references, so inbound model-file transfers no longer fall back to unnecessary human approval.
+
 ## 0.28.10
 
 ### Fixed

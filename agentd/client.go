@@ -122,7 +122,7 @@ func daemonCallTimeout(method string) time.Duration {
 
 func daemonMethodNeedsCurrentConfiguration(method string) bool {
 	switch method {
-	case "models.list", "models.health", "models.conformance", "models.runtime-probe", "models.rdk-probe", "models.rdk-matrix", "deployment.start", "task.start", "task.model", "task.resume", "task.restart", "task.fork":
+	case "models.list", "models.health", "models.conformance", "models.runtime-probe", "models.rdk-probe", "models.rdk-matrix", "deployment.start", "task.start", "task.model", "task.approval-model", "task.resume", "task.restart", "task.fork":
 		return true
 	default:
 		return false
