@@ -99,7 +99,25 @@ func normalizeWorkerEvent(raw json.RawMessage) *normalizedEvent {
 		}
 		normalizedType = "user.message"
 		data["text"] = message
-		copyEventFields(data, event, "attachments", "source", "scheduleId")
+		copyEventFields(data, event, "attachments", "source", "scheduleId", "queueId", "queueStatus", "queuedAt")
+	case "hobot_followup_queued":
+		normalizedType = "followup.queued"
+		copyEventFields(data, event, "queueId", "queuedAt", "status")
+	case "hobot_followup_dispatching":
+		normalizedType = "followup.dispatching"
+		copyEventFields(data, event, "queueId", "queuedAt", "status")
+	case "hobot_followup_sent":
+		normalizedType = "followup.sent"
+		copyEventFields(data, event, "queueId", "queuedAt", "status")
+	case "hobot_followup_cancelled":
+		normalizedType = "followup.cancelled"
+		copyEventFields(data, event, "queueId", "queuedAt", "status", "reason")
+	case "hobot_followup_blocked":
+		normalizedType = "followup.blocked"
+		copyEventFields(data, event, "queueId", "queuedAt", "status", "reason", "recovery")
+	case "hobot_followup_armed":
+		normalizedType = "followup.queued"
+		copyEventFields(data, event, "queueId", "queuedAt", "status", "reason")
 	case "hobot_task_queued":
 		normalizedType = "task.queued"
 		copyEventFields(data, event, "queuedAt", "operation")
@@ -264,6 +282,21 @@ func normalizedItemFor(eventType string, data map[string]any) *normalizedItem {
 		item.Type, item.Status = "task", "interrupted"
 	case "task.stopped":
 		item.Type, item.Status = "task", "stopped"
+	case "followup.queued":
+		item.ID, _ = data["queueId"].(string)
+		item.Type, item.Status = "followup", "queued"
+	case "followup.dispatching":
+		item.ID, _ = data["queueId"].(string)
+		item.Type, item.Status = "followup", "inProgress"
+	case "followup.sent":
+		item.ID, _ = data["queueId"].(string)
+		item.Type, item.Status = "followup", "completed"
+	case "followup.cancelled":
+		item.ID, _ = data["queueId"].(string)
+		item.Type, item.Status = "followup", "cancelled"
+	case "followup.blocked":
+		item.ID, _ = data["queueId"].(string)
+		item.Type, item.Status = "followup", "blocked"
 	default:
 		return nil
 	}

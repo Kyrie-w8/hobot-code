@@ -23,9 +23,12 @@ test('structured recovery overrides stale session inference', () => {
 });
 
 test('composer blocks transient and busy task states', () => {
-  for (const status of ['queued', 'starting', 'running', 'waiting', 'stopping']) {
-    assert.equal(composerIsBlocked(status), true);
-  }
+	assert.equal(composerIsBlocked('queued'), true);
+	assert.equal(composerIsBlocked('stopping'), true);
+	for (const status of ['starting', 'running', 'waiting']) {
+		assert.equal(composerIsBlocked(status), true);
+		assert.equal(composerIsBlocked(status, true), false);
+	}
   for (const status of ['idle', 'stopped', 'failed', 'interrupted']) {
     assert.equal(composerIsBlocked(status), false);
   }

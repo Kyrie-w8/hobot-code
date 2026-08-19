@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.30.0
+
+- Add the durable Working-state follow-up message queue and its Studio, CLI, and SDK protocol surface.
+
 ## 0.29.3
 
 - Treat task-scoped OpenExplorer build-host status, selection, and probe operations as routine actions in `Approve for me`, so they run directly without an approval-model round trip.

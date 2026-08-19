@@ -497,6 +497,17 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
 .navigator-popover span { display: -webkit-box; overflow: hidden; font-size: var(--font-size-meta); line-height: var(--line-height-ui); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 
 .composer-dock { padding: 8px 22px 16px; background: var(--canvas); }
+.followup-queue { display: grid; width: min(100%, 860px); max-height: min(220px, 30vh); overflow: auto; gap: 6px; margin: 0 auto 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.followup-queue-heading { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--font-size-meta); }
+.followup-queue-heading strong { color: var(--text-soft); }
+.followup-queue-heading span { margin-left: auto; }
+.followup-queue-item { display: flex; min-height: 31px; align-items: center; gap: 8px; padding: 4px 6px; border-top: 1px solid var(--line-subtle); font-size: var(--font-size-meta); }
+.followup-queue-status { flex: 0 0 58px; color: var(--amber); font-weight: 620; }
+.followup-dispatching .followup-queue-status { color: var(--blue); }
+.followup-blocked .followup-queue-status { color: var(--red); }
+.followup-queue-prompt { min-width: 0; flex: 1; overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
+.followup-queue-reason { max-width: 240px; overflow: hidden; color: var(--red); text-overflow: ellipsis; white-space: nowrap; }
+.followup-resume { justify-self: start; margin-top: 2px; }
 .composer, .approval-bar { width: min(100%, 860px); margin: 0 auto; }
 .composer { overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: 0 10px 32px rgba(0, 0, 0, 0.15); transition: border-color 140ms ease, box-shadow 140ms ease; }
 .composer:focus-within { border-color: rgba(101, 191, 167, 0.5); box-shadow: 0 0 0 3px rgba(101, 191, 167, 0.055), 0 12px 34px rgba(0, 0, 0, 0.17); }
@@ -1517,5 +1528,3 @@ details[open] > summary > .details-chevron { transform: rotate(90deg); }
   .conversation { scroll-behavior: auto; }
   .message-actions, .assistant-actions, .details-chevron, .composer { transition: none; }
 }
-
-

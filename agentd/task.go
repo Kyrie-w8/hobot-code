@@ -45,45 +45,46 @@ var taskToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,80}$`)
 const maximumWorkerStderrBytes int64 = 1024 * 1024
 
 type taskMetadata struct {
-	ID              string             `json:"id"`
-	Name            string             `json:"name"`
-	Cwd             string             `json:"cwd"`
-	ProjectCwd      string             `json:"projectCwd,omitempty"`
-	WorkspaceMode   string             `json:"workspaceMode"`
-	WorkspaceID     string             `json:"workspaceId,omitempty"`
-	WorktreePath    string             `json:"worktreePath,omitempty"`
-	WorktreeBase    string             `json:"worktreeBase,omitempty"`
-	Status          taskStatus         `json:"status"`
-	PID             int                `json:"pid,omitempty"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	UpdatedAt       time.Time          `json:"updatedAt"`
-	LastSequence    uint64             `json:"lastSequence"`
-	LogTruncated    bool               `json:"logTruncated,omitempty"`
-	LastError       string             `json:"lastError,omitempty"`
-	Failure         *taskFailure       `json:"failure,omitempty"`
-	SessionFile     string             `json:"sessionFile,omitempty"`
-	SessionID       string             `json:"sessionId,omitempty"`
-	Approved        bool               `json:"approved,omitempty"`
-	ResumeCount     int                `json:"resumeCount,omitempty"`
-	RestartCount    int                `json:"restartCount,omitempty"`
-	Model           string             `json:"model,omitempty"`
-	ApprovalModel   string             `json:"approvalModel,omitempty"`
-	PermissionMode  string             `json:"permissionMode,omitempty"`
-	SandboxMode     string             `json:"sandboxMode"`
-	NetworkMode     string             `json:"networkMode"`
-	Sandbox         taskSandboxStatus  `json:"sandbox"`
-	ParentTaskID    string             `json:"parentTaskId,omitempty"`
-	SourceTaskID    string             `json:"sourceTaskId,omitempty"`
-	ForkSequence    uint64             `json:"forkSequence,omitempty"`
-	BranchKind      string             `json:"branchKind,omitempty"`
-	CurrentActivity string             `json:"currentActivity,omitempty"`
-	AwaitingPrompt  bool               `json:"awaitingPrompt,omitempty"`
-	QueuedAt        *time.Time         `json:"queuedAt,omitempty"`
-	QueueOperation  string             `json:"queueOperation,omitempty"`
-	ArchivedAt      *time.Time         `json:"archivedAt,omitempty"`
-	Approvals       []pendingApproval  `json:"pendingApprovals,omitempty"`
-	Deployment      *deploymentRecord  `json:"deployment,omitempty"`
-	TurnEvidence    []taskTurnEvidence `json:"turnEvidence,omitempty"`
+	ID                  string             `json:"id"`
+	Name                string             `json:"name"`
+	Cwd                 string             `json:"cwd"`
+	ProjectCwd          string             `json:"projectCwd,omitempty"`
+	WorkspaceMode       string             `json:"workspaceMode"`
+	WorkspaceID         string             `json:"workspaceId,omitempty"`
+	WorktreePath        string             `json:"worktreePath,omitempty"`
+	WorktreeBase        string             `json:"worktreeBase,omitempty"`
+	Status              taskStatus         `json:"status"`
+	PID                 int                `json:"pid,omitempty"`
+	CreatedAt           time.Time          `json:"createdAt"`
+	UpdatedAt           time.Time          `json:"updatedAt"`
+	LastSequence        uint64             `json:"lastSequence"`
+	LogTruncated        bool               `json:"logTruncated,omitempty"`
+	LastError           string             `json:"lastError,omitempty"`
+	Failure             *taskFailure       `json:"failure,omitempty"`
+	SessionFile         string             `json:"sessionFile,omitempty"`
+	SessionID           string             `json:"sessionId,omitempty"`
+	Approved            bool               `json:"approved,omitempty"`
+	ResumeCount         int                `json:"resumeCount,omitempty"`
+	RestartCount        int                `json:"restartCount,omitempty"`
+	Model               string             `json:"model,omitempty"`
+	ApprovalModel       string             `json:"approvalModel,omitempty"`
+	PermissionMode      string             `json:"permissionMode,omitempty"`
+	SandboxMode         string             `json:"sandboxMode"`
+	NetworkMode         string             `json:"networkMode"`
+	Sandbox             taskSandboxStatus  `json:"sandbox"`
+	ParentTaskID        string             `json:"parentTaskId,omitempty"`
+	SourceTaskID        string             `json:"sourceTaskId,omitempty"`
+	ForkSequence        uint64             `json:"forkSequence,omitempty"`
+	BranchKind          string             `json:"branchKind,omitempty"`
+	CurrentActivity     string             `json:"currentActivity,omitempty"`
+	AwaitingPrompt      bool               `json:"awaitingPrompt,omitempty"`
+	QueuedAt            *time.Time         `json:"queuedAt,omitempty"`
+	QueueOperation      string             `json:"queueOperation,omitempty"`
+	ArchivedAt          *time.Time         `json:"archivedAt,omitempty"`
+	Approvals           []pendingApproval  `json:"pendingApprovals,omitempty"`
+	Deployment          *deploymentRecord  `json:"deployment,omitempty"`
+	TurnEvidence        []taskTurnEvidence `json:"turnEvidence,omitempty"`
+	FollowupQueuePaused bool               `json:"followupQueuePaused,omitempty"`
 }
 
 type taskFailure struct {
@@ -104,6 +105,7 @@ type task struct {
 	stdin                 io.WriteCloser
 	workerDone            chan struct{}
 	writeMu               sync.Mutex
+	followupMu            sync.Mutex
 	stderrMu              sync.Mutex
 	streamWG              sync.WaitGroup
 	persistMu             sync.Mutex
@@ -121,6 +123,8 @@ type task struct {
 	openToolCalls         map[string]struct{}
 	openAnonymousTools    int
 	terminalCaptureUnsafe bool
+	followupFault         bool
+	turnFailed            bool
 	control               *taskControlServer
 }
 
@@ -191,6 +195,7 @@ type resumeTaskParams struct {
 type promptEventOrigin struct {
 	Source     string
 	ScheduleID string
+	QueueID    string
 }
 
 type imageContent struct {
@@ -466,6 +471,12 @@ func newTaskManager(cfg config) (*taskManager, error) {
 			legacyMetadataCleared = true
 		}
 		manager.tasks[metadata.ID] = current
+		if err := current.recoverFollowups(); err != nil {
+			// A malformed follow-up queue must not make an otherwise recoverable
+			// task disappear. RPCs will surface the durable queue error and the
+			// user can inspect the task history before taking action.
+			current.markFollowupFault(err)
+		}
 		metadataSaved := true
 		if metadata.Status == statusInterrupted || repaired || sequenceRecovered || legacyMetadataCleared {
 			metadataSaved = current.saveMetadata() == nil
@@ -852,6 +863,13 @@ func (manager *taskManager) scheduleQueued() {
 		})
 		current.recordEvent(raw)
 		origin := promptEventOrigin{Source: queued.PromptSource, ScheduleID: queued.ScheduleID}
+		if queued.Operation == "resume" {
+			if err := current.armFollowups(); err != nil {
+				_ = os.Remove(current.queuePath())
+				current.setTerminal(statusFailed, "prepare follow-up queue recovery: "+err.Error())
+				continue
+			}
+		}
 		if err := current.launch(queued.Prompt, queued.Images, queued.Approve, queued.SessionFile, promptRecorded, origin); err != nil {
 			_ = os.Remove(current.queuePath())
 			if errors.Is(err, errTaskLaunchCancelled) {
@@ -913,6 +931,10 @@ func (current *task) queuedPromptRecorded(queued queuedLaunch) bool {
 }
 
 func addPromptEventOrigin(event map[string]any, origin promptEventOrigin) {
+	if followupIDPattern.MatchString(origin.QueueID) {
+		event["queueId"] = origin.QueueID
+		event["queueStatus"] = string(followupSent)
+	}
 	if origin.Source != "schedule" || !taskIDPattern.MatchString(origin.ScheduleID) {
 		return
 	}
@@ -2186,6 +2208,7 @@ func (current *task) recordEvent(raw json.RawMessage) {
 	acceptWorkerTransition := current.metadata.Status != statusStopping && isLiveStatus(current.metadata.Status)
 	switch header.Type {
 	case "agent_start":
+		current.turnFailed = false
 		if acceptWorkerTransition {
 			current.metadata.Status = statusRunning
 			current.metadata.CurrentActivity = "thinking"
@@ -2204,6 +2227,16 @@ func (current *task) recordEvent(raw json.RawMessage) {
 			current.metadata.CurrentActivity = ""
 		}
 		finalizeTurnEvidenceLocked(&current.metadata, "completed", boundaryWorkspace, current.metadata.LastSequence)
+	case "message_end":
+		var message struct {
+			Message struct {
+				Role         string `json:"role"`
+				ErrorMessage string `json:"errorMessage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(raw, &message) == nil && (message.Message.Role == "" || message.Message.Role == "assistant") {
+			current.turnFailed = message.Message.ErrorMessage != ""
+		}
 	case "tool_execution_start", "tool_execution_end":
 		current.updateTurnToolEvidenceLocked(header.Type, header.ToolCallID, header.IsError)
 		if acceptWorkerTransition {
@@ -2272,10 +2305,18 @@ func (current *task) recordEvent(raw json.RawMessage) {
 		}
 	}
 	current.mu.Unlock()
-	if sessionBound || logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "hobot_task_queued" || header.Type == "hobot_task_dequeued" || header.Type == "hobot_task_queue_cancelled" || header.Type == "hobot_task_failed" || header.Type == "hobot_task_interrupted" || header.Type == "hobot_task_stopped" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "tool_execution_start" || header.Type == "tool_execution_end" || header.Type == "extension_ui_request" || header.Type == "response" {
+	if sessionBound || logBecameTruncated || header.Type == "hobot_user_prompt" || header.Type == "hobot_task_queued" || header.Type == "hobot_task_dequeued" || header.Type == "hobot_task_queue_cancelled" || strings.HasPrefix(header.Type, "hobot_followup_") || header.Type == "hobot_task_failed" || header.Type == "hobot_task_interrupted" || header.Type == "hobot_task_stopped" || header.Type == "agent_start" || header.Type == "agent_settled" || header.Type == "tool_execution_start" || header.Type == "tool_execution_end" || header.Type == "extension_ui_request" || header.Type == "response" {
 		_ = current.saveMetadata()
 	}
 	if header.Type == "agent_settled" {
+		current.mu.Lock()
+		turnFailed := current.turnFailed
+		current.mu.Unlock()
+		if turnFailed {
+			current.blockFollowups("current turn failed; resume explicitly before continuing queued messages")
+		} else {
+			go current.dequeueFollowup()
+		}
 		go current.manager.scheduleQueued()
 	}
 }
@@ -2396,6 +2437,11 @@ func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordP
 			return err
 		}
 	case "abort":
+		// Abort may still be followed by a normal agent_settled event. Pause
+		// follow-ups first so that event cannot implicitly deliver more work.
+		if err := current.blockFollowups("current turn was aborted; resume explicitly before continuing queued messages"); err != nil {
+			return fmt.Errorf("pause follow-up queue before abort: %w", err)
+		}
 	case "set_model":
 		if status != statusIdle {
 			return fmt.Errorf("task must be idle before changing models")
@@ -2422,6 +2468,7 @@ func (current *task) sendCommandWithPromptEvent(command json.RawMessage, recordP
 		current.metadata.Status = statusRunning
 		current.metadata.CurrentActivity = "thinking"
 		current.metadata.UpdatedAt = time.Now().UTC()
+		current.turnFailed = false
 		beginTurnEvidenceLocked(&current.metadata, nil)
 		current.openToolCalls = nil
 		current.openAnonymousTools = 0
@@ -2655,6 +2702,9 @@ func (current *task) setTerminal(status taskStatus, message string) {
 	}
 	raw, _ := json.Marshal(event)
 	current.recordEvent(raw)
+	if status == statusFailed || status == statusInterrupted || status == statusStopped {
+		current.blockFollowups("task is no longer running; resume explicitly before continuing queued messages")
+	}
 	current.mu.Lock()
 	for id, subscriber := range current.subscribers {
 		close(subscriber)
@@ -3280,6 +3330,9 @@ func (manager *taskManager) resume(params resumeTaskParams) (taskMetadata, error
 			return taskMetadata{}, err
 		}
 		return current.snapshot(), nil
+	}
+	if err := current.armFollowups(); err != nil {
+		return taskMetadata{}, fmt.Errorf("prepare follow-up queue recovery: %w", err)
 	}
 	current.mu.Lock()
 	current.metadata.Status = statusStarting

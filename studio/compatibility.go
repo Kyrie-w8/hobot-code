@@ -69,6 +69,7 @@ var recommendedStudioCapabilities = []struct {
 	{Name: "tasks.fork", Impact: "Side agents and edit-from-history are unavailable."},
 	{Name: "tasks.collaboration.v1", Impact: "Main and Side Agents cannot share bounded live status or enforce Main-Agent write priority."},
 	{Name: "tasks.queue.v1", Impact: "Busy Agent requests cannot wait safely for a board worker slot."},
+	{Name: "tasks.followup-queue.v1", Impact: "Working Agent messages remain disabled because this board cannot persist and recover follow-up delivery."},
 	{Name: "tasks.failure.v1", Impact: "Task failures cannot provide safe, structured recovery actions."},
 	{Name: "tasks.turn-evidence.v1", Impact: "Interrupted tasks cannot show whether tools completed or the Git workspace changed."},
 	{Name: "events.items.v1", Impact: "Rich command and task lifecycle details are unavailable."},

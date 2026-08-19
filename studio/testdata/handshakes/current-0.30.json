@@ -1,6 +1,6 @@
 {
   "info": {
-    "version": "0.29.0",
+    "version": "0.30.0",
     "protocol": 1,
     "pid": 100,
     "startedAt": "2026-08-13T00:00:00Z",
@@ -36,6 +36,7 @@
         "tasks.fork",
         "tasks.collaboration.v1",
         "tasks.queue.v1",
+        "tasks.followup-queue.v1",
         "tasks.failure.v1",
         "tasks.turn-evidence.v1",
         "events.items.v1",

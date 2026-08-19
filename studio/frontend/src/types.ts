@@ -242,7 +242,23 @@ export type Task = {
   pendingApprovals?: Approval[];
   deployment?: DeploymentRecord;
   turnEvidence?: TaskTurnEvidence[];
+  followupQueuePaused?: boolean;
 };
+
+export type FollowupAttachment = {name?: string; mimeType?: string};
+export type FollowupMessage = {
+  id: string;
+  prompt: string;
+  status: 'queued' | 'dispatching' | 'sent' | 'cancelled' | 'blocked' | string;
+  idempotencyKey?: string;
+  queuedAt: string;
+  updatedAt: string;
+  reason?: string;
+  recovery?: 'resume' | 'retry' | string;
+  attachments?: FollowupAttachment[];
+};
+export type FollowupQueue = {items: FollowupMessage[]};
+export type PromptSubmitResult = {disposition: 'sent' | 'queued'; item?: FollowupMessage; uncertain?: boolean};
 
 export type NormalizedEvent = {
   schema: number;

@@ -304,14 +304,78 @@ func (client *Client) StartTask(ctx context.Context, request StartTaskRequest) (
 }
 
 func (client *Client) SendPrompt(ctx context.Context, taskID, message string) error {
-	return client.SendPromptWithImages(ctx, taskID, message, nil)
+	_, err := client.SubmitPromptWithImages(ctx, taskID, message, nil)
+	return err
 }
 
 func (client *Client) SendPromptWithImages(ctx context.Context, taskID, message string, images []ImageContent) error {
-	return client.Call(ctx, "task.command", map[string]any{
-		"taskId":  taskID,
-		"command": map[string]any{"id": nextCommandID(), "type": "prompt", "message": message, "images": images},
-	}, nil)
+	_, err := client.SubmitPromptWithImages(ctx, taskID, message, images)
+	return err
+}
+
+func (client *Client) SubmitPrompt(ctx context.Context, taskID, message string) (PromptSubmitResult, error) {
+	return client.SubmitPromptWithImagesAndKey(ctx, taskID, message, nil, "")
+}
+
+func (client *Client) SubmitPromptWithImages(ctx context.Context, taskID, message string, images []ImageContent) (PromptSubmitResult, error) {
+	return client.SubmitPromptWithImagesAndKey(ctx, taskID, message, images, "")
+}
+
+func (client *Client) SubmitPromptWithImagesAndKey(ctx context.Context, taskID, message string, images []ImageContent, idempotencyKey string) (PromptSubmitResult, error) {
+	capabilities, err := client.GetCapabilities(ctx)
+	if err != nil {
+		return PromptSubmitResult{}, err
+	}
+	if !containsSDKCapability(capabilities.Capabilities, "tasks.followup-queue.v1") {
+		return client.submitLegacyPrompt(ctx, taskID, message, images)
+	}
+	var result PromptSubmitResult
+	err = client.Call(ctx, "task.prompt.submit", map[string]any{
+		"taskId": taskID, "prompt": message, "images": images, "idempotencyKey": idempotencyKey,
+	}, &result)
+	return result, err
+}
+
+func (client *Client) submitLegacyPrompt(ctx context.Context, taskID, message string, images []ImageContent) (PromptSubmitResult, error) {
+	task, err := client.Task(ctx, taskID)
+	if err != nil {
+		return PromptSubmitResult{}, err
+	}
+	if task.Status != "idle" {
+		return PromptSubmitResult{}, fmt.Errorf("board agentd does not support follow-up message queueing; update agentd before sending while Working")
+	}
+	command := map[string]any{"type": "prompt", "message": message, "images": images}
+	if err := client.Call(ctx, "task.command", map[string]any{"taskId": taskID, "command": command}, nil); err != nil {
+		return PromptSubmitResult{}, err
+	}
+	return PromptSubmitResult{Disposition: "sent"}, nil
+}
+
+func containsSDKCapability(capabilities []string, wanted string) bool {
+	for _, capability := range capabilities {
+		if capability == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func (client *Client) FollowupQueue(ctx context.Context, taskID string) (FollowupQueue, error) {
+	var result FollowupQueue
+	err := client.Call(ctx, "task.followup.list", map[string]string{"taskId": taskID}, &result)
+	return result, err
+}
+
+func (client *Client) CancelFollowup(ctx context.Context, taskID, queueID string) error {
+	return client.Call(ctx, "task.followup.cancel", map[string]string{"taskId": taskID, "queueId": queueID}, nil)
+}
+
+func (client *Client) ResumeFollowups(ctx context.Context, taskID string) error {
+	return client.Call(ctx, "task.followup.resume", map[string]string{"taskId": taskID}, nil)
+}
+
+func (client *Client) RetryFollowup(ctx context.Context, taskID, queueID string) error {
+	return client.Call(ctx, "task.followup.retry", map[string]string{"taskId": taskID, "queueId": queueID}, nil)
 }
 
 func (client *Client) SetModel(ctx context.Context, taskID, provider, modelID string) error {

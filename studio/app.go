@@ -855,8 +855,6 @@ func (app *App) DeleteBPUModel(boardID, modelPath string) error {
 	return client.DeleteBPUModel(ctx, modelPath)
 }
 
-
-
 func (app *App) RefreshTasks(boardID string, includeArchived bool) (hobot.TaskPage, error) {
 	client, err := app.client(boardID)
 	if err != nil {
@@ -967,14 +965,54 @@ func (app *App) StartTask(boardID string, request hobot.StartTaskRequest) (hobot
 	return client.StartTask(ctx, request)
 }
 
-func (app *App) SendPrompt(boardID, taskID, prompt string, images []hobot.ImageContent) error {
+func (app *App) SendPrompt(boardID, taskID, prompt string, images []hobot.ImageContent, idempotencyKey string) (hobot.PromptSubmitResult, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.PromptSubmitResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.SubmitPromptWithImagesAndKey(ctx, taskID, prompt, images, idempotencyKey)
+}
+
+func (app *App) ListFollowups(boardID, taskID string) (hobot.FollowupQueue, error) {
+	client, err := app.client(boardID)
+	if err != nil {
+		return hobot.FollowupQueue{}, err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.FollowupQueue(ctx, taskID)
+}
+
+func (app *App) CancelFollowup(boardID, taskID, queueID string) error {
 	client, err := app.client(boardID)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
 	defer cancel()
-	return client.SendPromptWithImages(ctx, taskID, prompt, images)
+	return client.CancelFollowup(ctx, taskID, queueID)
+}
+
+func (app *App) ResumeFollowups(boardID, taskID string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.ResumeFollowups(ctx, taskID)
+}
+
+func (app *App) RetryFollowup(boardID, taskID, queueID string) error {
+	client, err := app.client(boardID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(app.ctx, requestTimeout)
+	defer cancel()
+	return client.RetryFollowup(ctx, taskID, queueID)
 }
 
 func (app *App) SetTaskModel(boardID, taskID, provider, modelID string) error {

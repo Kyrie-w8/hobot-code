@@ -401,6 +401,12 @@ Cleanup 只允许在没有任务引用、没有未提交修改、没有额外提
 
 如果所有 worker 都在工作，新任务进入持久 FIFO 队列。不要因为短暂显示 queued 而重复创建相同任务。
 
+### 8.2.1 Working 时发送后续消息
+
+Working 或等待审批时，composer 仍可发送正常消息和支持的附件。消息会立即显示为 **Queued**，由当前任务按 FIFO 串行送入同一个 Hobot Code 会话/Agent 上下文；这不是新任务 launch queue，也不会创建分支。agentd 每个任务最多保留 10 条未完成 follow-up 消息，Prompt 文本合计最多 256 KiB；超限会返回明确错误。审批等待不会把排队消息当作审批回答。
+
+当前回合正常结束后才会发送下一条。Abort、Stop、失败或最终模型重试失败会将未交付消息显示为 **Blocked**，不会自动继续；恢复任务后可继续普通 blocked 项。daemon 在发送交接中重启会显示 uncertain blocked，必须针对该条消息明确 Retry；取消只适用于尚未交付的单条消息。历史事件包含 `queueId` 和 queued/cancelled/blocked 状态，重连和长历史分页不会丢失这些状态。
+
 ### 8.3 断线续跑
 
 Studio 创建的任务由板端 `agentd` 托管。以下情况通常不会停止任务：
@@ -1399,6 +1405,10 @@ hobot task show TASK_ID [--details]
 hobot task logs TASK_ID [--after SEQUENCE] [--follow]
 hobot task attach TASK_ID [--after SEQUENCE | --replay-all]
 hobot task send TASK_ID [--] PROMPT
+hobot task queue-list TASK_ID
+hobot task queue-cancel TASK_ID QUEUE_ID
+hobot task queue-resume TASK_ID
+hobot task queue-retry TASK_ID QUEUE_ID
 hobot task abort TASK_ID
 hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
 hobot task approvals TASK_ID [--details]

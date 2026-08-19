@@ -7,8 +7,10 @@ export function composerMode(task) {
   return task.sessionFile ? 'resume' : 'restart';
 }
 
-export function composerIsBlocked(status) {
-  return ['queued', 'starting', 'running', 'waiting', 'stopping'].includes(status);
+export function composerIsBlocked(status, supportsFollowup = false) {
+	if (['queued', 'stopping'].includes(status)) return true;
+	if (['starting', 'running', 'waiting'].includes(status)) return !supportsFollowup;
+	return false;
 }
 
 export function shouldSubmitComposer(key, shiftKey, isComposing) {

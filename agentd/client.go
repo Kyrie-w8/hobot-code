@@ -358,6 +358,22 @@ func (renderer *humanEventRenderer) render(record taskEvent) error {
 	case "hobot_task_queue_cancelled":
 		renderer.endStream()
 		fmt.Fprint(renderer.output, "[cancelled] Queued task was not started\n")
+	case "hobot_followup_queued":
+		renderer.endStream()
+		queueID, _ := event["queueId"].(string)
+		fmt.Fprintf(renderer.output, "[queued] Follow-up message %s is queued\n", safeAttachText(queueID, "follow-up", 32))
+	case "hobot_followup_dispatching":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[sending] Follow-up message is being delivered\n")
+	case "hobot_followup_sent":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[sent] Follow-up message delivered\n")
+	case "hobot_followup_cancelled":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[cancelled] Follow-up message was cancelled\n")
+	case "hobot_followup_blocked":
+		renderer.endStream()
+		fmt.Fprint(renderer.output, "[blocked] Follow-up messages are paused; resume or retry explicitly\n")
 	case "hobot_task_failed", "hobot_task_interrupted":
 		renderer.endStream()
 		message, _ := event["message"].(string)

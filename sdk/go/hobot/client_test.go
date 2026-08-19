@@ -71,6 +71,12 @@ while IFS= read -r line; do
     *'"method":"task.page"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"tasks":[{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"idle","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:01Z","lastSequence":7}]}}\n' "$id"
       ;;
+    *'"method":"task.get"'*)
+      printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"idle","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:01Z","lastSequence":7}}\n' "$id"
+      ;;
+    *'"method":"task.command"'*)
+      printf '{"protocol":1,"id":"%%s","ok":true,"result":{}}\n' "$id"
+      ;;
     *'"method":"task.restart"'*)
       printf '{"protocol":1,"id":"%%s","ok":true,"result":{"id":"00112233445566778899aabb","name":"build","cwd":"/root","status":"starting","createdAt":"2026-08-11T00:00:00Z","updatedAt":"2026-08-11T00:00:02Z","lastSequence":7,"restartCount":1}}\n' "$id"
       ;;
@@ -106,6 +112,10 @@ func TestClientReusesControlBridgeAndDecodesTasks(t *testing.T) {
 	capabilities, err := client.GetCapabilities(ctx)
 	if err != nil || capabilities.EventSchema != 2 {
 		t.Fatalf("capabilities=%+v err=%v", capabilities, err)
+	}
+	sent, err := client.SubmitPrompt(ctx, "00112233445566778899aabb", "legacy idle prompt")
+	if err != nil || sent.Disposition != "sent" {
+		t.Fatalf("legacy idle prompt fallback=%+v err=%v", sent, err)
 	}
 	extensions, err := client.Extensions(ctx)
 	if err != nil || len(extensions.Entries) != 1 || extensions.Entries[0].ID != "hobot.rdk-core" || !extensions.Policy.InventoryOnly || extensions.Policy.PermissionAuthority != "board" {

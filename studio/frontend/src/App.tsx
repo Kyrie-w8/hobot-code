@@ -40,7 +40,7 @@ import {includedModelSummary, includedProviderGroups} from './provider-catalog.j
 import {applyTheme, readThemePreference, resolveTheme, saveThemePreference} from './appearance-theme.js';
 import type {ThemePreference} from './appearance-theme.js';
 import type {AssistantConversationItem, ToolActivity, UserConversationItem} from './conversation-model.js';
-import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, BPUBenchmarkRequest, BPUBenchmarkResult, BPUModelInfo, BPUTensorDesc, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
+import type {AddManagedProviderRequest, Approval, Board, BoardUpdateCheck, BoardUpdateResult, BPUBenchmarkRequest, BPUBenchmarkResult, BPUModelInfo, BPUTensorDesc, Connection, DeploymentInspection, DeploymentStatus, DiagnosticReport, EventPage, ExtensionCatalog, FollowupMessage, ImageContent, ManagedProvider, ModelConformance, ModelHealth, ModelOption, ModelQualification, ModelRDKMatrix, ModelRDKProbe, ModelRDKProfileStatus, ModelRuntimeProbe, ProviderMutationResult, Schedule, StartDeploymentRequest, StudioUpdateCheck, SupportBundle, SystemSnapshot, Task, TaskEvent, WorkspaceChanges, WorkspaceDelivery, WorkspaceIsolation, WorkspaceListing} from './types';
 
 import './App.css';
 
@@ -85,8 +85,10 @@ function App() {
   const [showModelReadiness, setShowModelReadiness] = useState(false);
   const [showAccessSettings, setShowAccessSettings] = useState(false);
   const [attachments, setAttachments] = useState<ImageContent[]>([]);
+  const [followups, setFollowups] = useState<FollowupMessage[]>([]);
   const [editingNeedsImages, setEditingNeedsImages] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{taskId: string; text: string; time: string; attachments: ImageContent[]} | null>(null);
+  const [pendingPromptRetry, setPendingPromptRetry] = useState<{taskId: string; prompt: string; fingerprint: string; key: string; uncertain?: boolean} | null>(null);
   const [showDeployment, setShowDeployment] = useState(false);
   const [deploymentStatus, setDeploymentStatus] = useState<DeploymentStatus | null>(null);
   const [activityClock, setActivityClock] = useState(Date.now());
@@ -676,10 +678,12 @@ function App() {
   const projects = useMemo(() => groupTasksByProject(visibleTasks), [visibleTasks]);
   const activeApproval = selectedTask?.pendingApprovals?.find((approval) => approval.active);
   const selectedComposerMode = selectedTask ? composerMode(selectedTask) : 'send';
-  const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
+	const draftSelected = Boolean(selectedTask?.id.startsWith('draft:'));
+	const supportsFollowupQueue = Boolean(connection?.capabilities?.capabilities.includes('tasks.followup-queue.v1'));
+	const pendingUncertain = Boolean(pendingPromptRetry?.taskId === selectedTask?.id && pendingPromptRetry?.uncertain);
 	const workspaceInspectionLoading = Boolean(draftSelected && workspaceInspection?.taskId === selectedTask?.id && workspaceInspection?.loading);
   const awaitingFirstPrompt = Boolean(selectedTask?.awaitingPrompt);
-	const composerBlocked = busy || workspaceInspectionLoading || connectionState !== 'online' || (editingNeedsImages && attachments.length === 0) || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status)) : true);
+	const composerBlocked = busy || workspaceInspectionLoading || connectionState !== 'online' || (editingNeedsImages && attachments.length === 0) || (selectedTask ? (!draftSelected && composerIsBlocked(selectedTask.status, supportsFollowupQueue)) : true);
   const activeTaskCount = tasks.filter((task) => !terminalStatuses.has(task.status)).length;
   const workflowStarters = rdkWorkflows(snapshot?.boardId);
   const selectedModel = selectedTask?.model ?? '';
@@ -711,6 +715,18 @@ function App() {
   const activityStart = optimisticPrompt && optimisticPrompt.taskId === selectedTask?.id
     ? optimisticPrompt.time
     : latestConversationItem?.kind === 'user' ? latestConversationItem.time : selectedTask?.updatedAt;
+
+  useEffect(() => {
+    setFollowups([]);
+    if (!boardId || !selectedTask || draftSelected || !supportsFollowupQueue || connectionState !== 'online') return;
+    let active = true;
+    const refreshFollowups = () => api.listFollowups(boardId, selectedTask.id).then((queue) => {
+      if (active) setFollowups(queue.items ?? []);
+    }).catch(() => undefined);
+    void refreshFollowups();
+    const timer = window.setInterval(refreshFollowups, 2500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [boardId, connectionState, draftSelected, selectedTask?.id, supportsFollowupQueue]);
 
 	useEffect(() => {
 		const root = timelineRef.current;
@@ -760,13 +776,16 @@ function App() {
     event.preventDefault();
     const prompt = composer.trim();
     if (!prompt || !selectedTask || !boardId || composerBlocked) return;
+	if (editingMessage !== null && !draftSelected && ['starting', 'running', 'waiting'].includes(selectedTask.status)) {
+	  setError('Finish the current turn before editing an earlier message.');
+	  return;
+	}
     setBusy(true);
     setError('');
     const submittedAt = new Date().toISOString();
     const sourceTaskId = selectedTask.id;
     const submittedImages = attachments;
-    if (!draftSelected) setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
-    setSelectedTask((current) => current?.id === selectedTask.id ? {...current, status: 'running', updatedAt: submittedAt} : current);
+	if (!draftSelected) setOptimisticPrompt({taskId: selectedTask.id, text: prompt, time: submittedAt, attachments: submittedImages});
     setComposer('');
     setAttachments([]);
     followsOutput.current = true;
@@ -788,12 +807,39 @@ function App() {
       else if (editingMessage !== null) nextTask = await api.forkTask(boardId, {taskId: selectedTask.id, sequence: editingMessage, prompt, images: submittedImages, kind: 'edit', model: selectedModel});
       else if (selectedComposerMode === 'resume') nextTask = await api.resumeTask(boardId, selectedTask.id, prompt, submittedImages);
       else if (selectedComposerMode === 'restart') nextTask = await api.restartTask(boardId, selectedTask.id, prompt, submittedImages);
-      else await api.sendPrompt(boardId, selectedTask.id, prompt, submittedImages);
+      else {
+		const idempotencyKey = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		const fingerprint = JSON.stringify({prompt, images: submittedImages.map((image) => ({type: image.type, data: image.data, mimeType: image.mimeType, name: image.name}))});
+		const sameRetry = pendingPromptRetry?.taskId === selectedTask.id && pendingPromptRetry.fingerprint === fingerprint;
+		const retryKey = sameRetry && !pendingPromptRetry.uncertain ? pendingPromptRetry.key : idempotencyKey;
+		setPendingPromptRetry({taskId: selectedTask.id, prompt, fingerprint, key: retryKey});
+		const result = await api.sendPrompt(boardId, selectedTask.id, prompt, submittedImages, retryKey);
+		if (result?.uncertain) {
+		  setOptimisticPrompt(null);
+		  setComposer(prompt);
+		  setAttachments(submittedImages);
+		  setPendingPromptRetry({taskId: selectedTask.id, prompt, fingerprint, key: retryKey, uncertain: true});
+		  setNotice('Delivery status is uncertain; check the latest conversation, then choose Send again to create a new request.');
+		  return;
+		}
+		if (result?.disposition === 'queued') {
+		  setOptimisticPrompt(null);
+		  if (result.item) {
+			setFollowups((items) => [...items.filter((item) => item.id !== result.item?.id), result.item as FollowupMessage]);
+		  }
+		  setNotice('Message queued for this task.');
+		}
+		setPendingPromptRetry(null);
+	  }
       if (isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) {
         setEditingMessage(null);
         setEditingNeedsImages(false);
       }
       taskDrafts.current.delete(selectedTask.id);
+      if (!draftSelected && supportsFollowupQueue) {
+		  const queue = await api.listFollowups(boardId, selectedTask.id).catch(() => ({items: []}));
+		  setFollowups(queue.items ?? []);
+	  }
       await refreshTasks();
       if (nextTask && isCurrentTarget(boardId, sourceTaskId, activeBoardId.current, selectedTaskId.current)) {
         selectedTaskId.current = nextTask.id;
@@ -866,6 +912,10 @@ function App() {
   }
 
   function editMessage(item: UserConversationItem) {
+	if (selectedTask && ['starting', 'running', 'waiting'].includes(selectedTask.status)) {
+	  setError('Finish the current turn before editing an earlier message.');
+	  return;
+	}
     setComposer(item.text);
     setAttachments([]);
     setEditingMessage(item.sequence);
@@ -1638,8 +1688,8 @@ function App() {
 					{historyFailure && <div className="conversation-history-notice" role="alert"><AlertTriangle size={14} /><span><strong>Conversation history is incomplete.</strong>{historyFailure}</span></div>}
               {!eventsLoading && conversation.length === 0 && <div className="empty-conversation"><div className="empty-symbol"><MessageSquare size={22} /></div><strong>{draftSelected ? 'What would you like to work on?' : 'Start a conversation'}</strong><div className="workflow-starters">{workflowStarters.map((workflow) => <button key={workflow.id} type="button" onClick={() => {if (workflow.id === 'deploy-model' && connection?.capabilities?.capabilities.includes('deployments.v1')) {setShowDeployment(true); return;} setComposer(workflow.prompt); window.requestAnimationFrame(() => composerRef.current?.focus());}}>{workflow.title}<ChevronRight size={13} /></button>)}</div></div>}
               {conversation.map((item) => item.kind === 'user'
-					? <UserMessage key={item.key} item={item} onEdit={editMessage} highlighted={highlightedMessageSequence === item.sequence} />
-                : <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
+					? <UserMessage key={item.key} item={item} onEdit={['starting', 'running', 'waiting'].includes(selectedTask.status) ? undefined : editMessage} highlighted={highlightedMessageSequence === item.sequence} />
+					: <AssistantTurn key={item.key} item={item} running={selectedTask.status === 'running' && !optimisticPrompt && item === conversation[conversation.length - 1]} canCheckModel={Boolean(effectiveModel?.provider === 'drobotics' && connection?.capabilities?.capabilities.includes('models.health.v1'))} checkingModel={checkingModel} onCheckModel={() => void checkModelHealth()} onRetry={() => retryFailedTurn(item)} />)}
 					{loadingLaterHistory && <div className="history-loading" role="status"><LoaderCircle size={14} className="spin" />Loading later messages</div>}
 					{optimisticPrompt?.taskId === selectedTask.id && !events.some((entry) => entry.normalized?.type === 'user.message' && String(entry.normalized.data?.text ?? '') === optimisticPrompt.text) && <UserMessage item={{kind: 'user', key: 'optimistic', sequence: Number.MAX_SAFE_INTEGER, time: optimisticPrompt.time, text: optimisticPrompt.text, attachments: optimisticPrompt.attachments.map((image) => ({name: image.name, mimeType: image.mimeType, preview: imageDataURL(image)})), source: 'user', scheduleId: ''}} />}
               {selectedTask.status === 'queued' ? <div className="agent-progress immediate"><ListTodo size={14} /><span>Waiting for a board Agent slot</span><small>{selectedTask.queuedAt ? relativeTime(selectedTask.queuedAt) : 'queued'}</small></div> : ['starting', 'running'].includes(selectedTask.status) && <AgentProgress startedAt={activityStart} now={activityClock} hasOutput={!optimisticPrompt && latestConversationItem?.kind === 'assistant' && Boolean(latestConversationItem.text || latestConversationItem.thinking || latestConversationItem.tools.length)} />}
@@ -1651,6 +1701,7 @@ function App() {
           {(hasLaterHistory || hasNewOutput) && <button className="jump-latest" onClick={scrollToLatest}><ArrowDown size={15} />{hasLaterHistory ? 'Latest' : 'New output'}</button>}
           <div className="composer-dock">
             {activeApproval && <ApprovalBar key={activeApproval.id} approval={activeApproval} busy={busy} respond={(response) => respond(activeApproval, response)} />}
+            {followups.length > 0 && <FollowupQueueCards items={followups} busy={busy} onCancel={async (queueId) => {if (!boardId || !selectedTask) return; setBusy(true); try {await api.cancelFollowup(boardId, selectedTask.id, queueId); setFollowups((items) => items.map((item) => item.id === queueId ? {...item, status: 'cancelled'} : item).filter((item) => item.status !== 'cancelled'));} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} onResume={async () => {if (!boardId || !selectedTask) return; setBusy(true); try {await api.resumeFollowups(boardId, selectedTask.id); const queue = await api.listFollowups(boardId, selectedTask.id); setFollowups(queue.items ?? []);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} onRetry={async (queueId) => {if (!boardId || !selectedTask) return; setBusy(true); try {await api.retryFollowup(boardId, selectedTask.id, queueId); const queue = await api.listFollowups(boardId, selectedTask.id); setFollowups(queue.items ?? []);} catch (reason) {setError(String(reason));} finally {setBusy(false);}}} />}
             <form className="composer" onSubmit={submitPrompt}>
               {editingMessage !== null && <div className="editing-banner"><FilePenLine size={14} /><span>{editingNeedsImages ? attachments.length ? 'Current attachments will replace the original images.' : 'Reattach the original images, or continue without them.' : 'Editing this message. Later messages will be replaced.'}</span>{editingNeedsImages && attachments.length === 0 && <button type="button" className="text-button" onClick={() => setEditingNeedsImages(false)}>Continue without images</button>}<button type="button" title="Cancel edit" onClick={() => {setEditingMessage(null); setEditingNeedsImages(false); setComposer('');}}><X size={14} /></button></div>}
               {attachments.length > 0 && <div className="attachment-tray">{attachments.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}><img src={imageDataURL(image)} alt="" /><span>{image.name || `Image ${index + 1}`}</span><button type="button" title="Remove image" onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={13} /></button></div>)}</div>}
@@ -1673,8 +1724,8 @@ function App() {
                 <label className="model-picker" title={canChangeModel ? 'Choose model' : 'Stop the current turn before changing models'}><select aria-label="Model" value={modelPickerValue} disabled={!canChangeModel} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>Board default</option>{selectedModel && !models.some((model) => `${model.provider}/${model.id}` === selectedModel) && <option value={selectedModel}>{selectedModel}</option>}{models.map((model) => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.provider === 'drobotics' ? model.name || model.id : `${model.provider} · ${model.name || model.id}`}</option>)}</select><ChevronDown size={12} /></label>
                 {connection?.capabilities?.capabilities.some((capability) => ['models.health.v1', 'models.conformance.v1', 'models.runtime-probe.v1', 'models.rdk-probe.v1'].includes(capability)) && <button className={`model-health-button model-readiness-button compact ${modelReadiness.tone}`} type="button" title={`${modelReadiness.label}: ${modelReadiness.title}`} aria-label={`Model readiness: ${modelReadiness.label}`} onClick={() => setShowModelReadiness(true)} disabled={!effectiveModel}>{checkingModel || verifyingModel || modelQualificationStage ? <LoaderCircle size={12} className="spin" /> : modelReadiness.tone === 'failed' ? <AlertTriangle size={12} /> : <ShieldCheck size={12} />}</button>}
 				<button className={`access-mode-button ${accessPresentation.tone}`} type="button" title={`${draftSelected ? `${selectedTask.workspaceMode === 'worktree' ? 'Isolated workspace' : 'Shared workspace'} · ` : ''}${accessPresentation.summary}`} aria-label="Task settings" onClick={() => setShowAccessSettings(true)}><ShieldCheck size={13} /><span>{draftSelected ? 'Task settings' : accessPresentation.label}</span><ChevronDown size={12} /></button>
-				<span className="composer-state">{connectionState !== 'online' ? 'Offline · draft preserved' : workspaceInspectionLoading ? 'Checking workspace' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
-                {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canCancelCurrentWork ? <button className="send-button stop-mode" type="button" title={cancellationMode === 'stop' ? 'Cancel queued task (Esc)' : 'Stop current turn (Esc)'} aria-label={cancellationMode === 'stop' ? 'Cancel queued task' : 'Stop current turn'} onClick={cancelCurrentWork} disabled={busy}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title="Send" disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
+                <span className="composer-state">{pendingUncertain ? 'Delivery uncertain · Send again to create a new request' : connectionState !== 'online' ? 'Offline · draft preserved' : workspaceInspectionLoading ? 'Checking workspace' : !supportsFollowupQueue && ['starting', 'running', 'waiting'].includes(selectedTask.status) ? 'Update board Agent to queue messages' : draftSelected || awaitingFirstPrompt ? 'Starts when sent' : editingMessage !== null ? 'Replaces later messages' : selectedComposerMode === 'resume' ? 'Resume session' : selectedComposerMode === 'restart' ? 'New session' : supportsFollowupQueue && ['starting', 'running', 'waiting'].includes(selectedTask.status) ? 'Queues after the current turn' : statusLabel[selectedTask.status] ?? selectedTask.status}</span>
+                {connectionState !== 'online' ? <button className="send-button reconnect-mode" type="button" title="Reconnect" onClick={() => void refreshWorkspace()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} /></button> : canCancelCurrentWork && !composer.trim() ? <button className="send-button stop-mode" type="button" title={cancellationMode === 'stop' ? 'Cancel queued task (Esc)' : 'Stop current turn (Esc)'} aria-label={cancellationMode === 'stop' ? 'Cancel queued task' : 'Stop current turn'} onClick={cancelCurrentWork} disabled={busy}><Square size={14} fill="currentColor" /></button> : <button className="send-button" type="submit" title={pendingUncertain ? 'Send again' : supportsFollowupQueue && ['starting', 'running', 'waiting'].includes(selectedTask.status) ? 'Queue message' : 'Send'} aria-label={pendingUncertain ? 'Send again' : supportsFollowupQueue && ['starting', 'running', 'waiting'].includes(selectedTask.status) ? 'Queue message' : 'Send'} disabled={!composer.trim() || composerBlocked}><ArrowUp size={17} /></button>}
               </div>
             </form>
           </div>
@@ -1740,6 +1791,23 @@ function ConversationNavigator({messages, activeSequence, onNavigate}: {messages
 function UserMessage({item, onEdit, highlighted = false}: {item: UserConversationItem; onEdit?: (item: UserConversationItem) => void; highlighted?: boolean}) {
   const scheduled = item.source === 'schedule';
   return <article id={`message-${item.sequence}`} data-user-message-sequence={item.sequence} className={`user-message${scheduled ? ' scheduled-message' : ''}${highlighted ? ' message-highlighted' : ''}`}>{scheduled && <div className="scheduled-message-label" title={item.scheduleId ? `Schedule ${item.scheduleId}` : 'Scheduled task'}><CalendarClock size={13} />Scheduled</div>}{item.attachments.length > 0 && <div className="message-attachments">{item.attachments.map((attachment, index) => attachment.preview ? <img key={`${attachment.name}-${index}`} src={attachment.preview} alt={attachment.name || `Attached image ${index + 1}`} /> : <span key={`${attachment.name}-${index}`}><Paperclip size={12} />{attachment.name || attachment.mimeType}</span>)}</div>}<div className="user-message-content">{item.text}</div><div className="message-actions"><time>{formatTime(item.time)}</time><CopyButton value={item.text} />{onEdit && !scheduled && <button className="copy-button" title="Edit from this point" onClick={() => onEdit(item)}><FilePenLine size={14} /></button>}</div></article>;
+}
+
+function FollowupQueueCards({items, busy, onCancel, onResume, onRetry}: {items: FollowupMessage[]; busy: boolean; onCancel: (id: string) => Promise<void>; onResume: () => Promise<void>; onRetry: (id: string) => Promise<void>}) {
+  const [confirmRetry, setConfirmRetry] = useState('');
+  const pending = items.filter((item) => ['queued', 'dispatching', 'blocked'].includes(item.status));
+  if (pending.length === 0) return null;
+  const hasSafeBlocked = pending.some((item) => item.status === 'blocked' && item.recovery !== 'retry');
+  return <section className="followup-queue" aria-label="Queued follow-up messages">
+    <div className="followup-queue-heading"><ListTodo size={14} /><strong>Follow-up messages</strong><span>{pending.length} pending</span></div>
+    {pending.map((item) => <div className={`followup-queue-item followup-${item.status}`} key={item.id}>
+      <span className="followup-queue-status">{item.status === 'dispatching' ? 'Sending' : item.status === 'blocked' ? 'Blocked' : 'Queued'}</span>
+      <span className="followup-queue-prompt">{item.prompt}</span>
+	  {(item.status === 'queued' || item.status === 'blocked') && <button type="button" className="copy-button" title="Cancel queued message" aria-label="Cancel queued message" onClick={() => void onCancel(item.id)} disabled={busy}><X size={13} /></button>}
+	  {item.status === 'blocked' && <><small className="followup-queue-reason">{item.reason || 'The current turn must recover before delivery.'}</small>{item.recovery === 'retry' && (confirmRetry === item.id ? <button type="button" className="secondary-button compact" onClick={() => {setConfirmRetry(''); void onRetry(item.id);}} disabled={busy}><RefreshCw size={13} />Retry anyway</button> : <button type="button" className="secondary-button compact" onClick={() => setConfirmRetry(item.id)} disabled={busy}><RefreshCw size={13} />Review retry</button>)}</>}
+    </div>)}
+    {hasSafeBlocked && <button type="button" className="secondary-button compact followup-resume" onClick={() => void onResume()} disabled={busy}><RefreshCw size={13} />Resume queued messages</button>}
+  </section>;
 }
 
 function AssistantTurn({item, running, canCheckModel, checkingModel, onCheckModel, onRetry}: {item: AssistantConversationItem; running: boolean; canCheckModel: boolean; checkingModel: boolean; onCheckModel: () => void; onRetry: () => void}) {

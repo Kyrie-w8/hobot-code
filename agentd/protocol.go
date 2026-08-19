@@ -30,6 +30,7 @@ var protocolCapabilities = []string{
 	"approvals.list",
 	"tasks.lifecycle",
 	"tasks.queue.v1",
+	"tasks.followup-queue.v1",
 	"tasks.failure.v1",
 	"tasks.turn-evidence.v1",
 	"tasks.page",

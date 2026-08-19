@@ -1071,7 +1071,76 @@ func runTaskCLI(cfg config, args []string) error {
 		if len(message) == 0 || len(message) > maxPromptBytes {
 			return fmt.Errorf("task prompt must contain 1 to %d bytes", maxPromptBytes)
 		}
-		return protocolCommand(client, args[1], workerCommand("prompt", map[string]any{"message": message}))
+		info, err := client.ping()
+		if err != nil {
+			return err
+		}
+		if !containsCapability(info.Capabilities.Capabilities, "tasks.followup-queue.v1") {
+			result, err := client.call("task.get", taskIDParams{TaskID: args[1]})
+			if err != nil {
+				return err
+			}
+			var metadata taskMetadata
+			if err := json.Unmarshal(result, &metadata); err != nil {
+				return err
+			}
+			if metadata.Status != statusIdle {
+				return fmt.Errorf("this board does not support follow-up message queueing; update agentd before sending while Working")
+			}
+			_, err = client.call("task.command", commandTaskParams{TaskID: args[1], Command: workerCommand("prompt", map[string]any{"message": message, "images": []imageContent{}})})
+			return err
+		}
+		result, submitErr := client.call("task.prompt.submit", promptSubmitParams{TaskID: args[1], Prompt: message, IdempotencyKey: fmt.Sprintf("cli-%d", time.Now().UnixNano())})
+		if submitErr != nil {
+			return submitErr
+		}
+		var submitted promptSubmitResult
+		if err := json.Unmarshal(result, &submitted); err != nil {
+			return err
+		}
+		if submitted.Disposition == "queued" && submitted.Item != nil {
+			fmt.Printf("Queued follow-up %s for task %s.\n", submitted.Item.ID, args[1])
+		}
+		return nil
+	case "queue-list":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: hobot task queue-list TASK_ID")
+		}
+		if err := requireFollowupQueue(client); err != nil {
+			return err
+		}
+		result, err := client.call("task.followup.list", followupQueueParams{TaskID: args[1]})
+		if err != nil {
+			return err
+		}
+		return printJSON(result)
+	case "queue-cancel":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task queue-cancel TASK_ID QUEUE_ID")
+		}
+		if err := requireFollowupQueue(client); err != nil {
+			return err
+		}
+		_, err := client.call("task.followup.cancel", followupCancelParams{TaskID: args[1], QueueID: args[2]})
+		return err
+	case "queue-resume":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: hobot task queue-resume TASK_ID")
+		}
+		if err := requireFollowupQueue(client); err != nil {
+			return err
+		}
+		_, err := client.call("task.followup.resume", followupQueueParams{TaskID: args[1]})
+		return err
+	case "queue-retry":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hobot task queue-retry TASK_ID QUEUE_ID")
+		}
+		if err := requireFollowupQueue(client); err != nil {
+			return err
+		}
+		_, err := client.call("task.followup.retry", followupRetryParams{TaskID: args[1], QueueID: args[2]})
+		return err
 	case "abort":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: hobot task abort TASK_ID")
@@ -1266,6 +1335,10 @@ Usage:
   hobot task logs TASK_ID [--after SEQUENCE] [--follow]
   hobot task attach TASK_ID [--after SEQUENCE | --replay-all]
   hobot task send TASK_ID [--] PROMPT
+  hobot task queue-list TASK_ID
+  hobot task queue-cancel TASK_ID QUEUE_ID
+  hobot task queue-resume TASK_ID
+  hobot task queue-retry TASK_ID QUEUE_ID
   hobot task abort TASK_ID
   hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE
   hobot task approvals TASK_ID [--details]
@@ -1302,6 +1375,7 @@ func printRequestedTaskHelp(args []string, output io.Writer) bool {
 		"list":  "hobot task list [--all]", "show": "hobot task show TASK_ID [--details]",
 		"logs": "hobot task logs TASK_ID [--after SEQUENCE] [--follow]", "attach": "hobot task attach TASK_ID [--after SEQUENCE | --replay-all]",
 		"send": "hobot task send TASK_ID [--] PROMPT", "abort": "hobot task abort TASK_ID",
+		"queue-list": "hobot task queue-list TASK_ID", "queue-cancel": "hobot task queue-cancel TASK_ID QUEUE_ID", "queue-resume": "hobot task queue-resume TASK_ID", "queue-retry": "hobot task queue-retry TASK_ID QUEUE_ID",
 		"respond": "hobot task respond TASK_ID REQUEST_ID yes|no|cancel|VALUE", "approvals": "hobot task approvals TASK_ID [--details]",
 		"resume": "hobot task resume TASK_ID [-- PROMPT]", "restart": "hobot task restart TASK_ID [--] PROMPT",
 		"rename": "hobot task rename TASK_ID NAME", "archive": "hobot task archive TASK_ID",
@@ -1315,6 +1389,17 @@ func printRequestedTaskHelp(args []string, output io.Writer) bool {
 	}
 	fmt.Fprintf(output, "Usage:\n  %s\n", commandUsage)
 	return true
+}
+
+func requireFollowupQueue(client daemonClient) error {
+	info, err := client.ping()
+	if err != nil {
+		return err
+	}
+	if !containsCapability(info.Capabilities.Capabilities, "tasks.followup-queue.v1") {
+		return fmt.Errorf("this board does not support follow-up message queueing; update agentd before sending while Working")
+	}
+	return nil
 }
 
 func taskHelpRequested(command string, args []string) bool {

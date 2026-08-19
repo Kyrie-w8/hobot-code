@@ -684,6 +684,102 @@ func (server *daemonServer) dispatch(connection *net.UnixConn, req request) {
 			return
 		}
 		_ = writeJSON(connection, success(req.ID, map[string]bool{"accepted": true}))
+	case "task.followup.enqueue":
+		var params followupEnqueueParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
+			return
+		}
+		item, err := current.enqueueFollowup(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_followup_enqueue_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, item))
+	case "task.prompt.submit":
+		var params promptSubmitParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
+			return
+		}
+		result, err := current.submitPrompt(params)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_prompt_submit_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "task.followup.list":
+		var params followupQueueParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_not_found", err))
+			return
+		}
+		result, err := current.listFollowups()
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_followup_list_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, result))
+	case "task.followup.cancel":
+		var params followupCancelParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err == nil {
+			err = current.cancelFollowup(params.QueueID)
+		}
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_followup_cancel_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, map[string]bool{"cancelled": true}))
+	case "task.followup.resume":
+		var params followupQueueParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err == nil {
+			err = current.resumeFollowups()
+		}
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_followup_resume_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, map[string]bool{"resumed": true}))
+	case "task.followup.retry":
+		var params followupRetryParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			_ = writeJSON(connection, failure(req.ID, "invalid_params", err))
+			return
+		}
+		current, err := server.manager.get(params.TaskID)
+		if err == nil {
+			err = current.retryFollowup(params.QueueID)
+		}
+		if err != nil {
+			_ = writeJSON(connection, failure(req.ID, "task_followup_retry_failed", err))
+			return
+		}
+		_ = writeJSON(connection, success(req.ID, map[string]bool{"retried": true}))
 	case "task.model":
 		var params setTaskModelParams
 		if err := decodeParams(req.Params, &params); err != nil {

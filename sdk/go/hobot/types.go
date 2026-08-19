@@ -474,45 +474,73 @@ type Approval struct {
 }
 
 type Task struct {
-	ID               string             `json:"id"`
-	Name             string             `json:"name"`
-	Cwd              string             `json:"cwd"`
-	ProjectCwd       string             `json:"projectCwd,omitempty"`
-	WorkspaceMode    string             `json:"workspaceMode"`
-	WorkspaceID      string             `json:"workspaceId,omitempty"`
-	WorktreePath     string             `json:"worktreePath,omitempty"`
-	WorktreeBase     string             `json:"worktreeBase,omitempty"`
-	Status           string             `json:"status"`
-	PID              int                `json:"pid,omitempty"`
-	CreatedAt        time.Time          `json:"createdAt"`
-	UpdatedAt        time.Time          `json:"updatedAt"`
-	LastSequence     uint64             `json:"lastSequence"`
-	LogTruncated     bool               `json:"logTruncated,omitempty"`
-	LastError        string             `json:"lastError,omitempty"`
-	Failure          *TaskFailure       `json:"failure,omitempty"`
-	SessionFile      string             `json:"sessionFile,omitempty"`
-	SessionID        string             `json:"sessionId,omitempty"`
-	Approved         bool               `json:"approved,omitempty"`
-	ResumeCount      int                `json:"resumeCount,omitempty"`
-	RestartCount     int                `json:"restartCount,omitempty"`
-	Model            string             `json:"model,omitempty"`
-	ApprovalModel    string             `json:"approvalModel,omitempty"`
-	PermissionMode   string             `json:"permissionMode,omitempty"`
-	SandboxMode      string             `json:"sandboxMode"`
-	NetworkMode      string             `json:"networkMode"`
-	Sandbox          TaskSandboxStatus  `json:"sandbox"`
-	ParentTaskID     string             `json:"parentTaskId,omitempty"`
-	SourceTaskID     string             `json:"sourceTaskId,omitempty"`
-	ForkSequence     uint64             `json:"forkSequence,omitempty"`
-	BranchKind       string             `json:"branchKind,omitempty"`
-	CurrentActivity  string             `json:"currentActivity,omitempty"`
-	AwaitingPrompt   bool               `json:"awaitingPrompt,omitempty"`
-	QueuedAt         *time.Time         `json:"queuedAt,omitempty"`
-	QueueOperation   string             `json:"queueOperation,omitempty"`
-	ArchivedAt       *time.Time         `json:"archivedAt,omitempty"`
-	PendingApprovals []Approval         `json:"pendingApprovals,omitempty"`
-	Deployment       *DeploymentRecord  `json:"deployment,omitempty"`
-	TurnEvidence     []TaskTurnEvidence `json:"turnEvidence,omitempty"`
+	ID                  string             `json:"id"`
+	Name                string             `json:"name"`
+	Cwd                 string             `json:"cwd"`
+	ProjectCwd          string             `json:"projectCwd,omitempty"`
+	WorkspaceMode       string             `json:"workspaceMode"`
+	WorkspaceID         string             `json:"workspaceId,omitempty"`
+	WorktreePath        string             `json:"worktreePath,omitempty"`
+	WorktreeBase        string             `json:"worktreeBase,omitempty"`
+	Status              string             `json:"status"`
+	PID                 int                `json:"pid,omitempty"`
+	CreatedAt           time.Time          `json:"createdAt"`
+	UpdatedAt           time.Time          `json:"updatedAt"`
+	LastSequence        uint64             `json:"lastSequence"`
+	LogTruncated        bool               `json:"logTruncated,omitempty"`
+	LastError           string             `json:"lastError,omitempty"`
+	Failure             *TaskFailure       `json:"failure,omitempty"`
+	SessionFile         string             `json:"sessionFile,omitempty"`
+	SessionID           string             `json:"sessionId,omitempty"`
+	Approved            bool               `json:"approved,omitempty"`
+	ResumeCount         int                `json:"resumeCount,omitempty"`
+	RestartCount        int                `json:"restartCount,omitempty"`
+	Model               string             `json:"model,omitempty"`
+	ApprovalModel       string             `json:"approvalModel,omitempty"`
+	PermissionMode      string             `json:"permissionMode,omitempty"`
+	SandboxMode         string             `json:"sandboxMode"`
+	NetworkMode         string             `json:"networkMode"`
+	Sandbox             TaskSandboxStatus  `json:"sandbox"`
+	ParentTaskID        string             `json:"parentTaskId,omitempty"`
+	SourceTaskID        string             `json:"sourceTaskId,omitempty"`
+	ForkSequence        uint64             `json:"forkSequence,omitempty"`
+	BranchKind          string             `json:"branchKind,omitempty"`
+	CurrentActivity     string             `json:"currentActivity,omitempty"`
+	AwaitingPrompt      bool               `json:"awaitingPrompt,omitempty"`
+	QueuedAt            *time.Time         `json:"queuedAt,omitempty"`
+	QueueOperation      string             `json:"queueOperation,omitempty"`
+	ArchivedAt          *time.Time         `json:"archivedAt,omitempty"`
+	PendingApprovals    []Approval         `json:"pendingApprovals,omitempty"`
+	Deployment          *DeploymentRecord  `json:"deployment,omitempty"`
+	TurnEvidence        []TaskTurnEvidence `json:"turnEvidence,omitempty"`
+	FollowupQueuePaused bool               `json:"followupQueuePaused,omitempty"`
+}
+
+type PromptSubmitResult struct {
+	Disposition string           `json:"disposition"`
+	Item        *FollowupMessage `json:"item,omitempty"`
+	Uncertain   bool             `json:"uncertain,omitempty"`
+}
+
+type FollowupMessage struct {
+	ID             string               `json:"id"`
+	Prompt         string               `json:"prompt"`
+	Status         string               `json:"status"`
+	IdempotencyKey string               `json:"idempotencyKey,omitempty"`
+	QueuedAt       time.Time            `json:"queuedAt"`
+	UpdatedAt      time.Time            `json:"updatedAt"`
+	Reason         string               `json:"reason,omitempty"`
+	Recovery       string               `json:"recovery,omitempty"`
+	Attachments    []FollowupAttachment `json:"attachments,omitempty"`
+}
+
+type FollowupAttachment struct {
+	Name     string `json:"name,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+type FollowupQueue struct {
+	Items []FollowupMessage `json:"items"`
 }
 
 type TurnWorkspaceEvidence struct {

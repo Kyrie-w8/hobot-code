@@ -94,6 +94,12 @@
 | `task.delete` | `{taskId}` | 删除已归档的终态任务及本地日志 |
 | `task.resume` | `{taskId, prompt?, images?}` | 重新打开已校验的 Pi session，可选发送新 Prompt 与图片 |
 | `task.restart` | `{taskId, prompt, images?}` | 保留任务记录与工作目录，启动一个不继承旧上下文的新 session |
+| `task.prompt.submit` | `{taskId, prompt, images?, idempotencyKey?}` | 在 agentd 同一把任务锁内决定 idle 直接发送，或在 starting/running/waiting 时持久入 follow-up 消息队列；返回 `disposition: sent|queued`，交接状态不确定时另返回 `uncertain: true`，不得自动重发 |
+| `task.followup.enqueue` | `{taskId, prompt, images?, idempotencyKey?}` | 显式将后续消息加入同一任务的 FIFO follow-up 队列；不创建新任务或分支 |
+| `task.followup.list` | `{taskId}` | 返回仍需处理的 queued/blocked 项，不返回图片数据或已完成正文 tombstone；blocked 项带结构化 `recovery: resume|retry` |
+| `task.followup.cancel` | `{taskId, queueId}` | 原子取消尚未交付的单条 queued/blocked 项 |
+| `task.followup.resume` | `{taskId}` | 在显式恢复后重新 arm 普通 blocked 项；不自动重试 daemon 重启造成的 uncertain handoff |
+| `task.followup.retry` | `{taskId, queueId}` | 用户明确确认后重试一条 uncertain handoff 项 |
 | `task.fork` | `{taskId, sequence?, prompt?, images?, name?, kind, model?, approvalModel?, permissionMode?, sandboxMode?, networkMode?}` | `side` 从最新稳定上下文创建独立任务，Prompt 可省略并在首条消息时启动；`edit` 从指定用户消息之前创建替换时间线且必须提供 Prompt；未指定审批模型时继承来源任务 |
 | `task.model` | `{taskId, provider, modelId}` | 为 idle worker 切换模型，或为 queued/终态任务持久化下次启动使用的模型 |
 | `task.permissions` | `{taskId, mode}` | 为 idle、queued 或终态任务设置独立的 `review`、`ask`、`auto-review` 或 `developer` 权限策略；客户端只有在服务声明 `tasks.permissions.llm-review.v1` 时才把 `auto-review` 显示为模型版 **Approve for me** |
@@ -136,6 +142,10 @@
 
 `task.command` 当前支持 Pi RPC 的 `prompt`、`abort`、`set_model` 与 `extension_ui_response`。`prompt` 可携带最多 4 个 `ImageContent` 项；每项包含 `type: "image"`、base64 `data`、受支持的 `mimeType`，以及仅用于显示的可选 `name`。板端会校验数量、MIME、base64 和总大小，事件日志只记录附件名称与 MIME 摘要，不持久化图片数据。客户端应使用 `task.model` 切换模型：活动 worker 只在 `idle` 时接受，`stopped`、`failed` 和 `interrupted` 任务会将选择写入元数据并在下次 Resume/Restart 生效。`task.permissions` 为每个任务写入私有策略文件；`review` 禁止变更，`ask` 确认变更，`developer` 放行日常 Shell 与工作区编辑，但破坏性命令、受保护路径、持久状态与未知/MCP 工具仍由板端保护或确认。审批事件沿用 worker 的请求 ID；客户端只能回复当前活跃 ID。审批队列最多保留 16 项，文本、选项数和超时均有上限。权限结果始终在板端 worker 内判定，客户端无法绕过。
 
+声明 `tasks.followup-queue.v1` 的服务支持同一主任务的后续消息队列。队列最多保留 10 条未完成消息，所有 queued/blocked Prompt 文本合计最多 256 KiB；图片沿用每条 Prompt 最多 4 张、解码后 1 MiB 的现有限制，队列文件还有独立有界存储上限。排队消息立即产生 `followup.queued` 生命周期事件，但只有真正 dispatch 前才产生一次带 `queueId` 的 `user.message`，因此排队消息不会污染当前回合或成为 edit anchor。`task.prompt.submit` 是客户端普通发送入口，避免客户端缓存状态在 idle/running 转换时选择错误路径。
+
+非空 `idempotencyKey` 会同时覆盖 direct send 与 follow-up queue。agentd 在写 worker 前先持久化 direct `dispatching` receipt；同 key 重试只返回原结果，`dispatching`/`uncertain` 返回 `uncertain: true`，不会再次写入 worker。队列 item 已变为 `sent` 后，即使任务已经 idle，同 key 重试也不会重新 direct send；已 `cancelled` 的 key 只能报冲突，新的用户意图必须使用新 key。
+
 ## 任务状态
 
 ```text
@@ -148,6 +158,8 @@ agentd 停止或重启时的已启动状态 -> interrupted
 ```
 
 `queued` 表示请求和 Prompt 已在板端以私有文件原子落盘，但尚未启动 worker。队列按入队时间 FIFO 调度；worker 槽释放或现有 Agent 完成本轮进入 `idle` 后，服务会挂起最久未使用的 idle worker并启动队首。调度器会在启动 worker 前先把队列项原子标记为 `launching`：若服务在交接窗口崩溃，该任务恢复为 `interrupted` 并要求用户显式 Resume/Restart，绝不猜测并重放可能已经产生副作用的工作。`task.stop` 可取消尚未执行的队列项。`idle` 表示 worker 仍在等待下一轮输入，不是任务进程已经退出。`waiting` 表示 Agent 正在等待确认、选择或补充输入。`stopped`、`failed` 和 `interrupted` 为终态。它们不会自动重启 worker；具有安全 session 绑定的未归档任务可通过 `task.resume` 续接上下文，没有可用 session 或需要明确丢弃上下文时可通过 `task.restart` 启动新会话。空白 Side Agent 以 `stopped` 和 `awaitingPrompt: true` 持久化，不启动 worker、不占活跃任务槽；客户端发送首条消息时通过 `task.resume` 从私有分支 session 启动。`agentd` 只有在 worker 返回的 session 文件已经真实创建、位于配置的 session 目录内且通过私有文件检查后才持久化绑定；启动恢复时会清除已经失效的绑定，避免客户端展示一个必然失败的 Resume。
+
+Follow-up 消息使用独立状态，不要与 task launch 的 `queued` 混淆：`queued -> dispatching -> sent`；用户可在未交付时将 `queued` 或 `blocked` 变为 `cancelled`。当前回合失败、Abort、Stop 或模型最终重试失败会把剩余消息变为 `blocked`，不会在随后 `agent_settled` 时自动继续；显式恢复后才会重新 arm 普通 blocked 项。daemon 在 `dispatching` 交接窗口重启时标记为 uncertain blocked，必须对具体 `queueId` 调用 `task.followup.retry` 才可重试。审批 waiting 只暂停出队，排队消息绝不会作为 `extension_ui_response`。
 
 支持空白 Side Agent 的服务声明 `tasks.fork.deferred-prompt.v1`。客户端不得仅凭 `tasks.fork` 推断 Prompt 可省略；连接旧服务时应提示升级，而不是发送必然失败的创建请求。
 
@@ -167,6 +179,7 @@ tasks/<task-id>/metadata.json
 tasks/<task-id>/events.jsonl
 tasks/<task-id>/worker.stderr.log
 tasks/<task-id>/queue.json                # queued 及短暂 starting 交接状态
+tasks/<task-id>/followup-queue.json       # 同一 task 的 follow-up 消息及 blocked/uncertain 状态
 ```
 
 目录和文件分别使用 `0700` 与 `0600`。元数据使用临时文件加原子重命名更新；恢复时拒绝符号链接、异常所有者、宽松权限、超限文件和无效任务 ID。事件日志每个任务默认最多 16 MiB，可通过 `HOBOT_CODE_MAX_EVENT_MIB=1..64` 调整。达到上限后，agentd 以原子方式滚动为连续的最新事件窗口，并继续持久化后续事件，不会因为旧历史占满空间而只向在线客户端发送。worker stderr 与 agentd 故障细节合计最多保留 1 MiB；支持文件最多 4 MiB、只保留最近 5 份；每次生成都使用原子私有写入。
