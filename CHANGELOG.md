@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.29.1
+
+### Changed
+
+- Increase the bounded approval-model output budget for reasoning models so they can emit the required final JSON decision after thinking.
+- Document the complete `Approve for me` flow, exact runtime system prompt, provider request envelopes, response schema, redaction rules, limits, and fail-closed behavior in the user guide.
+
 ## 0.29.0
 
 ### Added

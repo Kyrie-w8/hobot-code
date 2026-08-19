@@ -33,7 +33,7 @@ func TestPermissionReviewerReservesOutputForReasoningModels(t *testing.T) {
 	if err != nil || !bytes.Contains(content, []byte(`"decision":"approved"`)) {
 		t.Fatalf("reasoning response was not decoded: %q err=%v", content, err)
 	}
-	if request["max_tokens"] != float64(permissionReviewMaxTokens) || permissionReviewMaxTokens < 1024 {
+	if request["max_tokens"] != float64(permissionReviewMaxTokens) || permissionReviewMaxTokens < 4096 {
 		t.Fatalf("reviewer output budget is too small for reasoning models: %+v", request["max_tokens"])
 	}
 }

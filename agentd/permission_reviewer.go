@@ -21,7 +21,7 @@ const (
 	maximumPermissionReviewInput  = 128 * 1024
 	maximumPermissionModelOutput  = 256 * 1024
 	maximumPermissionReviewText   = 2048
-	permissionReviewMaxTokens     = 1024
+	permissionReviewMaxTokens     = 4096
 	permissionReviewAuditMaxBytes = 5 * 1024 * 1024
 )
 
