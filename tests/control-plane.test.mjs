@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, processControlShellReasons, resolveShellSafety, sanitizedChildEnv, unboundedRemoteScanReasons } from "../extensions/rdk/runtime-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, networkShellReasons, processControlShellReasons, resolveShellSafety, sanitizedChildEnv, shellReviewFacts, unboundedRemoteScanReasons } from "../extensions/rdk/runtime-safety.mjs";
 import { analyzeShellCommand } from "../extensions/rdk/shell-command-safety.mjs";
 import { actionFingerprint, createPermissionReviewer, hardPermissionReviewBoundary } from "../extensions/rdk/permission-reviewer.mjs";
 
@@ -149,6 +149,24 @@ test("approval reviewer auto-routes reversible schedule control but asks before 
     assert.equal(result.source, "hard-safety-boundary", command);
   }
   assert.equal(calls, 1);
+});
+
+test("remote destructive commands reach the deterministic human boundary", async () => {
+  const command = 'pkill -9 -f "hf download"; rm -rf /mnt/data/models/Qwen2.5-1.5B-Instruct';
+  const input = {target: "builder", command};
+  const facts = {...shellReviewFacts(command, "shared"), remote: true};
+  assert.ok(facts.destructiveReasons.includes("terminates running processes"));
+  assert.ok(facts.destructiveReasons.includes("removes or destroys files"));
+
+  let reviewed = false;
+  const reviewer = createPermissionReviewer({review: async () => {
+    reviewed = true;
+    return {status: "approved"};
+  }});
+  const result = await autoReview(reviewer, "openexplorer_remote_run", input, facts);
+  assert.equal(result.status, "manual-required");
+  assert.equal(result.source, "hard-safety-boundary");
+  assert.equal(reviewed, false);
 });
 
 test("approval reviewer accepts an inbound bounded model metadata transfer", async () => {

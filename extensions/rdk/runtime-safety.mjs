@@ -123,6 +123,17 @@ export function networkShellReasons(command) {
   return analyzeShellCommand(command).networkReasons;
 }
 
+export function shellReviewFacts(command, networkBoundary) {
+  const analysis = analyzeShellCommand(command);
+  return {
+    destructiveReasons: analysis.destructiveReasons,
+    networkReasons: analysis.networkReasons,
+    ambiguousReasons: analysis.ambiguousReasons,
+    executables: analysis.executables,
+    networkBoundary,
+  };
+}
+
 // A remote find over shared/FUSE storage can wait indefinitely for metadata.
 // Require an explicit timeout before the shell process is started so the Agent
 // remains cancellable and the UI can return to the composer on slow mounts.

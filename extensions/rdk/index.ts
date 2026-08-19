@@ -72,8 +72,7 @@ import {
 } from "./openexplorer-build-host.mjs";
 import { detachPersistentTmuxClient } from "./persistent-tmux.mjs";
 import { registerSideAgent } from "./side-agent.ts";
-import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety, unboundedRemoteScanReasons } from "./runtime-safety.mjs";
-import { analyzeShellCommand } from "./shell-command-safety.mjs";
+import { destructiveShellReasons, effectiveNetworkAction, inspectResolvedPath, resolveShellSafety, shellReviewFacts, unboundedRemoteScanReasons } from "./runtime-safety.mjs";
 import { AUTO_REVIEW_MODE, createPermissionReviewer } from "./permission-reviewer.mjs";
 import { toWellFormedText } from "./text-safety.mjs";
 import { resolveUserPaths } from "./user-paths.mjs";
@@ -1827,12 +1826,7 @@ export default function rdkExtension(pi: ExtensionAPI) {
         };
       }
       const sandbox = sandboxRuntimeStatus();
-      const shellAnalysis = analyzeShellCommand(command);
-      reviewFacts.destructiveReasons = shellAnalysis.destructiveReasons;
-      reviewFacts.networkReasons = shellAnalysis.networkReasons;
-      reviewFacts.ambiguousReasons = shellAnalysis.ambiguousReasons;
-      reviewFacts.executables = shellAnalysis.executables;
-      reviewFacts.networkBoundary = sandbox.network;
+      Object.assign(reviewFacts, shellReviewFacts(command, sandbox.network));
       const shellSafety = resolveShellSafety(
         command,
         effectiveNetworkAction(resolveToolCallAction(permissionPolicy, "network", event.input), sandbox.network),
@@ -1870,7 +1864,9 @@ export default function rdkExtension(pi: ExtensionAPI) {
             : `network access is denied by ${permissionPolicyPath()}` };
       }
       if (event.toolName === "openexplorer_remote_run") {
-        const remoteSafety = resolveShellSafety(String(event.input.command ?? ""), networkAction);
+        const remoteCommand = String(event.input.command ?? "");
+        Object.assign(reviewFacts, shellReviewFacts(remoteCommand, sandbox.network));
+        const remoteSafety = resolveShellSafety(remoteCommand, networkAction);
         approvalReasons.push(...remoteSafety.approvalReasons);
         canAllowTaskNetwork = canAllowTaskNetwork || remoteSafety.rememberNetworkCall;
       }
