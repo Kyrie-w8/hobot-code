@@ -870,6 +870,9 @@ export function analyzeShellCommand(command) {
         if (name === "systemctl" && ["daemon-reload", "disable", "enable", "halt", "isolate", "mask", "poweroff", "preset", "reboot", "reload", "restart", "start", "stop", "unmask"].includes(systemctlAction)) {
           pushUnique(result.destructiveReasons, ["changes or stops a system service"]);
         }
+        if (name === "systemctl" && ["halt", "poweroff", "reboot"].includes(systemctlAction)) {
+          pushUnique(result.destructiveReasons, ["stops or reboots the board"]);
+        }
         if (name === "systemctl" && ["edit", "kill", "link", "revert", "set-default", "set-property"].includes(systemctlAction)) {
           pushUnique(result.destructiveReasons, ["changes system service configuration or process state"]);
         }

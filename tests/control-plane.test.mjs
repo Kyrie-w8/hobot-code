@@ -130,7 +130,7 @@ test("hard safety boundary is narrow and ignores adversarial prose in ordinary a
   assert.equal(called, false);
 });
 
-test("approval reviewer auto-routes reversible schedule control but asks before external impact", async () => {
+test("approval reviewer delegates scoped mutations while retaining critical device boundaries", async () => {
   let calls = 0;
   const reviewer = createPermissionReviewer({ review: async (request) => {
     calls += 1;
@@ -145,13 +145,16 @@ test("approval reviewer auto-routes reversible schedule control but asks before 
     const input = {command};
     const analysis = analyzeShellCommand(command);
     const result = await autoReview(reviewer, "bash", input, {destructiveReasons: analysis.destructiveReasons});
-    assert.equal(result.status, "manual-required", command);
-    assert.equal(result.source, "hard-safety-boundary", command);
+    assert.equal(result.status, "approved", command);
+    assert.equal(result.source, "approval-model", command);
   }
-  assert.equal(calls, 1);
+  const reboot = {command: "systemctl reboot"};
+  const rebootFacts = shellReviewFacts(reboot.command, "shared");
+  assert.equal((await autoReview(reviewer, "bash", reboot, rebootFacts)).status, "manual-required");
+  assert.equal(calls, 4);
 });
 
-test("remote destructive commands reach the deterministic human boundary", async () => {
+test("remote scoped cleanup reaches the approval model with complete risk facts", async () => {
   const command = 'pkill -9 -f "hf download"; rm -rf /mnt/data/models/Qwen2.5-1.5B-Instruct';
   const input = {target: "builder", command};
   const facts = {...shellReviewFacts(command, "shared"), remote: true};
@@ -159,14 +162,14 @@ test("remote destructive commands reach the deterministic human boundary", async
   assert.ok(facts.destructiveReasons.includes("removes or destroys files"));
 
   let reviewed = false;
-  const reviewer = createPermissionReviewer({review: async () => {
+  const reviewer = createPermissionReviewer({review: async (request) => {
     reviewed = true;
-    return {status: "approved"};
+    return {status: "approved", source: "approval-model", fingerprint: actionFingerprint(request.tool, request.input), reasons: ["scoped cleanup matches user intent"]};
   }});
   const result = await autoReview(reviewer, "openexplorer_remote_run", input, facts);
-  assert.equal(result.status, "manual-required");
-  assert.equal(result.source, "hard-safety-boundary");
-  assert.equal(reviewed, false);
+  assert.equal(result.status, "approved");
+  assert.equal(result.source, "approval-model");
+  assert.equal(reviewed, true);
 });
 
 test("approval reviewer accepts an inbound bounded model metadata transfer", async () => {

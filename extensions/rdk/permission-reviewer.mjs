@@ -28,19 +28,8 @@ const SECURITY_ACCESS_PATH = /(?:sshd_config|authorized_keys|\/etc\/(?:shadow|su
 const SECURITY_WEAKENING_COMMAND = /(?:^|[;&|]\s*)(?:sudo\s+)?(?:(?:iptables|ip6tables)\s+-F\b|nft\s+flush\s+ruleset\b|(?:systemctl|service)\s+(?:disable|stop)\s+(?:auditd|firewalld|ufw|sshd?)\b)/iu;
 const SECRET_EGRESS_CLIENT = /(?:^|[;&|]\s*)(?:sudo\s+)?(?:curl|wget|nc|ncat|ssh|scp|sftp)\b/iu;
 const SECRET_REFERENCE = /(?:\$(?:\{)?[A-Za-z_][A-Za-z0-9_]*(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*(?:\})?|\bBearer\s+[A-Za-z0-9._~+/-]{12,}|sk-[A-Za-z0-9_-]{12,}|\.ssh\/|\.gnupg\/|authorized_keys)/iu;
-const HUMAN_IMPACT_REASONS = new Set([
-  "removes or destroys files",
-  "deletes files through find",
-  "terminates running processes",
-  "changes or stops a system service",
-  "changes system service configuration or process state",
+const CRITICAL_DEVICE_REASONS = new Set([
   "stops or reboots the board",
-  "performs a destructive or forceful Git operation",
-  "performs a privileged or destructive container operation",
-  "changes cluster state or executes inside a workload",
-  "deletes Hobot Code task state",
-  "deletes Hobot Code schedule state",
-  "removes or replaces Hobot Code persistent task and conversation state",
   "changes a filesystem or partition table",
   "writes directly to a block or device node",
 ]);
@@ -66,7 +55,7 @@ export function hardPermissionReviewBoundary(tool, input, facts = {}) {
   if ((tool === "write" || tool === "edit") && CREDENTIAL_OR_ACCESS_PATH.test(target)) reasons.push("the action writes authentication, credential, or privileged access configuration");
   const destructiveReasons = Array.isArray(facts.destructiveReasons) ? facts.destructiveReasons : [];
   for (const reason of destructiveReasons) {
-    if (HUMAN_IMPACT_REASONS.has(String(reason))) reasons.push(`the action ${reason}`);
+    if (CRITICAL_DEVICE_REASONS.has(String(reason))) reasons.push(`the action ${reason}`);
   }
   return reasons;
 }

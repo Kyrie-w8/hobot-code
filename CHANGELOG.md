@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- Route destructive remote-build commands through the same deterministic human-approval boundary as local Shell commands, without invoking the approval model first.
+- Preserve complete destructive and network facts for remote-build commands, while allowing the approval model to decide scoped cleanup and lifecycle actions instead of forcing confirmation from the command name alone.
 
 ## 0.29.0
 
