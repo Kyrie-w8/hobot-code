@@ -181,6 +181,10 @@ test("routine commands bypass the approval model while meaningful side effects r
     "the remote build host requires network access",
   ];
   assert.equal(routineActionNeedsNoReview("openexplorer_remote_run", {target: "openexplorer-builder", command}, facts, reasons), true);
+  assert.equal(routineActionNeedsNoReview("openexplorer_build_host", {action: "status"}, {}, ["the permission policy requires confirmation"]), true);
+  assert.equal(routineActionNeedsNoReview("openexplorer_build_host", {action: "select", target: "openexplorer-builder"}, {}, ["the permission policy requires confirmation", "root strict mode requires confirmation for every mutation-capable tool"]), true);
+  assert.equal(routineActionNeedsNoReview("openexplorer_build_host", {action: "probe", target: "openexplorer-builder"}, {remote: true}, ["the permission policy requires confirmation", "root strict mode requires confirmation for every mutation-capable tool", "the remote build host requires network access"]), true);
+  assert.equal(routineActionNeedsNoReview("openexplorer_build_host", {action: "remove", target: "openexplorer-builder"}, {}, ["the permission policy requires confirmation"]), false);
   assert.equal(routineActionNeedsNoReview("write", {path: "src/main.c"}, {withinWorkspace: true}, ["the permission policy requires confirmation"]), true);
   assert.equal(routineActionNeedsNoReview("write", {path: "/etc/service.conf"}, {outsideWorkspace: true, criticalPath: true}, reasons), false);
   assert.equal(routineActionNeedsNoReview("bash", {command: "kill 1234"}, shellReviewFacts("kill 1234", "shared"), reasons), false);

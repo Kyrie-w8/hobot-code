@@ -1028,7 +1028,7 @@ hobot extensions --task <task-id>
 - `Optional · off`：包内存在但未进入客户目录，默认不加载。
 - `OpenExplorer Skills · Partially inspected`：实际目录和客户目录数量不一致；展开条目可查看来源与证据说明。
 
-当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA；Ask 模式对远端访问进行审批，Developer 模式直接执行普通远端命令，但两种模式都会继续拦截删除、系统修改等破坏性操作。主机选择只保存在当前任务，不会回写官方 Skill。
+当 Skill 进入量化、模型适配、校准、BC 或 HBM 编译阶段时，Agent 会要求选择 S600 可直连的 x86_64 SSH 构建机。输入预先配置在板端 `~/.ssh/config` 中的别名最方便。Hobot Code 会先探测远端架构和 CUDA；`Approve for me` 会直接完成任务内的主机状态、选择、探测和普通远端命令，不调用审批模型，只有实际副作用才进入模型审阅。Ask 模式仍对远端访问进行审批，Developer 模式直接执行普通远端命令；所有模式都会继续拦截宽泛破坏、凭据外传和审批基础设施篡改。主机选择只保存在当前任务，不会回写官方 Skill。
 
 审批不再提供「Allow this exact call for this task」。对可安全限定范围的请求，界面改为显示语义明确的选项，例如 **Allow network for this task**。它只放开当前任务的通用网络检查，不会放开 root、文件、硬件或破坏性命令权限。
 

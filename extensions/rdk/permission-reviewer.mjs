@@ -77,7 +77,7 @@ export function hardPermissionReviewBoundary(tool, input, facts = {}) {
 
 export function routineActionNeedsNoReview(tool, input, facts = {}, reasons = []) {
   if (!ROUTINE_DIRECT_TOOLS.has(String(tool))) return false;
-  if (tool === "openexplorer_build_host" && input?.action !== "probe") return false;
+  if (tool === "openexplorer_build_host" && !["status", "select", "probe"].includes(String(input?.action ?? ""))) return false;
   if (hardPermissionReviewBoundary(tool, input, facts).length > 0) return false;
   const destructive = Array.isArray(facts.destructiveReasons) ? facts.destructiveReasons : [];
   const ambiguous = Array.isArray(facts.ambiguousReasons) ? facts.ambiguousReasons : [];

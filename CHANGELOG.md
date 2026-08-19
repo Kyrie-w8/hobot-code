@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.3
+
+- Treat task-scoped OpenExplorer build-host status, selection, and probe operations as routine actions in `Approve for me`, so they run directly without an approval-model round trip.
+
 ## 0.29.2
 
 ### Changed
