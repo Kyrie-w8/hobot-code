@@ -204,7 +204,20 @@ func TestQueuedResumeArmsFollowupsAfterWorkerSlotIsReleased(t *testing.T) {
 	current.metadata.Status = statusStopped
 	current.mu.Unlock()
 
-	blocker := &task{manager: manager, metadata: taskMetadata{ID: "ffeeddccbbaa998877665544", Status: statusRunning, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}}
+	blockerID := "ffeeddccbbaa998877665544"
+	blockerDir := filepath.Join(cfg.TasksRoot, blockerID)
+	if err := os.Mkdir(blockerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	blockerEvents := filepath.Join(blockerDir, "events.jsonl")
+	blockerStderr := filepath.Join(blockerDir, "worker.stderr.log")
+	if err := os.WriteFile(blockerEvents, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blockerStderr, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blocker := &task{manager: manager, dir: blockerDir, events: blockerEvents, stderr: blockerStderr, subscribers: make(map[uint64]chan taskEvent), metadata: taskMetadata{ID: blockerID, Status: statusRunning, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}}
 	manager.mu.Lock()
 	manager.tasks[blocker.metadata.ID] = blocker
 	manager.mu.Unlock()
