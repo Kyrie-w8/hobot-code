@@ -573,8 +573,6 @@ if [ -f "$config_root/hobot.env" ]; then
   sed \
     -e '\|^HOBOT_CODING_AGENT_DIR=/etc/hobot-code/agent$|d' \
     -e '\|^HOBOT_CODING_AGENT_SESSION_DIR=/var/lib/hobot-code/sessions$|d' \
-    -e 's|^ANTHROPIC_MODEL=deepseek-v4-flash$|ANTHROPIC_MODEL=deepseek/deepseek-v4-flash|' \
-    -e 's|^ANTHROPIC_MODEL=drobotics/deepseek-v4-flash$|ANTHROPIC_MODEL=deepseek/deepseek-v4-flash|' \
     "$config_root/hobot.env" > "$env_migration"
   chmod 0600 "$env_migration"
   chown "$install_user:$install_group" "$env_migration"
@@ -589,10 +587,8 @@ for config_name in settings.json models.json providers.json permissions.json mem
   chown "$install_user:$install_group" "$agent_dir/$config_name"
 done
 settings_migration=$(mktemp "$agent_dir/.settings.json.migrate.XXXXXX")
-sed \
-  -e 's|"drobotics/deepseek-v4-flash"|"drobotics/deepseek/deepseek-v4-flash"|g' \
-  -e '/"retry": {/,/"provider": {/ s|"maxRetries": 3|"maxRetries": 5|' \
-  "$agent_dir/settings.json" > "$settings_migration"
+"$new_runtime/agentd" migrate-settings \
+  "$agent_dir/settings.json" "$package_dir/config/settings.json" > "$settings_migration"
 chmod 0600 "$settings_migration"
 chown "$install_user:$install_group" "$settings_migration"
 mv "$settings_migration" "$agent_dir/settings.json"

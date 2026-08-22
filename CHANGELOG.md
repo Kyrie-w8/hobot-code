@@ -4,6 +4,7 @@
 
 - Add every model currently advertised by the D-Robotics gateway to the TUI, setup command, Studio, and model diagnostics while preserving the historical DeepSeek Flash compatibility alias.
 - Declare image input from verified per-model capabilities and route DeepSeek fixed IDs and dynamic aliases through OpenAI Chat Completions.
+- Merge new built-in models into existing user settings without replacing custom choices or rewriting the direct DeepSeek Flash model ID.
 
 ## 0.30.0
 

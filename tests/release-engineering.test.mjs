@@ -998,7 +998,7 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(packager, /LICENSE/);
   assert.match(packager, /stage_dir\/runtime\/CHANGELOG\.md/);
   assert.match(packager, /install -m 0644 .*hobot\.env\.example.*stage_dir\/config\/hobot\.env\.example/);
-	assert.match(installer, /\/"retry": \{\/,\/"provider": \{\/ s\|"maxRetries": 3\|"maxRetries": 5\|/);
+	assert.match(installer, /agentd" migrate-settings/);
   assert.match(packager, /verify-model-egress-runtime\.py/);
   assert.match(makefile, /model-egress-board-check:/);
   assert.match(installer, /MANIFEST\.sha256/);
@@ -1021,8 +1021,8 @@ test("release scripts preserve transaction and provenance invariants", async () 
   assert.match(installer, /package_dir\/agentd/);
   assert.match(installer, /new_runtime\/agentd/);
   assert.match(installer, /package_dir\/docs\/\." "\$new_runtime\/docs/);
-  assert.match(installer, /ANTHROPIC_MODEL=deepseek\/deepseek-v4-flash/);
-  assert.match(installer, /drobotics\/deepseek\/deepseek-v4-flash/);
+  assert.doesNotMatch(installer, /ANTHROPIC_MODEL=deepseek\/deepseek-v4-flash/);
+  assert.doesNotMatch(installer, /s\|"drobotics\/deepseek-v4-flash"/);
   assert.match(installer, /Installed component version mismatch/);
   assert.match(installer, /Configure your model first: hobot setup/);
   assert.match(installer, /ANTHROPIC_AUTH_TOKEN=/);

@@ -127,6 +127,8 @@ func run(args []string) error {
 	case "help", "--help", "-h":
 		usage()
 		return nil
+	case "migrate-settings":
+		return runSettingsMigrationCLI(args[1:], os.Stdout)
 	}
 	cfg, err := loadConfig()
 	if err != nil {
