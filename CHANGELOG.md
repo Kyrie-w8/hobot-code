@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.31.0
+
+- Add every model currently advertised by the D-Robotics gateway to the TUI, setup command, Studio, and model diagnostics while preserving the historical DeepSeek Flash compatibility alias.
+- Declare image input from verified per-model capabilities and route DeepSeek fixed IDs and dynamic aliases through OpenAI Chat Completions.
+
 ## 0.30.0
 
 - Add the durable Working-state follow-up message queue and its Studio, CLI, and SDK protocol surface.

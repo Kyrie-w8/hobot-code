@@ -167,15 +167,23 @@ Usage:
 
 Without --token-stdin, Hobot Code reads the API token privately from the
 controlling terminal. --check verifies the selected route after saving.
+
+Models:
+  kimi-k3, kimi-k2.6, kimi@latest
+  qwen3.8-max, qwen3.7-max, qwen-max@latest
+  glm-5.2, glm-5.3, glm@latest
+  deepseek-v4-flash, deepseek-v4-pro
+  deepseek-flash@latest, deepseek-pro@latest
+  deepseek/deepseek-v4-flash (compatibility alias)
 EOF
 }
 
 validate_setup_model() {
   case "$1" in
-    kimi-k3|qwen3.8-max|glm-5.2|deepseek/deepseek-v4-flash|deepseek-v4-pro) ;;
+    kimi-k3|kimi-k2.6|kimi@latest|qwen3.8-max|qwen3.7-max|qwen-max@latest|glm-5.2|glm-5.3|glm@latest|deepseek/deepseek-v4-flash|deepseek-v4-flash|deepseek-v4-pro|deepseek-flash@latest|deepseek-pro@latest) ;;
     *)
       printf 'Unsupported D-Robotics model: %s\n' "$1" >&2
-      printf 'Choose kimi-k3, qwen3.8-max, glm-5.2, deepseek/deepseek-v4-flash, or deepseek-v4-pro.\n' >&2
+      printf 'Run `hobot setup --help` and choose a model listed in the documentation.\n' >&2
       exit 2
       ;;
   esac
@@ -236,8 +244,7 @@ handle_setup_command() {
   setup_model=${ANTHROPIC_MODEL:-kimi-k3}
   setup_model=${setup_model#drobotics/}
   case "$setup_model" in
-    deepseek-v4-flash) setup_model=deepseek/deepseek-v4-flash ;;
-    kimi-k3|qwen3.8-max|glm-5.2|deepseek/deepseek-v4-flash|deepseek-v4-pro) ;;
+    kimi-k3|kimi-k2.6|kimi@latest|qwen3.8-max|qwen3.7-max|qwen-max@latest|glm-5.2|glm-5.3|glm@latest|deepseek/deepseek-v4-flash|deepseek-v4-flash|deepseek-v4-pro|deepseek-flash@latest|deepseek-pro@latest) ;;
     *) setup_model=kimi-k3 ;;
   esac
   setup_base_url=${ANTHROPIC_BASE_URL:-https://ai-api.d-robotics.cc}

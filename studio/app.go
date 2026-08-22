@@ -1319,10 +1319,19 @@ func (app *App) GetModelQualification(boardID, model string) (hobot.ModelQualifi
 func studioModels(models []hobot.ModelOption) []hobot.ModelOption {
 	allowed := map[string]int{
 		"kimi-k3":                    0,
-		"qwen3.8-max":                1,
-		"glm-5.2":                    2,
-		"deepseek/deepseek-v4-flash": 3,
-		"deepseek-v4-pro":            4,
+		"kimi-k2.6":                  1,
+		"kimi@latest":                2,
+		"qwen3.8-max":                3,
+		"qwen3.7-max":                4,
+		"qwen-max@latest":            5,
+		"glm-5.2":                    6,
+		"glm-5.3":                    7,
+		"glm@latest":                 8,
+		"deepseek/deepseek-v4-flash": 9,
+		"deepseek-v4-flash":          10,
+		"deepseek-v4-pro":            11,
+		"deepseek-flash@latest":      12,
+		"deepseek-pro@latest":        13,
 	}
 	filtered := make([]hobot.ModelOption, 0, len(models))
 	for _, model := range models {

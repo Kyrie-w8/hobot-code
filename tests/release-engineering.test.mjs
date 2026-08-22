@@ -804,7 +804,7 @@ test("launcher setup writes a private model configuration without exposing the t
   assert.match(launched.stdout, new RegExp(`^fingerprint=${fingerprint}$`, "m"));
 });
 
-test("launcher setup normalizes legacy model defaults and bounds token input", async (t) => {
+test("launcher setup preserves supported gateway model IDs and bounds token input", async (t) => {
   const fixture = await launcherFixture(t);
   const environment = { HOME: fixture.home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
   const configRoot = join(fixture.home, ".config/hobot-code");
@@ -818,7 +818,12 @@ test("launcher setup normalizes legacy model defaults and bounds token input", a
   await writeFile(config, "ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc\nANTHROPIC_AUTH_TOKEN=old-token\nANTHROPIC_MODEL=deepseek-v4-flash\n");
   await chmod(config, 0o600);
   await execFileWithInput(fixture.launcher, ["setup", "--token-stdin"], "new-flash-token\n", { env: environment });
-  assert.match(await readFile(config, "utf8"), /^ANTHROPIC_MODEL=deepseek\/deepseek-v4-flash$/m);
+  assert.match(await readFile(config, "utf8"), /^ANTHROPIC_MODEL=deepseek-v4-flash$/m);
+
+  for (const model of ["kimi-k2.6", "kimi@latest", "qwen3.7-max", "qwen-max@latest", "glm-5.3", "glm@latest", "deepseek-flash@latest", "deepseek-pro@latest"]) {
+    await execFileWithInput(fixture.launcher, ["setup", "--token-stdin", "--model", model], "model-token\n", { env: environment });
+    assert.match(await readFile(config, "utf8"), new RegExp(`^ANTHROPIC_MODEL=${model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  }
 
   await writeFile(config, "ANTHROPIC_BASE_URL=https://ai-api.d-robotics.cc\nANTHROPIC_AUTH_TOKEN=old-token\nANTHROPIC_MODEL=legacy-unknown\n");
   await chmod(config, 0o600);

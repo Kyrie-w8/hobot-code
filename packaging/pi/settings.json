@@ -28,10 +28,19 @@
   "httpIdleTimeoutMs": 3000000,
   "enabledModels": [
     "drobotics/kimi-k3",
+    "drobotics/kimi-k2.6",
+    "drobotics/kimi@latest",
     "drobotics/qwen3.8-max",
+    "drobotics/qwen3.7-max",
+    "drobotics/qwen-max@latest",
     "drobotics/glm-5.2",
+    "drobotics/glm-5.3",
+    "drobotics/glm@latest",
     "drobotics/deepseek/deepseek-v4-flash",
-    "drobotics/deepseek-v4-pro"
+    "drobotics/deepseek-v4-flash",
+    "drobotics/deepseek-v4-pro",
+    "drobotics/deepseek-flash@latest",
+    "drobotics/deepseek-pro@latest"
   ],
   "extensions": [
     "/usr/local/lib/hobot-code/extensions"

@@ -41,7 +41,7 @@ import {
 } from "./control-plane.mjs";
 import { formatAgentCollaboration, readAgentCollaboration, readEphemeralSideCollaboration, sideAgentWorkspaceWriteBlocked } from "./agent-collaboration.mjs";
 import { formatCacheMetrics, recordCacheObservation, resetCacheMetrics } from "./cache-metrics.mjs";
-import { createDroboticsModelConfig } from "./drobotics-models.mjs";
+import { BUILTIN_DROBOTICS_MODELS, createDroboticsModelConfig } from "./drobotics-models.mjs";
 import { DEFAULT_DROBOTICS_BASE_URL, streamDrobotics } from "./drobotics-provider.ts";
 import { GoalStore, type GoalRecord } from "./goal-store.ts";
 import { captureGatewayCredentials, serializeGatewayCredentials } from "./gateway-credential.mjs";
@@ -80,13 +80,6 @@ import { acquireWorkspaceWriteLease } from "./workspace-write-lease.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = "kimi-k3";
-const BUILTIN_DROBOTICS_MODELS = [
-  DEFAULT_MODEL,
-  "qwen3.8-max",
-  "glm-5.2",
-  "deepseek/deepseek-v4-flash",
-  "deepseek-v4-pro",
-] as const;
 const EXPERT_PROMPT_MARKER = "# Hobot Code RDK Context";
 const SIDE_AGENT_APPROVAL_TIMEOUT_MS = 120_000;
 type JsonRecord = Record<string, unknown>;

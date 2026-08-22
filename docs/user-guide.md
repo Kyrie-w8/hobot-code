@@ -447,12 +447,21 @@ Studio 创建的任务由板端 `agentd` 托管。以下情况通常不会停止
 | 模型标识 | 图片输入 |
 |---|---:|
 | `drobotics/kimi-k3` | 是 |
+| `drobotics/kimi-k2.6` | 是 |
+| `drobotics/kimi@latest` | 是 |
 | `drobotics/qwen3.8-max` | 是 |
+| `drobotics/qwen3.7-max` | 否 |
+| `drobotics/qwen-max@latest` | 是 |
 | `drobotics/glm-5.2` | 是 |
+| `drobotics/glm-5.3` | 否 |
+| `drobotics/glm@latest` | 否 |
 | `drobotics/deepseek/deepseek-v4-flash` | 否 |
+| `drobotics/deepseek-v4-flash` | 否 |
 | `drobotics/deepseek-v4-pro` | 否 |
+| `drobotics/deepseek-flash@latest` | 否 |
+| `drobotics/deepseek-pro@latest` | 否 |
 
-模型能力来自板端运行时契约；Studio 不应根据模型名称猜测图片或 reasoning 支持。
+模型能力来自板端运行时契约；Studio 不应根据模型名称猜测图片或 reasoning 支持。`@latest` 是动态别名，网关升级后应重新运行模型验证；`deepseek/deepseek-v4-flash` 是为旧配置和会话保留的兼容模型组。
 
 ### 9.2 添加自定义 Provider
 

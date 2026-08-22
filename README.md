@@ -185,7 +185,7 @@ ANTHROPIC_MODEL=kimi-k3
 API_TIMEOUT_MS=3000000
 ```
 
-内置可选模型为 `drobotics/kimi-k3`、`drobotics/qwen3.8-max`、`drobotics/glm-5.2`、`drobotics/deepseek/deepseek-v4-flash` 和 `drobotics/deepseek-v4-pro`。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
+内置模型目录覆盖 D-Robotics 网关当前公开的 Kimi、Qwen、GLM 和 DeepSeek 模型，包括固定版本与 `@latest` 动态别名；完整清单和图片能力见[配置说明](docs/configuration.md#d-robotics-模型)。兼容旧会话的 `drobotics/deepseek/deepseek-v4-flash` 模型组仍然保留。`ANTHROPIC_MODEL` 只决定默认模型；终端可通过 `/model`，桌面端可通过输入框底部的模型菜单切换。
 
 配置完成后可先验证模型的真实流式路由：
 

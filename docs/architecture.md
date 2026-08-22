@@ -99,7 +99,7 @@ daemon 停止、崩溃或板卡重启后，历史和元数据仍可读取，但�
 
 ## Provider 数据流
 
-D-Robotics Provider 按模型协商协议：Kimi K3、Qwen 3.8 Max 和 GLM 5.2 由 Hobot Code 适配器转换为 Anthropic Messages；DeepSeek V4 Flash 使用网关模型组 `deepseek/deepseek-v4-flash`，与 Pro 一同通过 OpenAI Chat Completions 路径接入自动前缀缓存和标准流式工具调用。文本在序列化前修复不完整的 Unicode 代理项，响应体受超时与字节上限约束。
+D-Robotics Provider 按模型目录协商协议：Kimi、Qwen 和 GLM 系列由 Hobot Code 适配器转换为 Anthropic Messages；DeepSeek 固定模型、动态别名及兼容模型组通过 OpenAI Chat Completions 路径接入自动前缀缓存和标准流式工具调用。图片输入由逐模型能力表控制，不根据名称推断。文本在序列化前修复不完整的 Unicode 代理项，响应体受超时与字节上限约束。
 
 两条路径都以 `stream: true` 请求并向 Pi 暴露相同的增量文本、thinking、工具调用、usage 和终止语义。Anthropic 路径只有在网关明确返回非 SSE 内容或已知的不支持流式响应时才读取有界完整响应；DeepSeek 路径复用 Pi 固定版本的 OpenAI-compatible 状态机。模型级路由变化不会改变板端权限、工具或会话边界。
 

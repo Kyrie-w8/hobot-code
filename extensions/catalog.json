@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "apiVersion": "hobot.extensions/v1",
-  "productVersion": "0.30.0",
+  "productVersion": "0.31.0",
   "entries": [
     {
       "id": "hobot.rdk-core",

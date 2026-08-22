@@ -141,7 +141,7 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 	}
 	dirty := false
 	info := hobot.DaemonInfo{
-		Version: "0.30.0", Protocol: hobot.ProtocolVersion,
+		Version: "0.31.0", Protocol: hobot.ProtocolVersion,
 		Capabilities: hobot.Capabilities{ProtocolMin: 1, ProtocolMax: 1, EventSchema: 4, Capabilities: allCapabilities, Sandbox: hobot.SandboxCapability{Available: true, Backend: "bubblewrap", Profiles: []string{"review", "workspace", "system", "off"}, NetworkModes: []string{"shared", "offline"}}},
 		Build:        hobot.BuildIdentity{Status: "verified", Commit: strings.Repeat("a", 40), Dirty: &dirty, Target: "linux-arm64", PiVersion: "0.84.1", PiCompatibilitySHA256: strings.Repeat("d", 64)},
 	}
@@ -210,7 +210,7 @@ func TestConnectionCompatibilityMatrix(t *testing.T) {
 
 func TestVersionCompatibilityHelpers(t *testing.T) {
 	app := NewApp()
-	if currentStudioVersion() != "0.30.0" {
+	if currentStudioVersion() != "0.31.0" {
 		t.Fatalf("Studio version is not sourced from wails.json: %q", currentStudioVersion())
 	}
 	if app.GetAppVersion() != currentStudioVersion() {
@@ -352,13 +352,31 @@ func TestStudioModelsExposeBuiltInsAndExplicitManagedProviders(t *testing.T) {
 		{Provider: "acme", ID: "coder", Name: "Acme Coder", Managed: true},
 		{Provider: "drobotics", ID: "claude-sonnet", Name: "Claude via gateway"},
 		{Provider: "drobotics", ID: "kimi-k3", Name: "kimi-k3", Default: true, Capabilities: hobot.ModelCapabilities{Reasoning: true, ImageInput: true}, CapabilitySource: "runtime-model-table"},
+		{Provider: "drobotics", ID: "kimi-k2.6", Name: "kimi-k2.6"},
+		{Provider: "drobotics", ID: "kimi@latest", Name: "kimi@latest"},
 		{Provider: "drobotics", ID: "qwen3.8-max", Name: "qwen3.8-max"},
+		{Provider: "drobotics", ID: "qwen3.7-max", Name: "qwen3.7-max"},
+		{Provider: "drobotics", ID: "qwen-max@latest", Name: "qwen-max@latest"},
 		{Provider: "drobotics", ID: "glm-5.2", Name: "glm-5.2"},
+		{Provider: "drobotics", ID: "glm-5.3", Name: "glm-5.3"},
+		{Provider: "drobotics", ID: "glm@latest", Name: "glm@latest"},
 		{Provider: "drobotics", ID: "deepseek/deepseek-v4-flash", Name: "deepseek/deepseek-v4-flash", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
+		{Provider: "drobotics", ID: "deepseek-v4-flash", Name: "deepseek-v4-flash"},
 		{Provider: "drobotics", ID: "deepseek-v4-pro", Name: "deepseek-v4-pro", Capabilities: hobot.ModelCapabilities{Reasoning: true}},
+		{Provider: "drobotics", ID: "deepseek-flash@latest", Name: "deepseek-flash@latest"},
+		{Provider: "drobotics", ID: "deepseek-pro@latest", Name: "deepseek-pro@latest"},
 	})
-	if len(models) != 6 || models[0].ID != "kimi-k3" || models[1].ID != "qwen3.8-max" || models[2].ID != "glm-5.2" || models[3].ID != "deepseek/deepseek-v4-flash" || models[4].ID != "deepseek-v4-pro" || models[5].Provider != "acme" || models[5].ID != "coder" {
+	expected := []string{"kimi-k3", "kimi-k2.6", "kimi@latest", "qwen3.8-max", "qwen3.7-max", "qwen-max@latest", "glm-5.2", "glm-5.3", "glm@latest", "deepseek/deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-flash@latest", "deepseek-pro@latest", "coder"}
+	if len(models) != len(expected) {
 		t.Fatalf("unexpected Studio models: %+v", models)
+	}
+	for index, id := range expected {
+		if models[index].ID != id {
+			t.Fatalf("Studio model %d = %q, expected %q", index, models[index].ID, id)
+		}
+	}
+	if models[len(models)-1].Provider != "acme" {
+		t.Fatalf("managed provider model was not retained: %+v", models[len(models)-1])
 	}
 	if !models[0].Default || !models[0].Capabilities.ImageInput || models[0].CapabilitySource != "runtime-model-table" {
 		t.Fatalf("Studio discarded model capabilities: %+v", models[0])

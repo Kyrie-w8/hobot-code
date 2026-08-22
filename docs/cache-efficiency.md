@@ -56,7 +56,7 @@ Kimi K3 和 GLM 5.2 在 D-Robotics Anthropic-compatible 路径上均达到 99%+�
 - 相邻请求的模型、系统 Prompt 或有序工具契约发生变化时，前缀稳定性会明确标记变化。
 - 指标状态只保存 SHA-256 指纹和 token 计数，不保存 Prompt、工具说明、会话正文或凭据。
 - 当前进程累计值覆盖完整请求历史；最近明细最多保留 32 条，避免长会话无界增长。
-- Kimi K3、Qwen 3.8 Max 和 GLM 5.2 使用 Anthropic-compatible 路径；DeepSeek V4 Flash 使用网关模型组 `deepseek/deepseek-v4-flash`，与 Pro 一同通过 OpenAI-compatible 路径接入。两种路径统一映射为 `input`、`cacheRead` 和 `cacheWrite`。
+- Kimi、Qwen 和 GLM 系列使用 Anthropic-compatible 路径；DeepSeek 固定模型、动态别名及兼容模型组使用 OpenAI-compatible 路径。两种路径统一映射为 `input`、`cacheRead` 和 `cacheWrite`。
 
 ## 适用边界
 

@@ -421,7 +421,7 @@ func conformanceContinuationCategory(response conformanceResponse, err error) st
 
 func isOpenAICompatibleModel(modelID string) bool {
 	switch modelID {
-	case "deepseek/deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-pro":
+	case "deepseek/deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-flash@latest", "deepseek-pro@latest":
 		return true
 	default:
 		return false

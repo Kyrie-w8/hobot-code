@@ -172,7 +172,7 @@ func probeDroboticsModelWithToken(ctx context.Context, model modelOption, token 
 	if baseURL == "" {
 		baseURL = defaultDroboticsBaseURL
 	}
-	deepSeekV4 := model.ID == "deepseek/deepseek-v4-flash" || model.ID == "deepseek-v4-flash" || model.ID == "deepseek-v4-pro"
+	deepSeekV4 := isOpenAICompatibleModel(model.ID)
 	endpoint, err := modelHealthEndpoint(baseURL, deepSeekV4)
 	if err != nil {
 		result.Message = modelHealthMessage(result.Category)
